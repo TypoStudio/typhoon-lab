@@ -1,0 +1,4 @@
+[
+  { "date": "2026-10-23", "macrostructure": "Full-bleed instrument map (floating controls, right sidebar)", "theme": "custom", "theme_axes": "dark / grotesk-sans (system) / warm-amber", "vibe": "deep navy observatory, pale coast, amber selection", "enrichment": "E5 hand-built SVG (news art, tool glyphs, storm glyph)", "brief": "Typhoon Lab v0.2 · worldwide live sandbox, drag-and-drop weather conditions" },
+  { "date": "2026-10-23", "macrostructure": "Workbench (map-first console)", "theme": "custom", "theme_axes": "dark / grotesk-sans (system) / warm-amber", "vibe": "deep navy observatory, pale coast, amber selection", "enrichment": "E5 hand-built SVG (news art, tool glyphs, storm glyph)", "brief": "Typhoon Lab v0.1 · regional storm-shaping game UI (superseded)" }
+]

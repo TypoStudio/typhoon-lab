@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function num(v, max) { return v is number && v >= 0 && v <= max; }
+    function nick(v) { return v is string && v.size() >= 1 && v.size() <= 20; }
+    function signedIn() { return request.auth != null; }
+
+    // All-time totals per anonymous uid. Each write replaces the whole document.
+    function validPlayer() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['nickname', 'createdAt', 'updatedAt', 'storms', 'maxGrade', 'totalLossUsd', 'bestLossUsd', 'bestStormName'])
+        && d.keys().hasAll(['nickname', 'createdAt', 'updatedAt', 'storms', 'maxGrade', 'totalLossUsd', 'bestLossUsd', 'bestStormName'])
+        && nick(d.nickname)
+        && num(d.storms, 100000) && num(d.maxGrade, 30)
+        && num(d.totalLossUsd, 100000000000000) && num(d.bestLossUsd, 100000000000000)
+        && d.bestStormName is string && d.bestStormName.size() <= 60
+        && d.updatedAt == request.time;
+    }
+
+    match /players/{uid} {
+      allow read: if true;
+      allow create: if signedIn() && request.auth.uid == uid && validPlayer() && request.resource.data.createdAt == request.time;
+      // Totals only ever grow; createdAt is fixed.
+      allow update: if signedIn() && request.auth.uid == uid && validPlayer()
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.storms >= resource.data.storms
+        && request.resource.data.totalLossUsd >= resource.data.totalLossUsd
+        && request.resource.data.maxGrade >= resource.data.maxGrade
+        && request.resource.data.bestLossUsd >= resource.data.bestLossUsd;
+      // Players can erase their own document (self-service "Delete my records").
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    // One document per ended storm, written once and never changed.
+    match /results/{id} {
+      allow read: if true;
+      allow create: if signedIn()
+        && id.matches(request.auth.uid + '_.*')
+        && request.resource.data.keys().hasOnly(['uid', 'nickname', 'lossUsd', 'grade', 'stage', 'lifetimeHours', 'endedAt', 'client'])
+        && request.resource.data.keys().hasAll(['uid', 'nickname', 'lossUsd', 'grade', 'stage', 'lifetimeHours', 'endedAt', 'client'])
+        && request.resource.data.uid == request.auth.uid
+        && nick(request.resource.data.nickname)
+        && num(request.resource.data.lossUsd, 10000000000000)
+        && num(request.resource.data.grade, 30)
+        && num(request.resource.data.lifetimeHours, 1000000)
+        && request.resource.data.stage is string && request.resource.data.stage.size() <= 40
+        && request.resource.data.client == 'web'
+        && request.resource.data.endedAt == request.time;
+      allow update: if false;
+      // Players can erase their own results.
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

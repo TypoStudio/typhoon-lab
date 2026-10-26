@@ -1,0 +1,10 @@
+{
+  "date": "2026-10-23",
+  "framework": "vanilla TypeScript + Vite 8 (package.json), Three.js 0.180",
+  "fonts": "none declared; system stacks only (no network, no new dependencies)",
+  "palette": "none existing; tokens.css created",
+  "motion": "motion-cut: no animation library; CSS opacity/transform only",
+  "spacing": "none existing; 4pt --space-* scale in tokens.css",
+  "preserved": ["package.json", "tsconfig.json", "index.html", "src/types.ts"],
+  "introduced": ["tokens.css", "src/style.css", "src/ui/**", "src/render/**", "src/main.ts"]
+}

@@ -1,0 +1,136 @@
+/* Hallmark · genre: atmospheric · macrostructure: Workbench (map-first console) · theme: custom "Observatory Night" · enrichment: E5 hand-built SVG (news art, tool glyphs) · nav: none (game HUD) · footer: none
+ * tone: technical, austere · anchor hue: 245 (deep navy sea) · single warm accent: amber 75
+ * Every colour, font, space, motion value used by src/style.css and src/render/** comes from here. */
+:root {
+  color-scheme: dark;
+
+  /* Paper, ink, neutrals — all tinted toward the navy anchor */
+  --color-paper:   oklch(13% 0.028 248);
+  --color-paper-2: oklch(17% 0.034 248);
+  --color-paper-3: oklch(22% 0.040 246);
+  --color-paper-4: oklch(27% 0.044 244);
+  --color-rule:    oklch(31% 0.040 245);
+  --color-ink:     oklch(94% 0.012 230);
+  --color-muted:   oklch(76% 0.022 232);
+  --color-neutral: oklch(62% 0.028 236);
+
+  /* Map surfaces */
+  --color-sea:     oklch(18% 0.046 250);
+  --color-land:    oklch(27% 0.030 222);
+  --color-coast:   oklch(86% 0.030 205);
+  --color-grid:    oklch(36% 0.034 242);
+  --color-equator: oklch(87% 0.125 90);
+  --color-tropics: oklch(85% 0.075 210);
+
+  /* One warm accent: selection, active control, placement */
+  --color-accent:     oklch(79% 0.150 75);
+  --color-accent-ink: oklch(18% 0.040 70);
+  --color-focus:      oklch(88% 0.130 90);
+
+  /* Data colours */
+  --color-wind:   oklch(83% 0.100 205);
+  --ramp-humidity-0: #355b76;
+  --ramp-humidity-1: #8bc6db;
+  --ramp-humidity-2: #effcff;
+  --color-track:  oklch(94% 0.030 90);
+  --color-recorded-path: oklch(74% 0.085 325);
+  --color-storm:  oklch(70% 0.200 28);
+  --color-danger: oklch(70% 0.190 27);
+  --color-warn:   oklch(76% 0.160 58);
+  --color-ok:     oklch(80% 0.140 155);
+
+  --color-scrim:  oklch(8% 0.020 248 / 0.72);
+
+  /* Tool effect colours (rings on the map, glyphs on the buttons) */
+  --fx-cool: oklch(79% 0.10 225);
+  --fx-dry: oklch(80% 0.07 85);
+  --fx-cold-air: oklch(76% 0.09 260);
+  --fx-downdraft: oklch(78% 0.10 300);
+  --fx-warm-air: oklch(83% 0.12 75);
+  --fx-updraft:  oklch(83% 0.10 135);
+  --fx-warm:     oklch(74% 0.160 45);
+  --fx-moisture: oklch(80% 0.100 185);
+  --fx-low:      oklch(74% 0.130 305);
+  --fx-high:     oklch(84% 0.070 250);
+  --fx-low-shear:  oklch(82% 0.110 165);
+  --fx-high-shear: oklch(74% 0.140 5);
+
+  /* Layer ramps. Wind (m/s): 0 4 9 15 22 30 40 55 */
+  --ramp-wind-0: oklch(30% 0.070 258);
+  --ramp-wind-1: oklch(44% 0.100 240);
+  --ramp-wind-2: oklch(60% 0.110 210);
+  --ramp-wind-3: oklch(75% 0.130 165);
+  --ramp-wind-4: oklch(86% 0.150 105);
+  --ramp-wind-5: oklch(75% 0.170 55);
+  --ramp-wind-6: oklch(63% 0.210 22);
+  --ramp-wind-7: oklch(82% 0.160 350);
+
+  /* Pressure (hPa): 960 985 1000 1010 1020 1035 — low side warm, high side cool */
+  --ramp-pressure-0: oklch(52% 0.200 10);
+  --ramp-pressure-1: oklch(70% 0.160 50);
+  --ramp-pressure-2: oklch(80% 0.060 85);
+  --ramp-pressure-3: oklch(56% 0.020 235);
+  --ramp-pressure-4: oklch(66% 0.100 225);
+  --ramp-pressure-5: oklch(54% 0.130 260);
+
+  /* Sea-surface temperature (°C): 22 25 27 29 30.5 32 */
+  --ramp-temperature-0: oklch(34% 0.100 285);
+  --ramp-temperature-1: oklch(50% 0.110 248);
+  --ramp-temperature-2: oklch(68% 0.100 190);
+  --ramp-temperature-3: oklch(85% 0.140 100);
+  --ramp-temperature-4: oklch(72% 0.170 50);
+  --ramp-temperature-5: oklch(60% 0.200 25);
+
+  /* Population per 2° cell (log10): 4.3 5 5.5 6 6.7 */
+  --ramp-population-0: oklch(32% 0.050 250);
+  --ramp-population-1: oklch(48% 0.090 90);
+  --ramp-population-2: oklch(66% 0.130 78);
+  --ramp-population-3: oklch(80% 0.150 72);
+  --ramp-population-4: oklch(93% 0.110 95);
+
+  /* Rainfall (mm/h): 0 5 15 30 50 */
+  --ramp-rain-0: oklch(88% 0.080 200);
+  --ramp-rain-1: oklch(78% 0.150 220);
+  --ramp-rain-2: oklch(70% 0.200 290);
+  --ramp-rain-3: oklch(72% 0.240 330);
+  --ramp-rain-4: oklch(92% 0.050 330);
+
+  /* Snowfall (mm/h water equivalent): 0 5 20 */
+  --ramp-snow-0: oklch(88% 0.010 250);
+  --ramp-snow-1: oklch(97% 0.005 250);
+  --ramp-snow-2: oklch(95% 0.030 235);
+
+  /* Type: system faces only (no network, no extra dependencies). Display and body share one family; the Noto Sans CJK faces are fallbacks for Korean, Japanese and Chinese glyphs. */
+  --font-display: "Avenir Next", "Segoe UI Variable Display", "Noto Sans", "Gill Sans", "Noto Sans KR", "Noto Sans JP", "Noto Sans SC", "Noto Sans TC", system-ui, sans-serif;
+  --font-body:    "Avenir Next", "Segoe UI Variable Text", "Noto Sans", "Gill Sans", "Noto Sans KR", "Noto Sans JP", "Noto Sans SC", "Noto Sans TC", system-ui, sans-serif;
+  --font-mono:    "SF Mono", "JetBrains Mono", "Cascadia Mono", ui-monospace, "Noto Sans KR", "Noto Sans JP", "Noto Sans SC", "Noto Sans TC", monospace;
+
+  /* Type scale: minor third (1.2) from 0.8125rem */
+  --text-xs:   0.75rem;
+  --text-sm:   0.8125rem;
+  --text-md:   0.9375rem;
+  --text-lg:   1.125rem;
+  --text-xl:   1.35rem;
+  --text-2xl:  1.75rem;
+  --text-score: clamp(2.25rem, 7vw, 3.25rem);
+
+  /* 4 pt spacing */
+  --space-2xs: 0.125rem;
+  --space-xs:  0.25rem;
+  --space-sm:  0.5rem;
+  --space-md:  0.75rem;
+  --space-lg:  1rem;
+  --space-xl:  1.5rem;
+  --space-2xl: 2rem;
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --rule-width: 1px;
+
+  --ease-out:    cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-in:     cubic-bezier(0.6, 0, 0.8, 0.3);
+  --ease-in-out: cubic-bezier(0.6, 0, 0.3, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 360ms;
+}
