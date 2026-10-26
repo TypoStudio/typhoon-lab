@@ -11,12 +11,12 @@
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Vite-8-646cff?style=flat-square&logo=vite&logoColor=white" alt="Vite">
   <img src="https://img.shields.io/badge/languages-EN%20%C2%B7%20KO%20%C2%B7%20JA%20%C2%B7%20ZH-ffb547?style=flat-square" alt="languages">
-  <a href="https://typhoon-typostudio.web.app"><img src="https://img.shields.io/badge/play-online-34c759?style=flat-square&logo=firebase&logoColor=white" alt="play online"></a>
+  <a href="https://typhoon.typostudio.dev"><img src="https://img.shields.io/badge/play-online-34c759?style=flat-square&logo=firebase&logoColor=white" alt="play online"></a>
 </p>
 
 # Typhoon Lab
 
-A browser **weather sandbox** where you build **typhoons** by dragging warm water, moist air, and low pressure onto a world map, then weaken them before they hit a city. It runs on a **deterministic global simulation**, so every storm can be replayed exactly. **No install needed:** [**play it here**](https://typhoon-typostudio.web.app).
+A browser **weather sandbox** where you build **typhoons** by dragging warm water, moist air, and low pressure onto a world map, then weaken them before they hit a city. It runs on a **deterministic global simulation**, so every storm can be replayed exactly. **No install needed:** [**play it here**](https://typhoon.typostudio.dev).
 
 <p align="center">
   <img src="assets/tutorial.png" alt="The first-visit tutorial" width="100%">
@@ -116,7 +116,7 @@ docs/              Developer notes
 ## Notes
 
 - Developer notes: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Design contract: [IMPLEMENTATION.md](IMPLEMENTATION.md). Validation: [VALIDATION.md](VALIDATION.md).
-- Leaderboard entries use an anonymous ID and a nickname you choose, which is public. See the [privacy policy](https://typhoon-typostudio.web.app/privacy.html).
+- Leaderboard entries use an anonymous ID and a nickname you choose, which is public. See the [privacy policy](https://typhoon.typostudio.dev/privacy.html).
 - The impact figures measure fictional wind exposure. They are game scores, not casualty or financial-loss estimates.
 
 <p align="center">
@@ -139,7 +139,7 @@ If you like this game, you can support it with a cup of coffee ☕
 
 # Typhoon Lab
 
-세계 지도 위에 따뜻한 바다, 습한 공기, 저기압을 끌어다 놓아 **태풍**을 만들고, 도시를 덮치기 전에 약화시키는 브라우저 **날씨 샌드박스**입니다. **결정론적 전 지구 시뮬레이션**으로 움직이므로 모든 태풍을 그대로 다시 재생할 수 있습니다. **설치 없이** [**바로 플레이**](https://typhoon-typostudio.web.app)할 수 있습니다.
+세계 지도 위에 따뜻한 바다, 습한 공기, 저기압을 끌어다 놓아 **태풍**을 만들고, 도시를 덮치기 전에 약화시키는 브라우저 **날씨 샌드박스**입니다. **결정론적 전 지구 시뮬레이션**으로 움직이므로 모든 태풍을 그대로 다시 재생할 수 있습니다. **설치 없이** [**바로 플레이**](https://typhoon.typostudio.dev)할 수 있습니다.
 
 <p align="center">
   <img src="assets/tutorial.png" alt="첫 방문 튜토리얼" width="100%">
@@ -239,7 +239,7 @@ docs/              개발자 노트
 ## 참고
 
 - 개발자 노트: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). 설계 기준: [IMPLEMENTATION.md](IMPLEMENTATION.md). 검증: [VALIDATION.md](VALIDATION.md).
-- 순위표에는 익명 ID와 직접 정한 닉네임이 올라가며, 닉네임은 공개됩니다. [개인정보처리방침](https://typhoon-typostudio.web.app/privacy.html?lang=ko)을 참고하세요.
+- 순위표에는 익명 ID와 직접 정한 닉네임이 올라가며, 닉네임은 공개됩니다. [개인정보처리방침](https://typhoon.typostudio.dev/privacy.html?lang=ko)을 참고하세요.
 - 피해 수치는 가상의 바람 노출량을 재는 값입니다. 게임 점수일 뿐 사상자나 금전 손실 추정치가 아닙니다.
 
 <p align="center">
