@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { SEAS } from '../src/data/seas';
 import { LOCALES, cityLabel, detectLanguage, setLanguage, t, typhoonName, type Language } from '../src/i18n';
 import { ko, koTemplates } from '../src/locales/ko';
-import { createGame, loadHistoric, setHistoricEnvironment } from '../src/simulation/engine';
+import { TOOLS, createGame, loadHistoric, setHistoricEnvironment } from '../src/simulation/engine';
 import type { HistoricEnvironment } from '../src/types';
 import fixtureJson from './fixtures/environment-fixture.json';
+import { TUTORIAL_STEPS } from '../src/ui/tutorial';
+import { DISASTER_HELP, DISASTER_HELP_INTRO, DISASTER_HELP_TIMING } from '../src/ui/disaster-help';
 
 afterEach(() => setLanguage('en'));
 describe('Korean display translations', () => {
@@ -72,6 +74,17 @@ describe('Korean display translations', () => {
 });
 
 describe('locale registry', () => {
+  it('translates every tutorial title, instruction and stuck hint in every non-English locale', () => {
+    for (const locale of LOCALES.filter(l => l.code !== 'en')) {
+      setLanguage(locale.code);
+      for (const step of TUTORIAL_STEPS) {
+        for (const source of [step.title, step.body, step.stuck?.text].filter((s): s is string => !!s)) {
+          expect(t(source), `${locale.code}: ${step.id}: ${source}`).not.toBe(source);
+        }
+      }
+    }
+  });
+
   it('lists every language once with a native label and an html lang', () => {
     expect(LOCALES.map(l => l.code)).toEqual(['en', 'ko', 'ja', 'zh-CN', 'zh-TW']);
     expect(LOCALES.map(l => l.label)).toEqual(['English', '한국어', '日本語', '简体中文', '繁體中文']);
@@ -137,6 +150,13 @@ describe('locale registry', () => {
 });
 
 describe('translation key coverage', () => {
+  it.each(['ko', 'ja', 'zh-CN', 'zh-TW'] as const)('translates every condition and disaster guide in %s', code => {
+    setLanguage(code);
+    const sources = [DISASTER_HELP_INTRO, DISASTER_HELP_TIMING, 'Disaster types', 'Formation conditions',
+      ...TOOLS.flatMap(tool => [tool.name, tool.description]),
+      ...DISASTER_HELP.flatMap(entry => [entry.name, entry.conditions, entry.description])];
+    for (const source of sources) expect(t(source), `${code}: ${source}`).not.toBe(source);
+  });
   it('has every ko key (and no extra key) in each other locale', () => {
     const seaNames = new Set(SEAS.map(s => s.name));
     const report: string[] = [];

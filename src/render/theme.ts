@@ -48,7 +48,7 @@ export interface Theme {
   fx: Record<ToolType, string>;
   font: string; mono: string;
   rgb: { paper: RGB; sea: RGB; land: RGB; wind: RGB; ink: RGB };
-  ramps: { wind: Ramp; humidity: Ramp; pressure: Ramp; temperature: Ramp; population: Ramp; rain: Ramp; snow: Ramp };
+  ramps: { wind: Ramp; humidity: Ramp; pressure: Ramp; temperature: Ramp; airTemperature: Ramp; population: Ramp; rain: Ramp; snow: Ramp };
 }
 
 let probe: CanvasRenderingContext2D | null = null;
@@ -104,6 +104,7 @@ export function loadTheme(): Theme {
       warm: token('--fx-warm', '#f08a4b'), moisture: token('--fx-moisture', '#7fd4cc'),
       low: token('--fx-low', '#b79be0'), high: token('--fx-high', '#a9c6f0'),
       'low-shear': token('--fx-low-shear', '#8fdcb4'), 'high-shear': token('--fx-high-shear', '#ee8aa8'),
+      'unstable-air': token('--fx-unstable-air', '#efc075'), 'stable-air': token('--fx-stable-air', '#9dbce1'),
     },
     font: token('--font-body', 'sans-serif'), mono: token('--font-mono', 'monospace'),
     rgb: {
@@ -115,6 +116,7 @@ export function loadTheme(): Theme {
       wind: rampFrom('--ramp-wind', 8, [0, 4, 9, 15, 22, 30, 40, 55], [dark, grey]),
       pressure: rampFrom('--ramp-pressure', 6, [960, 985, 1000, 1010, 1020, 1035], [dark, grey]),
       temperature: rampFrom('--ramp-temperature', 6, [22, 25, 27, 29, 30.5, 32], [dark, grey]),
+      airTemperature: rampFrom('--ramp-air-temperature', 7, [-40, -20, 0, 10, 20, 30, 40], [[115, 105, 190], [70, 130, 215], [105, 195, 225], [105, 195, 165], [230, 215, 105], [235, 155, 75], [215, 80, 65]]),
       population: rampFrom('--ramp-population', 5, [4.5, 5.3, 5.9, 6.5, 7.2], [dark, grey]),
       rain: rampFrom('--ramp-rain', 5, [0, 5, 15, 30, 50], [[190, 240, 245], [90, 200, 245], [170, 130, 245], [235, 110, 215], [250, 230, 245]]),
       snow: rampFrom('--ramp-snow', 3, [0, 5, 20], [[215, 222, 230], [248, 250, 252], [232, 246, 255]]),

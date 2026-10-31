@@ -22,6 +22,12 @@ export function realDayOfYear(now: Date = new Date()): number {
   return dayOfYearFor(now.getUTCMonth(), now.getUTCDate());
 }
 
+/** Local calendar date and time, packed into the model's fractional day-of-year start value. */
+export function realTimeOfYear(now: Date = new Date()): number {
+  return dayOfYearFor(now.getMonth(), now.getDate())
+    + (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds() + now.getMilliseconds() / 1000) / 86_400;
+}
+
 /** `?start=YYYY-MM-DD` or `?doy=NNN` from a query string (to pin the calendar in tests); null when absent or invalid. */
 export function parseStartParam(search: string): number | null {
   const params = new URLSearchParams(search);

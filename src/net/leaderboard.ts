@@ -3,9 +3,10 @@
  * dynamic imports inside the async functions, so importing this module costs nothing until the leaderboard is used.
  * Only an anonymous uid, the user-chosen nickname and storm outcomes are sent.
  */
-import { stormLossUsd } from '../simulation/damage-news';
+import { stormTotalLossUsd } from '../simulation/damage-news';
 import { stageRank } from '../simulation/engine';
-import type { StormRecord } from '../types';
+import { disasterDamage, disasterName } from '../simulation/disasters';
+import type { DisasterRecord, StormRecord } from '../types';
 import { getFirebase } from './firebase';
 
 export type LbWindow = 'live' | '7d' | '30d' | 'all';
@@ -21,13 +22,13 @@ const QUEUE_KEY = 'typhoon-lab-lb-queue';
 const MAX_QUEUE = 50;
 
 /** One ended, world-born storm worth uploading. */
-export interface StormResult { seed: number; stormId: number; name: string; lossUsd: number; grade: number; stage: string; lifetimeHours: number }
+export interface StormResult { seed: number; stormId: number; disasterId?: string; name: string; lossUsd: number; grade: number; stage: string; lifetimeHours: number }
 export interface ResultData { uid: string; nickname: string; lossUsd: number; grade: number; endedMs: number }
 export interface LbRow { uid: string; nickname: string; storms: number; maxGrade: number; lossUsd: number }
 export interface LbView { uid: string; rows: LbRow[]; me: LbRow | null; /** 1-based rank of `me` when within the table, else null. */ myRank: number | null; fromCache: boolean }
 
 // ---- pure helpers -----------------------------------------------------------------------------
-export const resultId = (uid: string, seed: number, stormId: number): string => `${uid}_${seed}_${stormId}`;
+export const resultId = (uid: string, seed: number, stormId: number, disasterId?: string): string => `${uid}_${seed}_${disasterId ?? stormId}`;
 export const defaultNickname = (uid: string): string => `Player-${uid.slice(0, 4).toUpperCase()}`;
 
 /** Trims, collapses whitespace and strips control/format characters; null when empty or longer than NICKNAME_MAX. No profanity filter. */
@@ -39,7 +40,7 @@ export function sanitizeNickname(raw: string): string | null {
 /** The upload for an ended storm, or null for loaded historic typhoons and for trivial storms (no loss and below grade 3). */
 export function resultFromRecord(seed: number, record: StormRecord): StormResult | null {
   if (record.record) return null;
-  const lossUsd = stormLossUsd(record.damageScore);
+  const lossUsd = stormTotalLossUsd(record);
   const grade = stageRank(record.peakWind);
   if (lossUsd === 0 && grade < 3) return null;
   const peak = record.history.reduce<StormRecord['history'][number] | null>((best, h) => (!best || h.wind > best.wind ? h : best), null);
@@ -47,6 +48,15 @@ export function resultFromRecord(seed: number, record: StormRecord): StormResult
     seed, stormId: record.id, name: (record.name ?? `#${record.id}`).slice(0, 60), lossUsd, grade, stage: (peak?.stage ?? record.stage).slice(0, 40),
     lifetimeHours: record.history.length ? record.endedHour - record.history[0].hour : record.ageHours,
   };
+}
+
+export function resultFromDisaster(seed: number, record: DisasterRecord): StormResult | null {
+  if (record.endedHour === undefined) return null;
+  const { lossUsd } = disasterDamage(record);
+  if (lossUsd <= 0) return null;
+  const name = disasterName(record.kind);
+  return { seed, stormId: 0, disasterId: record.id, name, lossUsd, grade: 0, stage: name,
+    lifetimeHours: record.endedHour - record.startedHour };
 }
 
 /** Sums results per uid (newest nickname wins), ranked by loss, then storms, then nickname. */
@@ -77,7 +87,8 @@ function loadQueue(): StormResult[] {
     const data: unknown = JSON.parse(storage()?.getItem(QUEUE_KEY) ?? '[]');
     if (!Array.isArray(data)) return [];
     return data.filter((v): v is StormResult => typeof v === 'object' && v !== null && Number.isSafeInteger(v.seed) && Number.isSafeInteger(v.stormId)
-      && typeof v.name === 'string' && typeof v.stage === 'string').slice(0, MAX_QUEUE)
+      && typeof v.name === 'string' && typeof v.stage === 'string'
+      && (v.disasterId === undefined || typeof v.disasterId === 'string' && /^(weather|blizzard|thunderstorm|tornado)-\d+$/.test(v.disasterId))).slice(0, MAX_QUEUE)
       .map(v => ({ ...v, lossUsd: num(v.lossUsd), grade: num(v.grade), lifetimeHours: num(v.lifetimeHours) }));
   } catch { return []; }
 }
@@ -86,7 +97,7 @@ function saveQueue(queue: StormResult[]): void {
 }
 /** Number of results waiting to be uploaded. */
 export const queuedCount = (): number => loadQueue().length;
-const sameResult = (a: StormResult, b: StormResult): boolean => a.seed === b.seed && a.stormId === b.stormId;
+const sameResult = (a: StormResult, b: StormResult): boolean => a.seed === b.seed && a.stormId === b.stormId && a.disasterId === b.disasterId;
 
 // ---- Firestore writes -------------------------------------------------------------------------
 type Fs = typeof import('firebase/firestore');
@@ -123,7 +134,7 @@ async function sendResult(item: StormResult): Promise<void> {
   const { db, uid } = await getFirebase();
   const fs = await import('firebase/firestore');
   const nickname = storedNickname() ?? defaultNickname(uid);
-  const resultRef = fs.doc(db, 'results', resultId(uid, item.seed, item.stormId));
+  const resultRef = fs.doc(db, 'results', resultId(uid, item.seed, item.stormId, item.disasterId));
   const playerRef = fs.doc(db, 'players', uid);
   await serialWrite(() => fs.runTransaction(db, async tx => {
     if ((await tx.get(resultRef)).exists()) return;

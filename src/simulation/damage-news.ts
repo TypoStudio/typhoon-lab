@@ -1,4 +1,5 @@
-import type { City, CityImpact, DamageReport } from '../types';
+import type { City, CityImpact, DamageReport, Storm, WeatherHazardKind } from '../types';
+import { isWeatherHazardKind, WEATHER_HAZARDS } from '../data/weather-hazards';
 
 export const CITY_DAMAGE_LEVELS = [0.0005, 0.01, 0.05, 0.15] as const;
 const AREAS = ['northern residential blocks', 'southern residential blocks', 'eastern residential blocks', 'western residential blocks'] as const;
@@ -14,6 +15,8 @@ const WINTER_HEADLINES = ['opens warming shelters', 'reports widespread power ou
  * No random draws or clock reads: the same replay regenerates the same report.
  */
 export const stormLossUsd = (damageScore: number): number => Math.round(damageScore * 4_120 / 1_000) * 1_000;
+/** Asset losses do not invent additional population casualties or flooded homes. */
+export const stormTotalLossUsd = (storm: Pick<Storm, 'damageScore' | 'transportLossUsd'>): number => stormLossUsd(storm.damageScore) + (storm.transportLossUsd ?? 0);
 
 /** Story figures per damage unit, fitted to a Maemi replay (about 1.02 million damage units across ~1,000 impact cities, after wind over land was weakened to 70 %):
  * loss USD 4,120 (Maemi ~USD 4.2 B; was 2,950 per unit at 1.41 million units), displaced 0.0620 (~63,000),
@@ -39,8 +42,14 @@ export function estimateCityDamage(city: City, impact: CityImpact): DamageReport
   return { ...estimateStormDamage(damage), area: AREAS[areaIndex] };
 }
 
-export function cityDamageBulletin(city: City, impact: CityImpact, level: number, cause: 'cyclone' | 'thunderstorm' | 'blizzard' = 'cyclone') {
+export function cityDamageBulletin(city: City, impact: CityImpact, level: number, cause: 'cyclone' | 'thunderstorm' | 'blizzard' | WeatherHazardKind = 'cyclone') {
   const damage = estimateCityDamage(city, impact);
+  if (isWeatherHazardKind(cause)) {
+    const definition = WEATHER_HAZARDS[cause];
+    if (cause === 'drought' || cause === 'dust') { damage.missing = 0; damage.deaths = 0; }
+    return { title: `${city.name}: ${definition.name} damage`,
+      text: `${definition.name} in ${city.name}. ${definition.impact}`, damage };
+  }
   return {
     title: `${city.name} ${(cause === 'blizzard' ? WINTER_HEADLINES : HEADLINES)[level]}`,
     text: cause === 'blizzard'

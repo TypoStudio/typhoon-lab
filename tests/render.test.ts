@@ -301,7 +301,7 @@ describe('field and particle alignment with the simulation', () => {
     }
   });
 
-  it('particles keep a constant on-screen speed while zooming, and wrap at the dateline', () => {
+  it('particles preserve their original display speed while zooming and wrap at the dateline', () => {
     const state = createGame();
     for (const cell of state.grid) { cell.u = 10; cell.v = 0; }
     const field = buildFieldData(state.grid)!;
@@ -310,11 +310,11 @@ describe('field and particle alignment with the simulation', () => {
     const b = { west: -10, east: 10, south: -10, north: 10 };
     particles.lon[0] = 150; particles.lat[0] = 0; particles.life[0] = 100; particles.age[0] = 0;
     particles.update(0, field, b, 4);
-    const slow = particles.vLon[0] * 4;
+    const slow = particles.vLon[0];
     particles.update(0, field, b, 40);
-    expect(particles.vLon[0] * 40).toBeCloseTo(slow, 4);
-    particles.lon[0] = 179.99; particles.lat[0] = 0; particles.age[0] = 0;
-    particles.update(1, field, b, 4);
+    expect(particles.vLon[0] / slow).toBeCloseTo(0.1, 4);
+    particles.lon[0] = 179.99999; particles.lat[0] = 0; particles.age[0] = 0;
+    particles.update(1, field, b, 1);
     expect(particles.lon[0]).toBeLessThan(0);
     expect(particles.lon[0]).toBeGreaterThanOrEqual(-180);
   });
@@ -325,10 +325,11 @@ describe('field and particle alignment with the simulation', () => {
     const field = buildFieldData(state.grid)!;
     const particles = new ParticleSystem();
     particles.resize(1);
-    particles.lon[0] = -30.5; particles.lat[0] = 10; particles.life[0] = 100; particles.age[0] = 3;
-    particles.update(1, field, { west: -30, east: 30, south: -30, north: 30 }, 4, undefined, edgeBetween);
+    particles.lon[0] = -30.00001; particles.lat[0] = 10; particles.life[0] = 100; particles.age[0] = 3;
+    particles.update(1, field, { west: -30, east: 30, south: -30, north: 30 }, 1, undefined, edgeBetween);
     expect(particles.age[0]).toBe(0);
-    expect(edgeBetween(-30.5, particles.lon[0]) && Math.abs(lonDelta(-30.5, particles.lon[0])) < 10).toBe(false);
+    expect(particles.lon[0]).toBeGreaterThanOrEqual(-30);
+    expect(particles.lon[0]).toBeLessThanOrEqual(30);
   });
 
   it('seeds particles inside the visible bounds of the flat view', () => {

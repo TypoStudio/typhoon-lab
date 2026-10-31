@@ -1,7 +1,9 @@
+import { setSpeed } from './speed';
 import { test, expect, type Page } from '@playwright/test';
+import { MAX_TIME_SPEED, timeSpeedLabel } from '../../src/time';
 
 // No help=0: this is the first-visit flow. Each test starts with empty storage.
-const URL = '/?map=flat&seed=20261022&start=2026-08-01';
+const URL = '/?renderer=canvas&map=flat&lang=en&seed=20261022&start=2026-08-01';
 
 async function point(page: Page, lon: number, lat: number) {
   return page.evaluate(([lon, lat]) => {
@@ -44,8 +46,9 @@ test('first visit: the tutorial builds a typhoon, then weakens it, then stays aw
   await drop(page, 'low', 140, 16);
   await step('play');
 
-  await expect(page.getByTestId('speed-12')).toHaveClass(/tutorial-highlight/);
-  await page.getByTestId('speed-12').click();
+  await expect(page.getByTestId('speed-next')).toHaveClass(/tutorial-highlight/);
+  await expect(page.getByTestId('tutorial-body')).toContainText(timeSpeedLabel(MAX_TIME_SPEED));
+  await setSpeed(page, MAX_TIME_SPEED);
   await expect(page.getByTestId('play-toggle')).toHaveAttribute('aria-label', 'Pause');
   await expect.poll(async () => card.getAttribute('data-step'), { timeout: 60_000, intervals: [500] }).toBe('formed');
 
@@ -53,9 +56,21 @@ test('first visit: the tutorial builds a typhoon, then weakens it, then stays aw
   await step('damage');
   await page.getByTestId('tutorial-next').click();
   await step('weaken');
-  await expect(page.getByTestId('tool-cool')).toBeVisible();
-  await expect(page.getByTestId('tool-cool')).toHaveClass(/tutorial-highlight/);
-  await drop(page, 'cool', 142, 17);
+  await expect(page.getByTestId('tutorial-count')).toHaveText('9 / 10');
+  for (const [language, text] of [['ko', '차가운 바다는'], ['ja', '冷たい海は'], ['zh-CN', '冷海水'], ['zh-TW', '冷海水'], ['en', 'Cool water cuts off']]) {
+    await page.getByTestId('language-select').evaluate((el: HTMLSelectElement, language) => {
+      el.value = language;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, language);
+    await expect(page.getByTestId('tutorial-body')).toContainText(text);
+    await expect(page.getByTestId('tutorial-body')).toContainText('Q');
+    await step('weaken');
+  }
+  await expect(page.getByTestId('tool-warm')).toHaveClass(/tutorial-highlight/);
+  await page.getByTestId('tool-warm').click();
+  await page.getByTestId('tool-warm').click();
+  await expect(page.getByTestId('tool-warm')).toHaveAttribute('data-variant', 'cool');
+  await drop(page, 'warm', 142, 17);
   await step('done');
 
   await expect(page.getByTestId('tutorial-next')).toHaveText('Finish');

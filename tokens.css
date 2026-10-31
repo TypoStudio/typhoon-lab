@@ -54,6 +54,8 @@
   --fx-high:     oklch(84% 0.070 250);
   --fx-low-shear:  oklch(82% 0.110 165);
   --fx-high-shear: oklch(74% 0.140 5);
+  --fx-unstable-air: oklch(80% 0.120 70);
+  --fx-stable-air: oklch(76% 0.080 240);
 
   /* Layer ramps. Wind (m/s): 0 4 9 15 22 30 40 55 */
   --ramp-wind-0: oklch(30% 0.070 258);
@@ -80,6 +82,15 @@
   --ramp-temperature-3: oklch(85% 0.140 100);
   --ramp-temperature-4: oklch(72% 0.170 50);
   --ramp-temperature-5: oklch(60% 0.200 25);
+
+  /* Near-surface air temperature (°C): -40 -20 0 10 20 30 40 */
+  --ramp-air-temperature-0: oklch(48% 0.130 295);
+  --ramp-air-temperature-1: oklch(58% 0.130 255);
+  --ramp-air-temperature-2: oklch(76% 0.100 215);
+  --ramp-air-temperature-3: oklch(76% 0.110 165);
+  --ramp-air-temperature-4: oklch(86% 0.130 100);
+  --ramp-air-temperature-5: oklch(75% 0.160 55);
+  --ramp-air-temperature-6: oklch(62% 0.180 25);
 
   /* Population per 2° cell (log10): 4.3 5 5.5 6 6.7 */
   --ramp-population-0: oklch(32% 0.050 250);

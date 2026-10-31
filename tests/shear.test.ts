@@ -15,17 +15,17 @@ function matureStorm(lon = 145, lat = 16, wind = 45): Storm {
 }
 
 describe('shear conditions', () => {
-  it('are palette tools in the agreed order, with the specified size and wording', () => {
-    expect(TOOLS.map(t => t.type)).toEqual(['warm', 'moisture', 'low', 'low-shear', 'warm-air', 'updraft', 'cool', 'dry', 'high', 'cold-air', 'downdraft', 'high-shear']);
+  it('are simulation tools in the agreed order, with the specified size and wording', () => {
+    expect(TOOLS.map(t => t.type)).toEqual(['warm', 'moisture', 'low', 'low-shear', 'warm-air', 'updraft', 'cool', 'dry', 'high', 'cold-air', 'downdraft', 'high-shear', 'unstable-air', 'stable-air']);
     for (const type of SHEAR_TOOLS) {
       const tool = TOOLS.find(t => t.type === type)!;
       expect([tool.radiusKm, tool.durationHours]).toEqual([400, 48]);
     }
-    expect(TOOLS.find(t => t.type === 'low-shear')!.description).toBe('Calms the upper winds so a storm can stay upright. Stacking is capped at −20 m/s.');
-    expect(TOOLS.find(t => t.type === 'high-shear')!.description).toBe('Adds upper-level wind that tilts and tears a storm apart. Stacking is capped at +20 m/s.');
+    expect(TOOLS.find(t => t.type === 'low-shear')!.description).toBe('Calms the upper winds so a storm can stay upright. Stacking is capped at −60 m/s.');
+    expect(TOOLS.find(t => t.type === 'high-shear')!.description).toBe('Adds upper-level wind that tilts and tears a storm apart. Stacking is capped at +60 m/s.');
   });
 
-  it('change shear by 10 m/s per placement and cap the stack at 20 m/s either way', () => {
+  it('change shear by 10 m/s per placement and cap the stack at 60 m/s either way', () => {
     const [lon, lat] = [160, 30]; // base shear ~ 8 + 18 * smoothstep(22,38,30) ≈ 17 m/s: room both ways
     const base = sampleEnvironment(createGame(1), lon, lat).shear;
     const at = (type: ToolType, n: number) => {
@@ -35,10 +35,11 @@ describe('shear conditions', () => {
     };
     expect(at('high-shear', 1)).toBeCloseTo(base + 10, 6);
     expect(at('high-shear', 2)).toBeCloseTo(base + 20, 6);
-    expect(at('high-shear', 5)).toBeCloseTo(base + 20, 6);
+    expect(at('high-shear', 5)).toBeCloseTo(base + 50, 6);
+    expect(at('high-shear', 8)).toBeCloseTo(base + 60, 6);
     expect(at('low-shear', 1)).toBeCloseTo(Math.max(0, base - 10), 6);
     expect(at('low-shear', 2)).toBeCloseTo(Math.max(0, base - 20), 6);
-    expect(at('low-shear', 5)).toBeCloseTo(Math.max(0, base - 20), 6);
+    expect(at('low-shear', 5)).toBeCloseTo(Math.max(0, base - 50), 6);
   });
 
   it('never drive shear below zero, in point samples or the grid', () => {

@@ -73,7 +73,7 @@
       </dl></div>
       <div class="item"><h3>Online leaderboard (Firebase)</h3><dl>
         <dt>Purpose</dt><dd>To show a public ranking and keep your nickname together with your scores.</dd>
-        <dt>Data</dt><dd>Firebase Anonymous Authentication creates a random user ID that is stored on your device. The leaderboard stores that ID, the nickname you choose and your game scores (storm count, grade, estimated damage) in Google Cloud Firestore, located in asia-northeast3 (Seoul, South Korea). Nicknames and scores are public. No name, email address or contact data is collected, so please do not use your real name as a nickname.</dd>
+        <dt>Data</dt><dd>Firebase Anonymous Authentication creates a random user ID that is stored on your device. The leaderboard stores that ID, the nickname you choose and your game scores (disaster count, typhoon grade, estimated damage) in Google Cloud Firestore, located in asia-northeast3 (Seoul, South Korea). Nicknames and scores are public. No name, email address or contact data is collected, so please do not use your real name as a nickname.</dd>
         <dt>Retention</dt><dd>Until you delete it yourself (see below), or until the service shuts down.</dd>
         <dt>Your choices</dt><dd>You can change your nickname at any time in the Ranking tab. You can delete your nickname and all your uploaded results yourself: open the Ranking tab and press “Delete my records”. It takes effect immediately. If you no longer have the device you played on, email <a href="mailto:typ0s2d10@gmail.com">typ0s2d10@gmail.com</a> with your nickname as a fallback; we delete it manually within 7 days.</dd>
       </dl></div>
@@ -84,6 +84,7 @@
         <dt>Your choices</dt><dd>Clear site data in your browser at any time.</dd>
       </dl></div>
       <h2>Sharing and third parties</h2>
+      <p>To load current global pressure and wind, your browser downloads public NOAA GFS files from Google Cloud Storage. Like any web request, this exposes your IP address and ordinary request headers to the hosting provider; no player coordinates, nickname or game results are included. One weather analysis is cached on your device for repeat or offline entries. Clear this site's data to remove it; <code>?weather=base</code> starts without weather downloads.</p>
       <p>Typhoon Lab shows no ads and we do not sell your data. We share data with no third party other than Google (Google Analytics and Firebase), which processes it on our behalf. Google Analytics data may be processed on Google servers outside your country.</p>
       <h2>Your rights</h2>
       <p>You can change your nickname in the game at any time. You can delete your leaderboard data yourself in the Ranking tab (see above), refuse analytics cookies, and clear the data saved in your browser. For questions or requests, write to <a href="mailto:typ0s2d10@gmail.com">typ0s2d10@gmail.com</a>.</p>
@@ -109,7 +110,7 @@
       </dl></div>
       <div class="item"><h3>온라인 랭킹 (Firebase)</h3><dl>
         <dt>처리 목적</dt><dd>공개 랭킹을 표시하고 닉네임과 점수를 함께 보관합니다.</dd>
-        <dt>처리 항목</dt><dd>Firebase 익명 인증이 만든 무작위 사용자 ID(이용자 기기에 저장), 이용자가 정한 닉네임, 게임 점수(태풍 수, 등급, 추정 피해액). 데이터는 Google Cloud Firestore의 asia-northeast3(대한민국 서울)에 저장됩니다. 닉네임과 점수는 공개됩니다. 이름·이메일·연락처는 수집하지 않으므로 닉네임에 실명을 사용하지 마십시오.</dd>
+        <dt>처리 항목</dt><dd>Firebase 익명 인증이 만든 무작위 사용자 ID(이용자 기기에 저장), 이용자가 정한 닉네임, 게임 점수(재난 수, 태풍 등급, 추정 피해액). 데이터는 Google Cloud Firestore의 asia-northeast3(대한민국 서울)에 저장됩니다. 닉네임과 점수는 공개됩니다. 이름·이메일·연락처는 수집하지 않으므로 닉네임에 실명을 사용하지 마십시오.</dd>
         <dt>보유 기간</dt><dd>이용자가 직접 삭제하거나(아래 참조) 서비스가 종료될 때까지 보유합니다.</dd>
         <dt>이용자 선택</dt><dd>랭킹 탭에서 닉네임을 언제든지 바꿀 수 있습니다. 닉네임과 업로드한 모든 결과는 직접 삭제할 수 있습니다. 랭킹 탭에서 ‘내 기록 삭제’를 누르면 즉시 삭제됩니다. 플레이한 기기를 더 이상 가지고 있지 않은 경우에는 닉네임을 적어 <a href="mailto:typ0s2d10@gmail.com">typ0s2d10@gmail.com</a>로 요청하십시오. 요청일로부터 7일 이내에 직접 삭제합니다.</dd>
       </dl></div>
@@ -120,6 +121,7 @@
         <dt>이용자 선택</dt><dd>브라우저에서 사이트 데이터를 언제든지 삭제할 수 있습니다.</dd>
       </dl></div>
       <h2>개인정보의 제3자 제공 및 처리 위탁</h2>
+      <p>최신 전세계 기압과 바람을 불러올 때 브라우저가 Google Cloud Storage에서 공개 NOAA GFS 파일을 내려받습니다. 일반적인 웹 요청과 마찬가지로 호스팅 제공자에게 IP 주소와 요청 헤더가 전달되며, 이용자의 좌표·닉네임·게임 결과는 포함하지 않습니다. 재접속과 오프라인 이용을 위해 기상 분석 자료 1개를 기기에 저장하며, 사이트 데이터를 지우면 삭제됩니다. <code>?weather=base</code>로 접속하면 기상 자료를 내려받지 않습니다.</p>
       <p>운영자는 이용자의 정보를 제3자에게 제공하지 않으며, 광고를 싣지 않고 정보를 판매하지 않습니다. 다만 서비스 운영을 위해 Google LLC(Google Analytics, Firebase)에 정보 처리를 위탁합니다. Google Analytics 데이터는 국외에 있는 Google 서버에서 처리될 수 있습니다.</p>
       <h2>이용자의 권리와 행사 방법</h2>
       <p>이용자는 게임에서 닉네임을 언제든지 바꿀 수 있습니다. 또한 랭킹 탭에서 랭킹 데이터를 직접 삭제하거나(위 내용 참조), 분석용 쿠키를 거부하거나, 브라우저에 저장된 데이터를 삭제할 수 있습니다. 문의와 요청은 <a href="mailto:typ0s2d10@gmail.com">typ0s2d10@gmail.com</a>로 보내 주십시오.</p>
@@ -147,7 +149,7 @@
       </dl></div>
       <div class="item"><h3>オンラインランキング（Firebase）</h3><dl>
         <dt>利用目的</dt><dd>公開ランキングを表示し、ニックネームとスコアを一緒に保管するため。</dd>
-        <dt>取得する情報</dt><dd>Firebase匿名認証が作成するランダムなユーザーID（お使いの端末に保存）、ご自身で決めたニックネーム、ゲームのスコア（台風数、グレード、推定被害額）。データはGoogle Cloud Firestoreのasia-northeast3（韓国・ソウル）に保存されます。ニックネームとスコアは公開されます。氏名・メールアドレス・連絡先は取得しませんので、ニックネームに本名を使わないでください。</dd>
+        <dt>取得する情報</dt><dd>Firebase匿名認証が作成するランダムなユーザーID（お使いの端末に保存）、ご自身で決めたニックネーム、ゲームのスコア（災害数、台風のグレード、推定被害額）。データはGoogle Cloud Firestoreのasia-northeast3（韓国・ソウル）に保存されます。ニックネームとスコアは公開されます。氏名・メールアドレス・連絡先は取得しませんので、ニックネームに本名を使わないでください。</dd>
         <dt>保存期間</dt><dd>ご自身で削除するか（下記参照）、サービスが終了するまで。</dd>
         <dt>ユーザーの選択</dt><dd>ニックネームはランキングタブでいつでも変更できます。ニックネームとアップロード済みのすべての結果は、ご自身で削除できます。ランキングタブで「自分の記録を削除」を押すと、すぐに削除されます。プレイした端末をお持ちでない場合は、ニックネームを添えて<a href="mailto:typ0s2d10@gmail.com">typ0s2d10@gmail.com</a>までご連絡ください。7日以内に手作業で削除します。</dd>
       </dl></div>
@@ -158,6 +160,7 @@
         <dt>ユーザーの選択</dt><dd>ブラウザからサイトデータをいつでも消去できます。</dd>
       </dl></div>
       <h2>第三者への提供と委託</h2>
+      <p>最新の世界の気圧と風を読み込む際、ブラウザはGoogle Cloud Storageから公開NOAA GFSファイルを取得します。通常のWebリクエストと同様、IPアドレスとリクエストヘッダーが配信元に伝わりますが、プレイヤーの座標・ニックネーム・ゲーム結果は含まれません。再接続やオフライン利用のため解析資料を1件端末に保存します。サイトデータを消去すると削除され、<code>?weather=base</code>で接続すると気象資料を取得しません。</p>
       <p>Typhoon Labに広告はなく、データの販売も行いません。データを第三者に提供することはありませんが、運営のためGoogle（Google AnalyticsおよびFirebase）に処理を委託しています。Google Analyticsのデータは、国外にあるGoogleのサーバーで処理される場合があります。</p>
       <h2>ユーザーの権利</h2>
       <p>ニックネームはゲーム内でいつでも変更できます。ランキングタブでのランキングデータの削除（上記参照）、分析用Cookieの拒否、ブラウザに保存されたデータの消去も可能です。ご質問やご依頼は<a href="mailto:typ0s2d10@gmail.com">typ0s2d10@gmail.com</a>までお寄せください。</p>
@@ -183,7 +186,7 @@
       </dl></div>
       <div class="item"><h3>在线排行榜（Firebase）</h3><dl>
         <dt>目的</dt><dd>展示公开排行榜，并将昵称与成绩一并保存。</dd>
-        <dt>收集的信息</dt><dd>Firebase 匿名身份验证会生成一个随机用户 ID，保存在你的设备上。排行榜会保存该 ID、你自己设置的昵称以及游戏成绩（风暴数量、等级、估计损失），存储于 Google Cloud Firestore 的 asia-northeast3（韩国首尔）。昵称和成绩是公开的。我们不收集姓名、电子邮箱或联系方式，请不要用真实姓名作为昵称。</dd>
+        <dt>收集的信息</dt><dd>Firebase 匿名身份验证会生成一个随机用户 ID，保存在你的设备上。排行榜会保存该 ID、你自己设置的昵称以及游戏成绩（灾害数量、台风等级、估计损失），存储于 Google Cloud Firestore 的 asia-northeast3（韩国首尔）。昵称和成绩是公开的。我们不收集姓名、电子邮箱或联系方式，请不要用真实姓名作为昵称。</dd>
         <dt>保存期限</dt><dd>直至你自行删除（见下文），或服务终止。</dd>
         <dt>你的选择</dt><dd>你可以随时在“排行榜”标签页修改昵称。你可以自行删除昵称和所有已上传的成绩：打开“排行榜”标签页，点击“删除我的记录”，立即生效。如果你已不再拥有玩游戏时使用的设备，请附上昵称发邮件至 <a href="mailto:typ0s2d10@gmail.com">typ0s2d10@gmail.com</a>，我们会在 7 天内手动删除。</dd>
       </dl></div>
@@ -194,6 +197,7 @@
         <dt>你的选择</dt><dd>你可以随时在浏览器中清除网站数据。</dd>
       </dl></div>
       <h2>共享与第三方</h2>
+      <p>加载最新全球气压和风场时，浏览器会从 Google Cloud Storage 下载公开的 NOAA GFS 文件。与普通网页请求一样，托管方会收到 IP 地址和请求标头，但不包含玩家坐标、昵称或游戏成绩。设备会缓存一份气象分析资料以供再次进入或离线使用；清除网站数据即可删除。使用 <code>?weather=base</code> 进入时不会下载气象资料。</p>
       <p>Typhoon Lab 没有广告，也不出售你的数据。除由 Google（Google Analytics 与 Firebase）代表我们处理数据外，我们不会向任何第三方提供数据。Google Analytics 的数据可能在你所在国家或地区以外的 Google 服务器上处理。</p>
       <h2>你的权利</h2>
       <p>你可以随时在游戏中修改昵称。你也可以在“排行榜”标签页自行删除你的排行榜数据（见上文）、拒绝分析类 Cookie，或清除浏览器中保存的数据。如有疑问或请求，请联系 <a href="mailto:typ0s2d10@gmail.com">typ0s2d10@gmail.com</a>。</p>
@@ -219,7 +223,7 @@
       </dl></div>
       <div class="item"><h3>線上排行（Firebase）</h3><dl>
         <dt>目的</dt><dd>顯示公開排行，並將暱稱與成績一併保存。</dd>
-        <dt>蒐集的資訊</dt><dd>Firebase 匿名驗證會產生一組隨機使用者 ID，儲存在你的裝置上。排行會保存該 ID、你自己設定的暱稱以及遊戲成績（颱風數量、等級、估計損失），儲存於 Google Cloud Firestore 的 asia-northeast3（韓國首爾）。暱稱與成績是公開的。我們不蒐集姓名、電子郵件或聯絡方式，請勿使用真實姓名作為暱稱。</dd>
+        <dt>蒐集的資訊</dt><dd>Firebase 匿名驗證會產生一組隨機使用者 ID，儲存在你的裝置上。排行會保存該 ID、你自己設定的暱稱以及遊戲成績（災害數量、颱風等級、估計損失），儲存於 Google Cloud Firestore 的 asia-northeast3（韓國首爾）。暱稱與成績是公開的。我們不蒐集姓名、電子郵件或聯絡方式，請勿使用真實姓名作為暱稱。</dd>
         <dt>保存期限</dt><dd>直到你自行刪除（見下文），或服務終止為止。</dd>
         <dt>你的選擇</dt><dd>你可以隨時在「排行」分頁修改暱稱。你可以自行刪除暱稱和所有已上傳的成績：開啟「排行」分頁，按下「刪除我的紀錄」，立即生效。若你已不再擁有玩遊戲時使用的裝置，請附上暱稱寄信至 <a href="mailto:typ0s2d10@gmail.com">typ0s2d10@gmail.com</a>，我們會在 7 天內以手動方式刪除。</dd>
       </dl></div>
@@ -230,6 +234,7 @@
         <dt>你的選擇</dt><dd>你可以隨時在瀏覽器中清除網站資料。</dd>
       </dl></div>
       <h2>分享與第三方</h2>
+      <p>載入最新全球氣壓和風場時，瀏覽器會從 Google Cloud Storage 下載公開的 NOAA GFS 檔案。與一般網頁請求相同，託管方會收到 IP 位址與請求標頭，但不包含玩家座標、暱稱或遊戲成績。裝置會快取一份氣象分析資料供再次進入或離線使用；清除網站資料即可刪除。使用 <code>?weather=base</code> 進入時不會下載氣象資料。</p>
       <p>Typhoon Lab 沒有廣告，也不出售你的資料。除了由 Google（Google Analytics 與 Firebase）代表我們處理資料外，我們不會向任何第三方提供資料。Google Analytics 的資料可能在你所在國家或地區以外的 Google 伺服器上處理。</p>
       <h2>你的權利</h2>
       <p>你可以隨時在遊戲中修改暱稱。你也可以在「排行」分頁自行刪除你的排行資料（見上文）、拒絕分析用 Cookie，或清除瀏覽器中儲存的資料。如有疑問或需求，請聯絡 <a href="mailto:typ0s2d10@gmail.com">typ0s2d10@gmail.com</a>。</p>

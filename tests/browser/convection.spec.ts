@@ -1,3 +1,4 @@
+import { setSpeed } from './speed';
 import { test, expect } from '@playwright/test';
 
 for (const renderer of ['canvas', 'webgl']) {
@@ -19,7 +20,7 @@ for (const renderer of ['canvas', 'webgl']) {
       await expect(page.locator('.drag-ghost')).toHaveCount(0);
     }
     await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.effects.map((e: any) => e.type))).toEqual(['warm-air', 'updraft']);
-    for (const [key, type] of [['5', 'warm-air'], ['6', 'updraft']]) {
+    for (const [key, type] of [['t', 'warm-air'], ['y', 'updraft']]) {
       await page.getByTestId('map-stage').focus();
       await page.keyboard.press(key);
       await expect(page.getByTestId(`tool-${type}`)).toHaveAttribute('aria-pressed', 'true');
@@ -28,7 +29,7 @@ for (const renderer of ['canvas', 'webgl']) {
       await page.keyboard.press('Escape');
     }
     await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.effects.length)).toBe(4);
-    await page.getByTestId('speed-4').click();
+    await setSpeed(page, 14400);
     await page.getByTestId('play-toggle').click();
     await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.hours)).toBeGreaterThanOrEqual(6);
     await page.getByTestId('play-toggle').click();

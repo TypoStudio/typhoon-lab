@@ -1,5 +1,7 @@
 import type { EnvironmentCell, Layer, MapOverlays } from '../types';
 import { BOUNDS, GRID_COLS, GRID_ROWS, GRID_STEP } from '../simulation/engine';
+import { smoothstep } from '../simulation/geo';
+import { hexAlpha } from './hexes';
 import type { Theme } from './theme';
 
 /** Typed copy of state.grid (regular 2° cell centres, row-major from the south-west). */
@@ -11,6 +13,12 @@ export interface FieldData {
   /** blizzard as 0/1 floats, so particles can sample it bilinearly. */
   blizzardF: Float32Array;
   maxSpeed: number;
+  /** Resolves cyclone cores below the grid spacing, using the same snapshot as their icons. */
+  windAt?: (lon: number, lat: number, out: Float64Array) => void;
+  /** Effective distance to the nearest cyclone centre, for display-only angular speed limits. */
+  windAnimationRadiusKm?: (lon: number, lat: number) => number;
+  /** Display visibility inside a mature cyclone's calm eye (0) and at its eyewall (1). */
+  windVisibilityAt?: (lon: number, lat: number) => number;
 }
 
 export function buildFieldData(grid: EnvironmentCell[]): FieldData | null {
@@ -63,6 +71,35 @@ export function sampleGrid(f: FieldData, arr: Float32Array, lon: number, lat: nu
   return a + (b - a) * ty;
 }
 
+/** Shared by particle movement, streak direction, lifetime and map inspection. */
+export function sampleWind(f: FieldData, lon: number, lat: number, out: Float64Array): void {
+  if (f.windAt) { f.windAt(lon, lat, out); return; }
+  out[0] = sampleGrid(f, f.u, lon, lat);
+  out[1] = sampleGrid(f, f.v, lon, lat);
+}
+
+/** Monotone cubic interpolation: smooth slopes without ringing or negative rainfall. */
+function monotoneCubic(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const slope = (a: number, b: number) => a * b <= 0 ? 0 : 2 * a * b / (a + b);
+  const d = p2 - p1, m1 = slope(p1 - p0, d), m2 = slope(d, p3 - p2);
+  const t2 = t * t, t3 = t2 * t;
+  return (2 * t3 - 3 * t2 + 1) * p1 + (t3 - 2 * t2 + t) * m1
+    + (-2 * t3 + 3 * t2) * p2 + (t3 - t2) * m2;
+}
+
+/** Smooth display-only sampling; physical wind and inspection values keep bilinear sampling. */
+export function sampleSmoothGrid(f: FieldData, arr: Float32Array, lon: number, lat: number): number {
+  const gx = (((lon - BOUNDS.west) / GRID_STEP - 0.5) % f.cols + f.cols) % f.cols;
+  const gy = Math.max(0, Math.min(f.rows - 1, (lat - BOUNDS.south) / GRID_STEP - 0.5));
+  const i = Math.floor(gx), j = Math.floor(gy), tx = gx - i;
+  const row = (offset: number) => {
+    const r = Math.max(0, Math.min(f.rows - 1, j + offset)) * f.cols;
+    const at = (column: number) => arr[r + ((column % f.cols) + f.cols) % f.cols];
+    return monotoneCubic(at(i - 1), at(i), at(i + 1), at(i + 2), tx);
+  };
+  return monotoneCubic(row(-1), row(0), row(1), row(2), gy - j);
+}
+
 /**
  * Builds the RGBA image (cols × rows, row 0 = southernmost) for the active layer. Cells that are
  * transparent still carry a nearby ramp colour so bilinear filtering does not create dark halos.
@@ -102,34 +139,83 @@ export function buildLayerImage(f: FieldData, layer: Layer, theme: Theme, out: U
   }
 }
 
-/**
- * Shared combined raster for both renderers. SST tints the ocean at 25% opacity;
- * population cells composite above it. Wind uses streaks, pressure uses contour lines and rain uses overlay hexagons,
- * keeping those quantities readable without mixing competing colour scales.
- */
-export function buildCombinedImage(f: FieldData, overlays: MapOverlays, theme: Theme, out: Uint8Array): void {
-  out.fill(0);
-  const populationColor = new Uint8Array(3);
-  for (let k = 0; k < f.cols * f.rows; k++) {
-    const o = k * 4;
-    let baseAlpha = 0;
-    if (overlays.temperature) {
-      theme.ramps.temperature.at(f.temperature[k], out, o);
-      baseAlpha = f.land[k] ? 0 : 64 / 255;
-      out[o + 3] = f.land[k] ? 0 : 64;
-    } else if (overlays.population) {
-      // Preserve a ramp colour in transparent cells so linear filtering does not fade toward black.
-      theme.ramps.population.at(0, out, o);
+/** One-degree, world-anchored colour field; the camera only transforms this texture. */
+export const FIELD_IMAGE_COLS = 360;
+export const FIELD_IMAGE_ROWS = 180;
+const POPULATION_SPREAD = 2 / 5;
+
+/** Compact display kernels; population totals and damage still use the original grid. */
+function samplePopulationTint(f: FieldData, lon: number, lat: number): number {
+  const gx = ((lon - BOUNDS.west) / GRID_STEP - 0.5 + f.cols) % f.cols;
+  const gy = Math.max(0, Math.min(f.rows - 1, (lat - BOUNDS.south) / GRID_STEP - 0.5));
+  const col = Math.floor(gx), row = Math.floor(gy);
+  let population = 0;
+  for (let y = row; y <= Math.min(row + 1, f.rows - 1); y++) {
+    const wy = Math.max(0, 1 - Math.abs(gy - y) / POPULATION_SPREAD);
+    for (let x = col; x <= col + 1; x++) {
+      const wx = Math.max(0, 1 - Math.abs(gx - x) / POPULATION_SPREAD);
+      population += f.population[y * f.cols + (x % f.cols)] * wx * wy;
     }
-    if (overlays.population && f.population[k] > 0) {
-      const lg = Math.log10(Math.max(1, f.population[k]));
-      const density = Math.min(1, Math.max(0, (lg - 4.5) / (7.2 - 4.5)));
-      const popAlpha = 0.08 + 0.27 * density;
-      theme.ramps.population.at(lg, populationColor, 0);
-      const under = baseAlpha * (1 - popAlpha);
-      const alpha = popAlpha + under;
-      for (let c = 0; c < 3; c++) out[o + c] = Math.round((populationColor[c] * popAlpha + out[o + c] * under) / alpha);
-      out[o + 3] = Math.round(255 * alpha);
+  }
+  return Math.max(0, population);
+}
+/** Opaque colours for the existing sea and land surfaces; geometry supplies the coastline mask. */
+export function buildSurfaceImages(
+  f: FieldData, overlays: MapOverlays, theme: Theme, sea: Uint8Array, land: Uint8Array,
+): void {
+  const size = FIELD_IMAGE_COLS * FIELD_IMAGE_ROWS * 4;
+  if (sea.length !== size || land.length !== size) throw new RangeError('Invalid surface image size');
+  const rgb = new Uint8Array(3);
+  for (let j = 0; j < FIELD_IMAGE_ROWS; j++) {
+    const lat = -90 + j + 0.5;
+    for (let i = 0; i < FIELD_IMAGE_COLS; i++) {
+      const lon = -180 + i + 0.5, offset = (j * FIELD_IMAGE_COLS + i) * 4;
+      if (overlays.temperature) theme.ramps.airTemperature.at(sampleGrid(f, f.temperature, lon, lat), rgb, 0);
+      for (let channel = 0; channel < 3; channel++) {
+        sea[offset + channel] = overlays.temperature
+          ? Math.round(theme.rgb.sea[channel] * 0.45 + rgb[channel] * 0.55) : theme.rgb.sea[channel];
+        land[offset + channel] = theme.rgb.land[channel];
+      }
+      if (overlays.temperature) {
+        theme.ramps.airTemperature.at(sampleGrid(f, f.airTemperature, lon, lat), rgb, 0);
+        for (let channel = 0; channel < 3; channel++) {
+          land[offset + channel] = Math.round(theme.rgb.land[channel] * 0.45 + rgb[channel] * 0.55);
+        }
+      }
+      if (overlays.population) {
+        const population = samplePopulationTint(f, lon, lat);
+        const density = Math.min(1, Math.max(0, (Math.log10(Math.max(1, population)) - 4.5) / 2.7));
+        const strength = smoothstep(20_000, 250_000, population) * (0.12 + 0.3 * density);
+        theme.ramps.population.at(Math.log10(Math.max(1, population)), rgb, 0);
+        for (let channel = 0; channel < 3; channel++) {
+          land[offset + channel] = Math.round(land[offset + channel] * (1 - strength) + rgb[channel] * strength);
+        }
+      }
+      sea[offset + 3] = 255; land[offset + 3] = 255;
+    }
+  }
+}
+
+/** Only atmospheric precipitation is painted over the surface. */
+export function buildCombinedImage(f: FieldData, overlays: MapOverlays, theme: Theme, out: Uint8Array): void {
+  if (out.length !== FIELD_IMAGE_COLS * FIELD_IMAGE_ROWS * 4) throw new RangeError('Invalid field image size');
+  out.fill(0);
+  if (!overlays.rain) return;
+  const rgb = new Uint8Array(3), snowRgb = new Uint8Array(3);
+  for (let j = 0; j < FIELD_IMAGE_ROWS; j++) {
+    const lat = -90 + j + 0.5;
+    for (let i = 0; i < FIELD_IMAGE_COLS; i++) {
+      const offset = (j * FIELD_IMAGE_COLS + i) * 4, lon = -180 + i + 0.5;
+      const rain = Math.max(0, Math.min(60, sampleSmoothGrid(f, f.rain, lon, lat)));
+      if (rain <= 0) continue;
+      const snowMix = 1 - smoothstep(-1, 1, sampleSmoothGrid(f, f.airTemperature, lon, lat));
+      theme.ramps.rain.at(rain, rgb, 0);
+      theme.ramps.snow.at(rain, snowRgb, 0);
+      const alpha = Math.min(1, rain / 0.5) * (hexAlpha(rain, false) * (1 - snowMix) + hexAlpha(rain, true) * snowMix);
+      for (let channel = 0; channel < 3; channel++) {
+        out[offset + channel] = Math.round(rgb[channel] + (snowRgb[channel] - rgb[channel]) * snowMix);
+      }
+      out[offset + 3] = Math.round(alpha * 255);
     }
   }
 }
@@ -270,6 +356,13 @@ export function buildContours(f: FieldData): Contours {
 
 export interface LayerLegend { title: string; unit: string; ticks: { label: string; pos: number }[]; gradient: string; note: string }
 
+export function airTemperatureLegend(): LayerLegend {
+  return { title: 'Surface air temperature', unit: '°C',
+    ticks: [{ label: '-40', pos: 0 }, { label: '-20', pos: 0.25 }, { label: '0', pos: 0.5 }, { label: '20', pos: 0.75 }, { label: '40', pos: 1 }],
+    gradient: 'linear-gradient(to right, var(--ramp-air-temperature-0), var(--ramp-air-temperature-1) 25%, var(--ramp-air-temperature-2) 50%, var(--ramp-air-temperature-3) 62.5%, var(--ramp-air-temperature-4) 75%, var(--ramp-air-temperature-5) 87.5%, var(--ramp-air-temperature-6))',
+    note: 'Land colour shows near-surface air temperature. Population adds settlement shading.' };
+}
+
 /** Legend text; the gradient uses the same ramp tokens as the map image. Tick positions are 0..1 along the ramp. */
 export function layerLegend(layer: Layer): LayerLegend {
   switch (layer) {
@@ -284,10 +377,8 @@ export function layerLegend(layer: Layer): LayerLegend {
         gradient: 'linear-gradient(to right, var(--ramp-pressure-0), var(--ramp-pressure-1) 33%, var(--ramp-pressure-2) 53%, var(--ramp-pressure-3) 67%, var(--ramp-pressure-4) 80%, var(--ramp-pressure-5))',
         note: 'Isobars every 8 hPa from 1000 hPa up, and only every 20 hPa below 1000 (980, 960…), so deep lows show a few rings. 1000 hPa and lower lines are thicker.' };
     case 'temperature':
-      return { title: 'Sea-surface temperature', unit: '°C',
-        ticks: [{ label: '22', pos: 0 }, { label: '25', pos: 0.3 }, { label: '27', pos: 0.5 }, { label: '29', pos: 0.7 }, { label: '32', pos: 1 }],
-        gradient: 'linear-gradient(to right, var(--ramp-temperature-0), var(--ramp-temperature-1) 30%, var(--ramp-temperature-2) 50%, var(--ramp-temperature-3) 70%, var(--ramp-temperature-4) 85%, var(--ramp-temperature-5))',
-        note: 'Water above about 26.5 °C helps development.' };
+      return { ...airTemperatureLegend(), title: 'Temperature',
+        note: 'Sea and air temperatures share one scale. The upper marker shows air temperature; the lower marker shows water temperature.' };
     case 'population':
       return { title: 'Population per 2° cell', unit: 'people',
         ticks: [{ label: '30k', pos: 0 }, { label: '200k', pos: 0.3 }, { label: '3M', pos: 0.7 }, { label: '15M', pos: 1 }],
@@ -297,6 +388,6 @@ export function layerLegend(layer: Layer): LayerLegend {
       return { title: 'Rainfall', unit: 'mm/h',
         ticks: [{ label: '0', pos: 0 }, { label: '5', pos: 0.2 }, { label: '15', pos: 0.4 }, { label: '30', pos: 0.65 }, { label: '50+', pos: 1 }],
         gradient: 'linear-gradient(to right, var(--ramp-rain-0), var(--ramp-rain-1) 20%, var(--ramp-rain-2) 40%, var(--ramp-rain-3) 65%, var(--ramp-rain-4))',
-        note: 'Hexagons tile where rain or snow is falling. Wind streaks thicken in heavier rain. Below 0 °C precipitation is drawn as snow; in a blizzard the wind streaks turn white and stretch.' };
+        note: 'Hexagons tile where rain or snow is falling. Wind streaks thicken in heavier rain. Around 0 °C precipitation changes to snow; in a blizzard the wind streaks turn white.' };
   }
 }

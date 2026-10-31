@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { GameState, HistoricEnvironment } from '../src/types';
 import { DEFAULT_START_DOY, TICKS_PER_HOUR, createGame, dayOfYear, gridIndex, loadHistoric, placeTool, replayGame, sampleEnvironment, setHistoricEnvironment, setSeason, stepGame } from '../src/simulation/engine';
 import { buildReplay, parseReplay } from '../src/ui/storage';
-import { SEASONS, fmtMonthDay, parseStartParam, seasonIdOf } from '../src/ui/calendar';
+import { SEASONS, fmtMonthDay, parseStartParam, realTimeOfYear, seasonIdOf } from '../src/ui/calendar';
+import { fmtClockLive, fmtClockShort } from '../src/ui/dom';
+import { adjacentTimeSpeed, isTimeSpeed, timeSpeedLabel, TIME_SPEEDS } from '../src/time';
 import fixtureJson from './fixtures/environment-fixture.json';
 
 const run = (s: GameState, hours: number) => { for (let tick = 0; tick < hours * TICKS_PER_HOUR; tick++) stepGame(s); };
@@ -113,6 +115,24 @@ describe('seasons and a historic typhoon', () => {
 });
 
 describe('UI calendar helpers', () => {
+  it('starts from the local real clock and displays seconds at 1×', () => {
+    const start = realTimeOfYear(new Date(2026, 9, 27, 12, 34, 56, 500));
+    expect(start).toBeCloseTo(300 + (12 * 3600 + 34 * 60 + 56.5) / 86400, 9);
+    expect(fmtClockLive((start % 1) * 24)).toBe('Day 1 · 12:34:56');
+    expect(fmtClockShort((start % 1) * 24)).toBe('D1 12:34:56');
+    expect(fmtMonthDay(365 + 1)).toBe('Jan 1');
+  });
+
+  it('cycles through the available speeds in both directions', () => {
+    expect(TIME_SPEEDS.every(isTimeSpeed)).toBe(true);
+    expect([0, 1, 4, 12, 28800, 32768, Number.NaN].some(isTimeSpeed)).toBe(false);
+    expect(TIME_SPEEDS.map(timeSpeedLabel)).toEqual(['x1', 'x2', 'x4', 'x8', 'x16', 'x48']);
+    expect(adjacentTimeSpeed(200, 1)).toBe(600);
+    expect(adjacentTimeSpeed(600, 1)).toBe(1200);
+    expect(adjacentTimeSpeed(14400, 1)).toBe(200);
+    expect(adjacentTimeSpeed(200, -1)).toBe(14400);
+  });
+
   it('maps days to the four seasons, the season buttons to their own season, and days to dates', () => {
     expect([59, 60, 151, 152, 243, 244, 334, 335, 365, 1].map(seasonIdOf)).toEqual(['winter', 'spring', 'spring', 'summer', 'summer', 'autumn', 'autumn', 'winter', 'winter', 'winter']);
     expect(SEASONS.map(s => [s.id, s.doy, seasonIdOf(s.doy)])).toEqual([['spring', 105, 'spring'], ['summer', 196, 'summer'], ['autumn', 288, 'autumn'], ['winter', 15, 'winter']]);

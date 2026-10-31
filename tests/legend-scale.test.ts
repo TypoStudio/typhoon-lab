@@ -6,6 +6,7 @@ describe('legend scale', () => {
   it('reads tick labels', () => {
     expect([tickValue('0'), tickValue('40+'), tickValue('30k'), tickValue('15M')]).toEqual([0, 40, 30000, 15000000]);
     expect(tickValue('x')).toBeNaN();
+    expect(tickValue('-40')).toBe(-40);
   });
 
   it('interpolates linearly between ticks', () => {
@@ -27,7 +28,8 @@ describe('legend scale', () => {
 
   it('is null below the bar range or for unusable values, and holds the last tick above it', () => {
     const sea = layerLegend('temperature').ticks;
-    expect(tickPosition(sea, 21.9)).toBeNull();
+    expect(tickPosition(sea, -40.1)).toBeNull();
+    expect(tickPosition(sea, 0)).toBe(0.5);
     expect(tickPosition(sea, 40)).toBe(1);
     expect(tickPosition(sea, NaN)).toBeNull();
     expect(tickPosition(layerLegend('population').ticks, 0, true)).toBeNull();

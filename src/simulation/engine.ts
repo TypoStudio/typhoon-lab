@@ -22,13 +22,20 @@
  * include every storm. sampleEnvironment() returns the storm-free environment.
  */
 import type {
-  ActionRecord, City, ClimateKey, ClimateState, EnvironmentCell, Effect, GameState, GenesisCandidate, GeoPoint, HistoricEnvironment, HistoricPoint, HistoricTyphoon, NewsItem,
-  PlacementResult, Storm, StormRecord, Thunderstorm, ToolDefinition, ToolType,
+  ActionRecord, City, ClimateKey, ClimateState, EnvironmentCell, Effect, FormationKind, GameState, GenesisCandidate, GeoPoint, HistoricEnvironment, HistoricPoint, HistoricTyphoon, NewsItem,
+  LiveWeatherSnapshot, PlacementResult, Storm, StormRecord, Thunderstorm, ToolDefinition, ToolType, WeatherField,
 } from '../types';
 import { CITY_DAMAGE_LEVELS, cityDamageBulletin, estimateCityDamage } from './damage-news';
+import { isWeatherHazardKind, WEATHER_HAZARDS } from '../data/weather-hazards';
+import { applyHazardField, hazardDamageRatio, hazardInfluence, hazardPressureSystem, hazardWind, stepWeatherHazards } from './weather-hazards';
+import { recordDisasterHistory, syncDisasters } from './disasters';
+import { moveTornado } from './tornado-motion';
+import type { WeatherHazardKind } from '../types';
+import { applyTrafficDispatch, createTraffic, stepTraffic, validateTrafficDispatches } from './traffic';
 import { CITIES, LAND_POLYGONS, SCENARIO } from '../data/world';
 import { AGENCY_NAMES, typhoonById } from '../data/typhoons';
 import { fieldsAt, sampleHistoric, windowCells } from './historic';
+import { currentWeather, isLiveWeatherSnapshot, sampleLiveWeather, stepLiveWeather } from './live-weather';
 import { LandIndex, clamp, cosLat, distanceKm, hash01, moveKm, offsetKm, smoothstep, wrapLon } from './geo';
 
 export const SIMULATION_VERSION = '0.8.0';
@@ -63,7 +70,7 @@ const FORECAST_HOURS = 72;
 const RAMP_HOURS = 6;
 const REFERENCE_PRESSURE = 1010;
 const GALE = 17.2;
-export const TOOL_TYPES: readonly ToolType[] = ['warm', 'moisture', 'low', 'high', 'warm-air', 'updraft', 'cool', 'dry', 'cold-air', 'downdraft', 'low-shear', 'high-shear'];
+export const TOOL_TYPES: readonly ToolType[] = ['warm', 'moisture', 'low', 'high', 'warm-air', 'updraft', 'cool', 'dry', 'cold-air', 'downdraft', 'low-shear', 'high-shear', 'unstable-air', 'stable-air'];
 
 // Palette order = keyboard order (1–9, 0, -, =): formation set on the first row, weakening set on the second.
 export const TOOLS: ToolDefinition[] = [
@@ -74,27 +81,36 @@ export const TOOLS: ToolDefinition[] = [
   { type: 'low', name: 'Low pressure', radiusKm: 650, durationHours: 72,
     description: 'Seeds a spinning disturbance. Over warm, moist, low-shear tropical ocean it can become a depression; elsewhere it bends the flow toward it.' },
   { type: 'low-shear', name: 'Low shear', radiusKm: 400, durationHours: 48,
-    description: 'Calms the upper winds so a storm can stay upright. Stacking is capped at −20 m/s.' },
+    description: 'Calms the upper winds so a storm can stay upright. Stacking is capped at −60 m/s.' },
   { type: 'warm-air', name: 'Warm air', radiusKm: 450, durationHours: 72,
-    description: 'Warms lower-level air by up to 3 °C and supports convection. Stacking is capped at +6 °C. Does not warm the ocean.' },
+    description: 'Warms lower-level air by up to 3 °C and supports convection. Stacking is capped at +18 °C. Does not warm the ocean.' },
   { type: 'updraft', name: 'Updraft', radiusKm: 400, durationHours: 48,
-    description: 'Adds up to 1 m/s of rising air to help a moist disturbance organise and grow. Stacking is capped at 3 m/s. Still needs warm ocean, moisture and a low.' },
+    description: 'Adds up to 1 m/s of rising air to help a moist disturbance organise and grow. Stacking is capped at 9 m/s. Still needs warm ocean, moisture and a low.' },
   { type: 'cool', name: 'Cool water', radiusKm: 550, durationHours: 72,
-    description: 'Cools the ocean by up to 3 °C per placement, capped at 9 °C, and forms a weak high. Cuts the storm’s ocean energy supply. Ocean only.' },
+    description: 'Cools the ocean by up to 3 °C per placement, capped at 30 °C, and forms a weak high. Cuts the storm’s ocean energy supply. Ocean only.' },
   { type: 'dry', name: 'Dry air', radiusKm: 550, durationHours: 72,
     description: 'Reduces humidity and disrupts convection. Overlap with other weakening conditions to dissipate storms faster.' },
   { type: 'high', name: 'High pressure', radiusKm: 800, durationHours: 72,
     description: 'Adds a high (clockwise north of the equator, anticlockwise south). Changes the flow that steers storms. Not within 300 km of a storm.' },
   { type: 'cold-air', name: 'Cold air', radiusKm: 450, durationHours: 72,
-    description: 'Cools lower-level air by up to 3 °C, capped at 6 °C. Suppresses growth and weakens storms.' },
+    description: 'Cools lower-level air by up to 3 °C, capped at 18 °C. Suppresses growth and weakens storms.' },
   { type: 'downdraft', name: 'Downdraft', radiusKm: 400, durationHours: 48,
-    description: 'Adds up to 1 m/s of descending air, capped at 3 m/s. Suppresses convection and weakens storms.' },
+    description: 'Adds up to 1 m/s of descending air, capped at 9 m/s. Suppresses convection and weakens storms.' },
   { type: 'high-shear', name: 'Strong shear', radiusKm: 400, durationHours: 48,
-    description: 'Adds upper-level wind that tilts and tears a storm apart. Stacking is capped at +20 m/s.' },
+    description: 'Adds upper-level wind that tilts and tears a storm apart. Stacking is capped at +60 m/s.' },
+  { type: 'unstable-air', name: 'Unstable air', radiusKm: 450, durationHours: 48,
+    description: 'Increases atmospheric instability. Helps moist updrafts build thunderstorms and can intensify snowy bands.' },
+  { type: 'stable-air', name: 'Stable air', radiusKm: 450, durationHours: 48,
+    description: 'Stabilizes the air and suppresses convection, thunderstorms and intense snow bands.' },
 ];
 const TOOL_BY_TYPE = new Map(TOOLS.map(t => [t.type, t]));
-const EFFECT_STRENGTH: Record<ToolType, number> = { warm: 2.0, moisture: 0.22, low: -7, high: 7, 'warm-air': 3, updraft: 1, cool: 3, dry: 0.3, 'cold-air': -3, downdraft: -1, 'low-shear': -10, 'high-shear': 10 };
-const SHEAR_STACK_CAP = 20; // m/s, either direction
+const EFFECT_STRENGTH: Record<ToolType, number> = { warm: 2.0, moisture: 0.22, low: -7, high: 7, 'warm-air': 3, updraft: 1, cool: 3, dry: 0.3, 'cold-air': -3, downdraft: -1, 'low-shear': -10, 'high-shear': 10, 'unstable-air': 1, 'stable-air': -1 };
+export const EFFECT_STACK_LIMITS = { air: 18, vertical: 9, instability: 6, cooling: 30, drying: 3, shear: 60 } as const;
+const SHEAR_STACK_CAP = EFFECT_STACK_LIMITS.shear;
+/** Recipe effects stay additive; ordinary tools use the larger sandbox limits. */
+function capEffect(total: number, unlimited: number, limit: number, minimum = -limit): number {
+  return clamp(total - unlimited, minimum, limit) + unlimited;
+}
 const THERMAL_PRESSURE: Partial<Record<ToolType, number>> = { warm: -2, cool: 2 }; // hPa: warm water forms a weak thermal low, cool water a weak high
 
 // ---------------------------------------------------------------------------------------------
@@ -468,12 +484,13 @@ function activeHistoric(state: GameState): { data: HistoricEnvironment; hours: n
 }
 
 export interface EnvironmentSample {
-  temperature: number; airTemperature: number; airHeating: number; updraft: number; drying: number; cooling: number; humidity: number; shear: number; pressure: number; u: number; v: number; land: boolean;
+  temperature: number; airTemperature: number; airHeating: number; updraft: number; instability: number; drying: number; cooling: number; humidity: number; shear: number; pressure: number; u: number; v: number; land: boolean;
 }
 
 function allSystems(state: GameState): PressureSystem[] {
-  const list = baseSystems(state.seed).slice();
+  const list: PressureSystem[] = state.initialWeather ? [] : baseSystems(state.seed).slice();
   for (const e of state.effects) if (isPressureTool(e.type)) list.push(effectSystem(e));
+  for (const hazard of state.weatherHazards ?? []) list.push(hazardPressureSystem(hazard));
   return list;
 }
 
@@ -483,23 +500,35 @@ function environmentAt(state: GameState, systems: PressureSystem[], lon: number,
   let temperature = baseTemp + season.sst;
   let airHeating = 0;
   let updraft = 0;
+  let instability = 0;
   let cooling = 0;
   let drying = 0;
   let shearDelta = 0;
+  const unlimited = { air: 0, vertical: 0, instability: 0, cooling: 0, drying: 0, shear: 0 };
   let humidity = baseHumidity(state.seed, lon, lat) - (land ? 0.08 : 0);
   const s = systemsAt(systems, lon, lat);
   let airTemperature = baseTemp - 1.5 + season.air;
   let pressure = REFERENCE_PRESSURE + s.p;
   let u = s.u + zonalBackground(lat) + season.jet;
   let v = s.v;
+  const background = currentWeather(state);
+  if (background) {
+    const weather = sampleLiveWeather(background, lon, lat);
+    pressure = weather.p + s.p; u = weather.u + s.u; v = weather.v + s.v;
+    if (!land && weather.t !== undefined) {
+      temperature = weather.t + season.sst - seasonalAt(Math.floor(state.initialStartDayOfYear), lat, false).sst;
+    }
+    if (weather.air !== undefined) airTemperature = weather.air;
+  }
   const active = activeHistoric(state);
   const h = active && sampleHistoric(active.data, active.hours, active.startIso, lon, lat);
   if (h) { // a historic typhoon is loaded: the recorded field is the base where it has data; player effects stack on top
+    const added = systemsAt(state.initialWeather ? systems : systems.slice(baseSystems(state.seed).length), lon, lat);
     if (!Number.isNaN(h.t)) temperature = h.t;
     if (!Number.isNaN(h.air)) airTemperature = h.air;
     if (!Number.isNaN(h.h)) humidity = h.h;
-    if (!Number.isNaN(h.p)) pressure = h.p;
-    if (!Number.isNaN(h.u) && !Number.isNaN(h.v)) { u = h.u; v = h.v; }
+    if (!Number.isNaN(h.p)) pressure = h.p + added.p;
+    if (!Number.isNaN(h.u) && !Number.isNaN(h.v)) { u = h.u + added.u; v = h.v + added.v; }
   }
   const climate = climateAt(state.climate, lon, lat); // world climate adds on top of the base and of any recorded field
   if (!land) temperature += climate.sst;
@@ -508,14 +537,33 @@ function environmentAt(state: GameState, systems: PressureSystem[], lon: number,
   if (withEffects) for (const e of state.effects) {
     if (e.type === 'warm' && !land) temperature += EFFECT_STRENGTH.warm * effectWeight(e) * effectFalloff(e, lon, lat);
     else if (e.type === 'moisture') humidity += EFFECT_STRENGTH.moisture * effectWeight(e) * effectFalloff(e, lon, lat);
-    else if (e.type === 'warm-air' || e.type === 'cold-air') airHeating += EFFECT_STRENGTH[e.type] * effectWeight(e) * effectFalloff(e, lon, lat);
-    else if (e.type === 'updraft' || e.type === 'downdraft') updraft += EFFECT_STRENGTH[e.type] * effectWeight(e) * effectFalloff(e, lon, lat);
-    else if (e.type === 'cool' && !land) cooling += EFFECT_STRENGTH.cool * effectWeight(e) * effectFalloff(e, lon, lat);
-    else if (e.type === 'dry') drying += EFFECT_STRENGTH.dry * effectWeight(e) * effectFalloff(e, lon, lat);
-    else if (e.type === 'low-shear' || e.type === 'high-shear') shearDelta += EFFECT_STRENGTH[e.type] * effectWeight(e) * effectFalloff(e, lon, lat);
+    else if (e.type === 'warm-air' || e.type === 'cold-air') {
+      const delta = EFFECT_STRENGTH[e.type] * effectWeight(e) * effectFalloff(e, lon, lat);
+      airHeating += delta; if (e.formation) unlimited.air += delta;
+    }
+    else if (e.type === 'updraft' || e.type === 'downdraft') {
+      const delta = EFFECT_STRENGTH[e.type] * effectWeight(e) * effectFalloff(e, lon, lat);
+      updraft += delta; if (e.formation) unlimited.vertical += delta;
+    }
+    else if (e.type === 'cool' && !land) {
+      const delta = EFFECT_STRENGTH.cool * effectWeight(e) * effectFalloff(e, lon, lat);
+      cooling += delta; if (e.formation) unlimited.cooling += delta;
+    }
+    else if (e.type === 'dry') {
+      const delta = EFFECT_STRENGTH.dry * effectWeight(e) * effectFalloff(e, lon, lat);
+      drying += delta; if (e.formation) unlimited.drying += delta;
+    }
+    else if (e.type === 'low-shear' || e.type === 'high-shear') {
+      const delta = EFFECT_STRENGTH[e.type] * effectWeight(e) * effectFalloff(e, lon, lat);
+      shearDelta += delta; if (e.formation) unlimited.shear += delta;
+    }
+    else if (e.type === 'unstable-air' || e.type === 'stable-air') {
+      const delta = EFFECT_STRENGTH[e.type] * effectWeight(e) * effectFalloff(e, lon, lat);
+      instability += delta; if (e.formation) unlimited.instability += delta;
+    }
   }
   return {
-    temperature: temperature - clamp(cooling, 0, 9), airTemperature: airTemperature + clamp(airHeating, -6, 6), airHeating: clamp(airHeating, -6, 6), updraft: clamp(updraft, -3, 3), drying: clamp(drying, 0, 1), cooling: clamp(cooling, 0, 9), humidity: clamp(humidity - drying, 0, 1), shear: Math.max(0, baseShear(state.seed, lon, lat) + climate.shear + clamp(shearDelta, -SHEAR_STACK_CAP, SHEAR_STACK_CAP)), land,
+    temperature: temperature - capEffect(cooling, unlimited.cooling, EFFECT_STACK_LIMITS.cooling, 0), airTemperature: airTemperature + capEffect(airHeating, unlimited.air, EFFECT_STACK_LIMITS.air), airHeating: capEffect(airHeating, unlimited.air, EFFECT_STACK_LIMITS.air), updraft: capEffect(updraft, unlimited.vertical, EFFECT_STACK_LIMITS.vertical), instability: capEffect(instability, unlimited.instability, EFFECT_STACK_LIMITS.instability), drying: capEffect(drying, unlimited.drying, EFFECT_STACK_LIMITS.drying, 0), cooling: capEffect(cooling, unlimited.cooling, EFFECT_STACK_LIMITS.cooling, 0), humidity: clamp(humidity - drying, 0, 1), shear: Math.max(0, baseShear(state.seed, lon, lat) + climate.shear + capEffect(shearDelta, unlimited.shear, SHEAR_STACK_CAP)), land,
     pressure, u, v,
   };
 }
@@ -531,7 +579,7 @@ export function sampleEnvironment(state: GameState, lon: number, lat: number): E
 
 /** Tuned convective support, neutral without the new tools; never replaces genesis gates. */
 function convectionSupport(env: EnvironmentSample): number {
-  return 1 + 0.04 * clamp(env.airHeating, -6, 6) + 0.12 * clamp(env.updraft, -3, 3);
+  return Math.max(0.1, 1 + 0.04 * clamp(env.airHeating, -EFFECT_STACK_LIMITS.air, EFFECT_STACK_LIMITS.air) + 0.12 * clamp(env.updraft, -EFFECT_STACK_LIMITS.vertical, EFFECT_STACK_LIMITS.vertical) + 0.18 * clamp(env.instability ?? 0, -EFFECT_STACK_LIMITS.instability, EFFECT_STACK_LIMITS.instability));
 }
 
 /** Genesis potential: warm sea, moist air, low shear and spin. No latitude factor: a storm may form on the equator. */
@@ -544,61 +592,210 @@ export function genesisPotential(env: EnvironmentSample, lat: number): number {
   return thermal * moist * shearF * spin * convectionSupport(env);
 }
 
-export interface FormationAdvice {
-  readings: { sst: number; airTemperature: number; humidity: number; shear: number; pressure: number; land: boolean };
+export interface FormationGuide {
+  readings: { sst: number; airTemperature: number; humidity: number; shear: number; pressure: number; instability: number; land: boolean };
   /** Genesis potential now, with every placed effect at full weight. */
   potential: number;
   /** Genesis potential once the recommended stack is also in place. */
   projected: number;
   ok: boolean;
-  recipe: { warm: number; moisture: number; low: number; lowShear: number; warmAir: number; updraft: number };
   /** The recommended placements in order, one entry per tool to place. */
   placements: ToolType[];
   land: boolean;
+  maxEffects: boolean;
+  threshold: number;
+  scoreLabel: string;
+  requiresSea: boolean;
+  note?: string;
+  cold?: boolean;
+  impossibleShear?: boolean;
+}
+export interface FormationAdvice extends FormationGuide {
+  recipe: { warm: number; moisture: number; low: number; lowShear: number; warmAir: number; updraft: number };
   cold: boolean;
   impossibleShear: boolean;
-  maxEffects: boolean;
 }
 const ADVICE_SST = 27.5;
 const ADVICE_HUMIDITY = 0.75;
-const ADVICE_SHEAR = 10;
-const ADVICE_LOW_KM = 200;
 
 /** The state with every effect (and any extra tool placed here) at full weight, for planning. */
-function atFullWeight(state: GameState, extra: ToolType[], lon: number, lat: number): GameState {
+function atFullWeight(state: GameState, extra: ToolType[], lon: number, lat: number, formation: FormationKind = 'typhoon'): GameState {
   const full = state.effects.map(e => ({ ...e, ageHours: RAMP_HOURS, remainingHours: Math.max(RAMP_HOURS, e.remainingHours) }));
-  for (const type of extra) full.push({ id: 0, type, lon, lat, radiusKm: TOOL_BY_TYPE.get(type)!.radiusKm, remainingHours: RAMP_HOURS, ageHours: RAMP_HOURS });
+  for (const type of extra) full.push({ id: 0, type, lon, lat, radiusKm: TOOL_BY_TYPE.get(type)!.radiusKm, remainingHours: RAMP_HOURS, ageHours: RAMP_HOURS, formation });
   return { ...state, effects: full };
 }
 
-/** What a typhoon needs to form at a point: the deficits against each genesis factor, as a stack of tools. */
+/** Add only as many uncapped recipe tools as the actual local deficit needs. */
+function fillRecipe(state: GameState, placements: ToolType[], kind: FormationKind, lon: number, lat: number,
+  sites: readonly GeoPoint[], type: ToolType, target: number, read: (env: EnvironmentSample) => number): void {
+  const tool = TOOL_BY_TYPE.get(type)!;
+  const strength = Math.abs(EFFECT_STRENGTH[type]);
+  for (;;) {
+    const projected = atFullWeight(state, placements, lon, lat, kind);
+    let needed = 0;
+    for (const site of sites) {
+      const deficit = target - read(sampleEnvironment(projected, site.lon, site.lat));
+      if (deficit > 1e-8) {
+        const falloff = effectFalloff({ ...tool, id: 0, lon, lat, ageHours: RAMP_HOURS, remainingHours: RAMP_HOURS }, site.lon, site.lat);
+        needed = Math.max(needed, Math.ceil(deficit / (strength * falloff)));
+      }
+    }
+    if (!needed) return;
+    for (let i = 0; i < needed; i++) placements.push(type);
+  }
+}
+
+/** Terrain is the only eligibility gate; deficits determine the unrestricted stack. */
 export function formationRecipe(state: GameState, lon: number, lat: number): FormationAdvice {
-  const x = wrapLon(lon);
+  const x = wrapLon(lon), site = { lon: x, lat };
   const env = sampleEnvironment(atFullWeight(state, [], x, lat), x, lat);
-  const readings = { sst: env.temperature, airTemperature: env.airTemperature, humidity: env.humidity, shear: env.shear, pressure: env.pressure, land: env.land };
-  const recipe = { warm: 0, moisture: 0, low: 0, lowShear: 0, warmAir: 0, updraft: 0 };
-  const potential = genesisPotential(env, lat);
-  const cold = !env.land && env.temperature < 20;
-  const impossibleShear = !env.land && env.shear - SHEAR_STACK_CAP > ADVICE_SHEAR;
+  const placements: ToolType[] = [];
+  const fill = (type: ToolType, target: number, read: (e: EnvironmentSample) => number) =>
+    fillRecipe(state, placements, 'typhoon', x, lat, [site], type, target, read);
   if (!env.land) {
-    recipe.warm = Math.ceil(Math.max(0, ADVICE_SST - env.temperature) / EFFECT_STRENGTH.warm);
-    recipe.moisture = Math.ceil(Math.max(0, ADVICE_HUMIDITY - env.humidity) / EFFECT_STRENGTH.moisture);
-    recipe.lowShear = Math.min(2, Math.ceil(Math.max(0, env.shear - ADVICE_SHEAR) / -EFFECT_STRENGTH['low-shear']));
-    recipe.low = state.effects.some(e => e.type === 'low' && distanceKm(e.lon, e.lat, x, lat) <= ADVICE_LOW_KM) ? 0 : 1; // a low already seeded here is the disturbance
-    if (convectionSupport(env) < 0.5) {
-      recipe.updraft = 1;
-      if (env.airTemperature < 24) recipe.warmAir = 1;
+    fill('warm', ADVICE_SST, e => e.temperature);
+    fill('moisture', ADVICE_HUMIDITY, e => e.humidity);
+    fill('low-shear', -6, e => -e.shear);
+    // Keep a durable disturbance at this point, or seed one if none is present.
+    if (!state.effects.some(e => e.type === 'low' && e.remainingHours >= 24 && distanceKm(e.lon, e.lat, x, lat) < 30)) placements.push('low');
+    const projected = sampleEnvironment(atFullWeight(state, placements, x, lat), x, lat);
+    if (genesisPotential(projected, lat) < 1.3) {
+      fill('warm', 29, e => e.temperature);
+      fill('moisture', 0.85, e => e.humidity);
+      fill('warm-air', 0, e => e.airHeating);
+      fill('unstable-air', 0, e => e.instability);
+      fill('updraft', 2, e => e.updraft);
+    }
+    // Even opposing highs and fully stacked weakening tools cannot veto a sea recipe.
+    if (genesisPotential(sampleEnvironment(atFullWeight(state, placements, x, lat), x, lat), lat) < 1.3) {
+      fill('warm', 30, e => e.temperature);
+      fill('moisture', 0.9, e => e.humidity);
+      fill('warm-air', 6, e => e.airHeating);
+      fill('unstable-air', 1, e => e.instability);
+      fill('updraft', 8, e => e.updraft);
     }
   }
-  const placements: ToolType[] = [];
-  const push = (type: ToolType, n: number) => { for (let i = 0; i < n; i++) placements.push(type); };
-  push('warm', recipe.warm); push('moisture', recipe.moisture); push('low-shear', recipe.lowShear);
-  push('warm-air', recipe.warmAir); push('updraft', recipe.updraft); push('low', recipe.low);
+  const count = (type: ToolType) => placements.filter(t => t === type).length;
+  const recipe = { warm: count('warm'), moisture: count('moisture'), low: count('low'), lowShear: count('low-shear'),
+    warmAir: count('warm-air'), updraft: count('updraft') };
   const projected = env.land ? 0 : genesisPotential(sampleEnvironment(atFullWeight(state, placements, x, lat), x, lat), lat);
-  return {
-    readings, potential, projected, ok: !env.land && projected >= GENESIS_THRESHOLD, recipe, placements,
-    land: env.land, cold, impossibleShear, maxEffects: state.effects.length + placements.length > MAX_ACTIVE_EFFECTS,
-  };
+  return { readings: guideReadings(env), potential: genesisPotential(env, lat), projected, ok: !env.land && projected >= GENESIS_THRESHOLD,
+    recipe, placements, land: env.land, cold: !env.land && env.temperature < 20, impossibleShear: false, maxEffects: false,
+    threshold: GENESIS_THRESHOLD, scoreLabel: 'Formation score', requiresSea: true };
+}
+
+function guideReadings(env: EnvironmentSample): FormationGuide['readings'] {
+  return { sst: env.temperature, airTemperature: env.airTemperature, humidity: env.humidity,
+    shear: env.shear, pressure: env.pressure, instability: env.instability, land: env.land };
+}
+
+/** A blizzard is diagnosed from the actual snow and wind field near the chosen point. */
+function blizzardCellsNear(state: GameState, lon: number, lat: number): number {
+  let count = 0;
+  forCellsNear(lon, lat, 800, k => {
+    const c = state.grid[k];
+    if (c.blizzard && distanceKm(lon, lat, c.lon, c.lat) <= 800) count++;
+  });
+  return count;
+}
+
+function projectedBlizzardCells(state: GameState, placements: ToolType[], lon: number, lat: number): number {
+  const projected = atFullWeight(state, placements, lon, lat, 'blizzard');
+  const copy = { ...projected, grid: projected.grid.map(c => ({ ...c })) };
+  refreshGrid(copy);
+  return blizzardCellsNear(copy, lon, lat);
+}
+
+export function blizzardRecipe(state: GameState, lon: number, lat: number): FormationGuide {
+  const x = wrapLon(lon);
+  const env = sampleEnvironment(atFullWeight(state, [], x, lat), x, lat);
+  const placements: ToolType[] = [];
+  // Snow and gale wind must coincide in an actual cell, away from the calm low centre.
+  let cell = state.grid[gridIndex(x, lat)], closest = Infinity;
+  forCellsNear(x, lat, 400, k => {
+    const candidate = state.grid[k], distance = distanceKm(x, lat, candidate.lon, candidate.lat);
+    if (distance >= 150 && distance < closest) { cell = candidate; closest = distance; }
+  });
+  const sites = [{ lon: x, lat }, cell];
+  fillRecipe(state, placements, 'blizzard', x, lat, sites, 'moisture', 0.9, e => e.humidity);
+  fillRecipe(state, placements, 'blizzard', x, lat, sites, 'cold-air', 4, e => -e.airTemperature);
+  // The low also supplies frontal precipitation. Its count adapts to latitude and land friction.
+  let extra = 1;
+  for (;;) {
+    const projected = atFullWeight(state, placements, x, lat, 'blizzard');
+    const wind = totalWind(projected, cell.lon, cell.lat);
+    const pressure = sampleEnvironment(projected, cell.lon, cell.lat).pressure;
+    const before = sampleEnvironment({ ...projected, effects: [] }, cell.lon, cell.lat).pressure;
+    if (Math.hypot(wind.u, wind.v) >= 22 && before - pressure >= 12) break;
+    for (let i = 0; i < extra; i++) placements.push('low');
+    extra *= 2;
+  }
+  const potential = blizzardCellsNear(state, x, lat);
+  const projected = projectedBlizzardCells(state, placements, x, lat);
+  return { readings: guideReadings(env), potential, projected, ok: projected > 0, placements,
+    land: env.land, maxEffects: false, threshold: 1, scoreLabel: 'Blizzard cells nearby', requiresSea: false };
+}
+
+/** Enough rotating, moist convection for an existing thunderstorm to develop a tornado. */
+export function tornadoPotential(env: EnvironmentSample): number {
+  const convection = convectivePotential(env.humidity, env.airHeating, env.updraft, env.airTemperature, env.instability);
+  return Math.max(0, Math.min(convection / 1.2, env.humidity / 0.68, env.shear / 14, env.instability / 0.65));
+}
+
+export function tornadoRecipe(state: GameState, lon: number, lat: number): FormationGuide {
+  const x = wrapLon(lon);
+  const env = sampleEnvironment(atFullWeight(state, [], x, lat), x, lat);
+  const placements: ToolType[] = [];
+  // Include the sampled grid cell and room for the developing thunderstorm to drift.
+  const sites = [{ lon: x, lat }, state.grid[gridIndex(x, lat)],
+    ...[[150, 0], [-150, 0], [0, 150], [0, -150]].map(([east, north]) => moveKm(x, lat, east, north))];
+  const fill = (type: ToolType, target: number, read: (e: EnvironmentSample) => number) =>
+    fillRecipe(state, placements, 'tornado', x, lat, sites, type, target, read);
+  fill('warm-air', 28, e => e.airTemperature);
+  fill('moisture', 0.9, e => e.humidity);
+  fill('high-shear', 22, e => e.shear);
+  fill('unstable-air', 1.5, e => e.instability);
+  fill('updraft', 3, e => e.updraft);
+  // An updraft owns the guaranteed outbreak, even if other tools already provide enough lift.
+  if (!placements.includes('updraft')) placements.push('updraft');
+  const projected = tornadoPotential(sampleEnvironment(atFullWeight(state, placements, x, lat, 'tornado'), x, lat));
+  return { readings: guideReadings(env), potential: tornadoPotential(env), projected, ok: projected >= 1, placements,
+    land: env.land, maxEffects: false, threshold: 1, scoreLabel: 'Tornado potential', requiresSea: false };
+}
+
+/** Unrestricted condition recipes for the seven non-cyclone weather phenomena. */
+export function weatherHazardRecipe(state: GameState, kind: WeatherHazardKind, lon: number, lat: number): FormationGuide {
+  const x = wrapLon(lon), definition = WEATHER_HAZARDS[kind];
+  const env = sampleEnvironment(atFullWeight(state, [], x, lat, kind), x, lat);
+  const placements: ToolType[] = [];
+  const allowed = !definition.landOnly || env.land;
+  const sites = [{ lon: x, lat }, state.grid[gridIndex(x, lat)]];
+  const fill = (type: ToolType, target: number, read: (e: EnvironmentSample) => number) =>
+    fillRecipe(state, placements, kind, x, lat, sites, type, target, read);
+  const readiness = (e: EnvironmentSample): number => clamp(kind === 'heatwave' ? (e.airTemperature - 25) / 15
+    : kind === 'coldwave' ? (5 - e.airTemperature) / 20
+    : kind === 'drought' || kind === 'dust' ? (0.6 - e.humidity) / 0.5
+    : kind === 'gust' ? -e.updraft / 5
+    : Math.min(e.humidity / 0.9, e.updraft / (kind === 'hail' ? 5 : 4)), 0, 1);
+  if (allowed) {
+    if (kind === 'heatwave') { fill('warm-air', 40, e => e.airTemperature); fill('dry', -0.25, e => -e.humidity); }
+    else if (kind === 'coldwave') fill('cold-air', 18, e => -e.airTemperature);
+    else if (kind === 'drought' || kind === 'dust') {
+      fill('dry', -0.1, e => -e.humidity); fill('stable-air', 1, e => -e.instability);
+    } else if (kind === 'gust') { fill('downdraft', 5, e => -e.updraft); fill('moisture', 0.8, e => e.humidity); }
+    else {
+      fill('moisture', 0.95, e => e.humidity);
+      fill('warm-air', 20, e => e.airTemperature);
+      fill('updraft', kind === 'hail' ? 5 : 4, e => e.updraft);
+      fill('unstable-air', kind === 'hail' ? 2 : 1, e => e.instability);
+    }
+    // An anchor is kept even when the surrounding climate already meets all conditions.
+    if (!placements.includes(definition.anchor)) placements.push(definition.anchor);
+  }
+  const projected = sampleEnvironment(atFullWeight(state, placements, x, lat, kind), x, lat);
+  return { readings: guideReadings(env), potential: readiness(env), projected: allowed ? readiness(projected) : 0,
+    ok: allowed, placements, land: env.land, maxEffects: false, threshold: 1, scoreLabel: 'Event readiness', requiresSea: false,
+    note: allowed ? 'Place the recipe. The phenomenon begins after conditions build for six model hours.' : 'This phenomenon needs land. Pick a land spot.' };
 }
 
 /** Thermodynamic ceiling (m/s, 10-min mean) from SST. */
@@ -734,7 +931,7 @@ export function stageFor(wind: number, lon = 140, lat = 15): string {
 /** Cyclonic rotation sign: +1 counter-clockwise (north), -1 clockwise (south). */
 const spinSign = (lat: number) => (lat >= 0 ? 1 : -1);
 
-function stormVortexAt(storm: Vortex, motion: { u: number; v: number }, lon: number, lat: number): { u: number; v: number; dp: number } {
+export function stormVortexAt(storm: Vortex, motion: { u: number; v: number }, lon: number, lat: number): { u: number; v: number; dp: number } {
   const { dx, dy } = offsetKm(storm.lon, storm.lat, lon, lat);
   const r = Math.hypot(dx, dy);
   const outer = outerRadiusKm(storm);
@@ -755,15 +952,16 @@ function stormVortexAt(storm: Vortex, motion: { u: number; v: number }, lon: num
 }
 
 const STEER_RING_KM = 400;
-function steeringAt(systems: PressureSystem[], p0: GeoPoint, wind: number, day: number): { u: number; v: number } {
+function steeringAt(systems: PressureSystem[], p0: GeoPoint, wind: number, day: number, weather?: WeatherField): { u: number; v: number } {
   let u = 0;
   let v = 0;
   const n = 8;
   for (let k = 0; k <= n; k++) {
     const p = k === n ? p0 : moveKm(p0.lon, p0.lat, STEER_RING_KM * Math.cos((k * Math.PI * 2) / n), STEER_RING_KM * Math.sin((k * Math.PI * 2) / n));
     const s = systemsAt(systems, p.lon, p.lat);
-    u += s.u + zonalBackground(p.lat) + seasonalAt(day, p.lat, false).jet;
-    v += s.v;
+    const initial = weather && sampleLiveWeather(weather, p.lon, p.lat);
+    u += s.u + (initial ? initial.u : zonalBackground(p.lat) + seasonalAt(day, p.lat, false).jet);
+    v += s.v + (initial ? initial.v : 0);
   }
   // Game beta drift: westward and poleward, stronger for stronger vortices.
   const beta = 0.6 + 0.6 * clamp(wind / 40, 0, 1);
@@ -775,8 +973,8 @@ function steeringAt(systems: PressureSystem[], p0: GeoPoint, wind: number, day: 
  * core avoids singular speeds, and young pairs ramp in without losing independent births.
  * Sum in stable ID order, then cap the combined perturbation for crowded worlds.
  */
-function coupledSteering(systems: PressureSystem[], storm: Storm, neighbours: Storm[], day: number): { u: number; v: number } {
-  const base = steeringAt(systems, storm, storm.wind, day);
+function coupledSteering(systems: PressureSystem[], storm: Storm, neighbours: Storm[], day: number, weather?: WeatherField): { u: number; v: number } {
+  const base = steeringAt(systems, storm, storm.wind, day, weather);
   let u = 0;
   let v = 0;
   for (const other of [...neighbours].sort((a, b) => a.id - b.id)) {
@@ -800,7 +998,7 @@ function coupledSteering(systems: PressureSystem[], storm: Storm, neighbours: St
 /** Instantaneous steering velocity (m/s), excluding the storm's own circulation. */
 export function steeringFlow(state: GameState, storm: Storm | undefined = state.storms[0]): { u: number; v: number } {
   if (!storm) return { u: 0, v: 0 };
-  return coupledSteering(allSystems(state), storm, state.storms, seasonDay(state));
+  return coupledSteering(allSystems(state), storm, state.storms, seasonDay(state), currentWeather(state));
 }
 
 const motionCache = new WeakMap<GameState, { tick: number; key: string; motions: { u: number; v: number }[] }>();
@@ -811,7 +1009,7 @@ function stormMotions(state: GameState, systems?: PressureSystem[]): { u: number
   if (c && c.tick === state.tick && c.key === key) return c.motions;
   const sys = systems ?? allSystems(state);
   const day = seasonDay(state);
-  const motions = state.storms.map(s => coupledSteering(sys, s, state.storms, day));
+  const motions = state.storms.map(s => coupledSteering(sys, s, state.storms, day, currentWeather(state)));
   motionCache.set(state, { tick: state.tick, key, motions });
   return motions;
 }
@@ -827,11 +1025,13 @@ export function totalWind(state: GameState, lon: number, lat: number): { u: numb
   const active = activeHistoric(state);
   const h = active && sampleHistoric(active.data, active.hours, active.startIso, x, lat);
   const rec = h && !Number.isNaN(h.u) && !Number.isNaN(h.v) ? h : null; // recorded base replaces the base systems and background, as in refreshGrid
-  const s = systemsAt(rec ? systems.slice(baseSystems(state.seed).length) : systems, x, lat);
-  const ur = rec ? rec.u : 0;
-  const vr = rec ? rec.v : 0;
-  let u = rec ? ur + s.u : s.u + zonalBackground(lat) + seasonalAt(seasonDay(state), lat, false).jet;
-  let v = rec ? vr + s.v : s.v;
+  const background = currentWeather(state);
+  const initial = rec ?? (background && sampleLiveWeather(background, x, lat));
+  const s = systemsAt(rec && !state.initialWeather ? systems.slice(baseSystems(state.seed).length) : systems, x, lat);
+  const ur = initial ? initial.u : 0;
+  const vr = initial ? initial.v : 0;
+  let u = initial ? ur + s.u : s.u + zonalBackground(lat) + seasonalAt(seasonDay(state), lat, false).jet;
+  let v = initial ? vr + s.v : s.v;
   const motions = stormMotions(state, systems);
   state.storms.forEach((storm, k) => {
     const w = stormVortexAt(storm, motions[k], x, lat);
@@ -843,13 +1043,23 @@ export function totalWind(state: GameState, lon: number, lat: number): { u: numb
     u += w.u;
     v += w.v;
   }
-  return isLand(x, lat) ? { u: ur + LAND_WIND_FACTOR * (u - ur), v: vr + LAND_WIND_FACTOR * (v - vr) } : { u, v };
+  if (isLand(x, lat)) { u = ur + LAND_WIND_FACTOR * (u - ur); v = vr + LAND_WIND_FACTOR * (v - vr); }
+  for (const hazard of state.weatherHazards ?? []) {
+    const wind = hazardWind(hazard, { lon: x, lat }); u += wind.u; v += wind.v;
+  }
+  return { u, v };
 }
 
 /** Surface pressure (hPa) including every storm's pressure deficit. */
 export function totalPressure(state: GameState, lon: number, lat: number): number {
   const x = wrapLon(lon);
-  let p = REFERENCE_PRESSURE + systemsAt(allSystems(state), x, lat).p;
+  const background = currentWeather(state);
+  const active = activeHistoric(state);
+  const h = active && sampleHistoric(active.data, active.hours, active.startIso, x, lat);
+  const recorded = h && !Number.isNaN(h.p) ? h.p : null;
+  const systems = allSystems(state);
+  let p = (recorded ?? (background ? sampleLiveWeather(background, x, lat).p : REFERENCE_PRESSURE))
+    + systemsAt(recorded !== null && !state.initialWeather ? systems.slice(baseSystems(state.seed).length) : systems, x, lat).p;
   for (const storm of state.storms) p += stormVortexAt(storm, NO_MOTION, x, lat).dp;
   for (const r of state.remnants) p += stormVortexAt(r, NO_MOTION, x, lat).dp;
   return p;
@@ -863,19 +1073,26 @@ export function isValidSeed(seed: unknown): seed is number {
   return typeof seed === 'number' && Number.isInteger(seed) && seed >= 0 && seed <= 0xffffffff;
 }
 
-export function createGame(seed: number = SCENARIO.seed, startDayOfYear: number = DEFAULT_START_DOY): GameState {
+export function createGame(seed: number = SCENARIO.seed, startDayOfYear: number = DEFAULT_START_DOY, initialWeather?: LiveWeatherSnapshot): GameState {
   if (!isValidSeed(seed)) throw new Error('Seed must be an integer between 0 and 4294967295.');
   if (!isValidDayOfYear(startDayOfYear)) throw new Error('Start day of the year must be between 0 and 366.');
+  if (initialWeather !== undefined && !isLiveWeatherSnapshot(initialWeather)) throw new Error('Invalid starting weather.');
   const grid: EnvironmentCell[] = getStaticGrid().cells.map(c => ({
-    lon: c.lon, lat: c.lat, land: c.land, temperature: 0, airTemperature: 0, airHeating: 0, updraft: 0, humidity: 0, rain: 0, snow: 0, blizzard: false, shear: 0, pressure: REFERENCE_PRESSURE,
+    lon: c.lon, lat: c.lat, land: c.land, temperature: 0, airTemperature: 0, airHeating: 0, updraft: 0, instability: 0, humidity: 0, rain: 0, snow: 0, blizzard: false, shear: 0, pressure: REFERENCE_PRESSURE,
     u: 0, v: 0, population: c.population, cityId: c.cityId, maxDamage: 0, calmHours: 0, exposed: false, snowCm: 0, convection: 0,
   }));
   const state: GameState = {
+    ...(initialWeather ? { initialWeather: structuredClone(initialWeather), weather: {
+      pressure: initialWeather.pressure.slice(), u: initialWeather.u.slice(), v: initialWeather.v.slice(),
+      ...(initialWeather.seaTemperature ? { seaTemperature: initialWeather.seaTemperature.slice() } : {}),
+      ...(initialWeather.airTemperature ? { airTemperature: initialWeather.airTemperature.slice() } : {}),
+    } } : {}),
+    traffic: createTraffic(seed),
     genesis: { enabled: false, waves: 0, nextSpawnTick: 0 }, climate: { warming: 0, enso: 0, polar: 0 }, historic: [], nextStormId: 1,
     scenarioId: SCENARIO.id, version: SIMULATION_VERSION, seed, tick: 0, hours: 0, startDayOfYear, initialStartDayOfYear: startDayOfYear, phase: 'seeding',
     score: 0, exposedPopulation: 0, storms: [], remnants: [], stormArchive: [], thunderstorms: [], nextThunderstormId: 1, candidates: [], effects: [], grid,
     cities: CITIES.map(c => ({ id: c.id, score: 0, damage: 0, exposedPopulation: 0, maxWind: 0, blizzardHours: 0 })),
-    news: [], actions: [], peakWind: 0, blizzardCells: 0,
+    weatherHazards: [], disasters: [], news: [], actions: [], peakWind: 0, blizzardCells: 0,
   };
   addNews(state, { id: 'welcome', kind: 'info', title: 'Calm tropics',
     text: 'No storms yet. Overlap warm water, moisture and a low over tropical ocean to organise one.' });
@@ -894,18 +1111,19 @@ function addNews(state: GameState, item: Omit<NewsItem, 'hour'>): void {
   if (state.news.length > MAX_NEWS) state.news.splice(0, state.news.length - MAX_NEWS);
 }
 
-export function placeTool(state: GameState, type: ToolType, lon: number, lat: number): PlacementResult {
+export function placeTool(state: GameState, type: ToolType, lon: number, lat: number, formation?: FormationKind): PlacementResult {
   const tool = TOOL_BY_TYPE.get(type);
   if (!tool) return { ok: false, reason: 'Unknown weather tool.' };
   if (typeof lon !== 'number' || typeof lat !== 'number' || !Number.isFinite(lon) || !Number.isFinite(lat)) {
     return { ok: false, reason: 'Placement needs a valid map position.' };
   }
   if (!inBounds(lon, lat)) return { ok: false, reason: 'Place tools between 180°W–180°E and 90°S–90°N.' };
-  if (state.effects.length >= MAX_ACTIVE_EFFECTS) {
+  if (!formation && state.effects.filter(e => !e.formation).length >= MAX_ACTIVE_EFFECTS) {
     return { ok: false, reason: `${MAX_ACTIVE_EFFECTS} tools are already active. Wait for one to fade.` };
   }
   if (type === 'cool' && isLand(lon, lat)) return { ok: false, reason: 'Cool water must be placed over the ocean.' };
   if (type === 'warm' && isLand(lon, lat)) return { ok: false, reason: 'Warm water must be placed over the ocean.' };
+  if (isWeatherHazardKind(formation) && WEATHER_HAZARDS[formation].landOnly && !isLand(lon, lat)) return { ok: false, reason: 'This phenomenon needs land. Pick a land spot.' };
   if (type === 'high') {
     for (const s of state.storms) {
       if (distanceKm(s.lon, s.lat, lon, lat) < MIN_HIGH_DISTANCE_KM) {
@@ -913,8 +1131,32 @@ export function placeTool(state: GameState, type: ToolType, lon: number, lat: nu
       }
     }
   }
-  state.actions.push({ tick: state.tick, type, lon, lat });
-  state.effects.push({ id: state.actions.length, type, lon, lat, radiusKm: tool.radiusKm, remainingHours: tool.durationHours, ageHours: 0 });
+  appendTool(state, type, lon, lat, formation);
+  syncStormPressures(state);
+  refreshGrid(state);
+  refreshForecasts(state);
+  return { ok: true };
+}
+
+/** Append a validated tool; recipes refresh the expensive world fields just once. */
+function appendTool(state: GameState, type: ToolType, lon: number, lat: number, formation?: FormationKind): void {
+  const tool = TOOL_BY_TYPE.get(type)!;
+  const tag = formation ? { formation } : {};
+  state.actions.push({ tick: state.tick, type, lon, lat, ...tag });
+  state.effects.push({ id: state.actions.length, type, lon, lat, radiusKm: tool.radiusKm,
+    remainingHours: tool.durationHours, ageHours: 0, ...tag });
+}
+
+/** Recompute and place the whole recipe atomically in the worker's current world. */
+export function placeFormation(state: GameState, kind: FormationKind, lon: number, lat: number): PlacementResult {
+  if (!['typhoon', 'blizzard', 'tornado'].includes(kind) && !isWeatherHazardKind(kind)) return { ok: false, reason: 'Unknown formation tool.' };
+  if (!inBounds(lon, lat)) return { ok: false, reason: 'Placement needs a valid map position.' };
+  if (kind === 'typhoon' && isLand(lon, lat)) return { ok: false, reason: 'Warm water must be placed over the ocean.' };
+  if (isWeatherHazardKind(kind) && WEATHER_HAZARDS[kind].landOnly && !isLand(lon, lat)) return { ok: false, reason: 'This phenomenon needs land. Pick a land spot.' };
+  const guide = isWeatherHazardKind(kind) ? weatherHazardRecipe(state, kind, lon, lat)
+    : (kind === 'typhoon' ? formationRecipe : kind === 'blizzard' ? blizzardRecipe : tornadoRecipe)(state, lon, lat);
+  if (!guide.ok) return { ok: false, reason: 'The formation recipe could not be prepared.' };
+  for (const type of guide.placements) appendTool(state, type, lon, lat, kind);
   syncStormPressures(state);
   refreshGrid(state);
   refreshForecasts(state);
@@ -1039,13 +1281,27 @@ function refreshGrid(state: GameState): void {
   const cooling = new Float64Array(g.length);
   const air = new Float64Array(g.length);
   const shearDelta = new Float64Array(g.length);
+  const freeAir = new Float64Array(g.length), freeVertical = new Float64Array(g.length);
+  const freeInstability = new Float64Array(g.length), freeCooling = new Float64Array(g.length), freeShear = new Float64Array(g.length);
   const recU = new Float64Array(g.length); // recorded base wind per cell, 0 where none: it already includes land friction, so the land factor skips it
   const recV = new Float64Array(g.length);
+  const background = currentWeather(state);
+  const seaSeasonOffsets = background?.seaTemperature ? Float64Array.from({ length: GRID_ROWS }, (_, row) => {
+    const lat = BOUNDS.south + (row + 0.5) * GRID_STEP;
+    return seasonalAt(seasonDay(state), lat, false).sst - seasonalAt(Math.floor(state.initialStartDayOfYear), lat, false).sst;
+  }) : null;
   for (let k = 0; k < g.length; k++) {
     const c = g[k];
-    c.airHeating = 0; c.updraft = 0; c.rain = 0; c.snow = 0; c.blizzard = false;
+    c.airHeating = 0; c.updraft = 0; c.instability = 0; c.rain = 0; c.snow = 0; c.blizzard = false;
     c.temperature = b.t[k] + season.sst[k]; c.shear = b.sh[k]; c.pressure = b.p[k]; c.u = b.u[k] + season.jet[k]; c.v = b.v[k];
+    if (background) {
+      c.pressure = background.pressure[k];
+      c.u = recU[k] = background.u[k]; c.v = recV[k] = background.v[k];
+    }
     air[k] = b.t[k] - 1.5 + season.air[k];
+    if (background?.airTemperature) air[k] = background.airTemperature[k];
+    const sea = background?.seaTemperature?.[k];
+    if (!c.land && sea != null) c.temperature = sea + seaSeasonOffsets![Math.floor(k / GRID_COLS)];
   }
   const active = activeHistoric(state);
   if (active) { // a historic typhoon is loaded: recorded fields replace the fictional ones inside the dataset window (NaN = missing, keep the base value)
@@ -1068,6 +1324,15 @@ function refreshGrid(state: GameState): void {
       hum[k] += climate.humidity;
     }
   }
+  // Use the same pressure-gradient circulation as point sampling and storm steering,
+  // before rain/lift and land friction are evaluated. Event movement/fading updates this each step.
+  for (const hazard of state.weatherHazards ?? []) {
+    const sys = [hazardPressureSystem(hazard)];
+    forCellsNear(hazard.lon, hazard.lat, sys[0].sigmaKm * SYSTEM_CUTOFF_SIGMA, k => {
+      const c = g[k], s = systemsAt(sys, c.lon, c.lat);
+      c.pressure += s.p; c.u += s.u; c.v += s.v;
+    });
+  }
   for (const e of state.effects) {
     const w = effectWeight(e);
     if (w === 0) continue;
@@ -1084,24 +1349,26 @@ function refreshGrid(state: GameState): void {
         const c = g[k];
         if (e.type === 'warm') { if (!c.land) c.temperature += EFFECT_STRENGTH.warm * w * effectFalloff(e, c.lon, c.lat); }
         else if (e.type === 'moisture') hum[k] += EFFECT_STRENGTH.moisture * w * effectFalloff(e, c.lon, c.lat);
-        else if (e.type === 'warm-air' || e.type === 'cold-air') c.airHeating += EFFECT_STRENGTH[e.type] * w * effectFalloff(e, c.lon, c.lat);
-        else if (e.type === 'updraft' || e.type === 'downdraft') c.updraft += EFFECT_STRENGTH[e.type] * w * effectFalloff(e, c.lon, c.lat);
-        else if (e.type === 'cool' && !c.land) cooling[k] += EFFECT_STRENGTH.cool * w * effectFalloff(e, c.lon, c.lat);
+        else if (e.type === 'warm-air' || e.type === 'cold-air') { const delta = EFFECT_STRENGTH[e.type] * w * effectFalloff(e, c.lon, c.lat); c.airHeating += delta; if (e.formation) freeAir[k] += delta; }
+        else if (e.type === 'updraft' || e.type === 'downdraft') { const delta = EFFECT_STRENGTH[e.type] * w * effectFalloff(e, c.lon, c.lat); c.updraft += delta; if (e.formation) freeVertical[k] += delta; }
+        else if (e.type === 'cool' && !c.land) { const delta = EFFECT_STRENGTH.cool * w * effectFalloff(e, c.lon, c.lat); cooling[k] += delta; if (e.formation) freeCooling[k] += delta; }
         else if (e.type === 'dry') hum[k] -= EFFECT_STRENGTH.dry * w * effectFalloff(e, c.lon, c.lat);
-        else if (e.type === 'low-shear' || e.type === 'high-shear') shearDelta[k] += EFFECT_STRENGTH[e.type] * w * effectFalloff(e, c.lon, c.lat);
+        else if (e.type === 'low-shear' || e.type === 'high-shear') { const delta = EFFECT_STRENGTH[e.type] * w * effectFalloff(e, c.lon, c.lat); shearDelta[k] += delta; if (e.formation) freeShear[k] += delta; }
+        else if (e.type === 'unstable-air' || e.type === 'stable-air') { const delta = EFFECT_STRENGTH[e.type] * w * effectFalloff(e, c.lon, c.lat); c.instability += delta; if (e.formation) freeInstability[k] += delta; }
       });
     }
   }
   for (let k = 0; k < g.length; k++) {
-    g[k].temperature -= clamp(cooling[k], 0, 9);
-    g[k].shear = Math.max(0, g[k].shear + clamp(shearDelta[k], -SHEAR_STACK_CAP, SHEAR_STACK_CAP));
+    g[k].temperature -= capEffect(cooling[k], freeCooling[k], EFFECT_STACK_LIMITS.cooling, 0);
+    g[k].shear = Math.max(0, g[k].shear + capEffect(shearDelta[k], freeShear[k], SHEAR_STACK_CAP));
     g[k].humidity = clamp(hum[k], 0, 1);
-    g[k].airHeating = clamp(g[k].airHeating, -6, 6);
+    g[k].airHeating = capEffect(g[k].airHeating, freeAir[k], EFFECT_STACK_LIMITS.air);
     g[k].airTemperature = air[k] + g[k].airHeating;
-    g[k].updraft = clamp(g[k].updraft, -3, 3);
-    g[k].convection = convectivePotential(g[k].humidity, g[k].airHeating, g[k].updraft, g[k].airTemperature);
+    g[k].updraft = capEffect(g[k].updraft, freeVertical[k], EFFECT_STACK_LIMITS.vertical);
+    g[k].instability = capEffect(g[k].instability, freeInstability[k], EFFECT_STACK_LIMITS.instability);
+    g[k].convection = convectivePotential(g[k].humidity, g[k].airHeating, g[k].updraft, g[k].airTemperature, g[k].instability);
     // Display-only rain (mm/h): background convective drizzle plus frontal lift inside a player-made low; thunderstorms and cyclones add below.
-    const lift = clamp((b.p[k] - g[k].pressure - 2) / 6, 0, 1); // storm vortices are added to the pressure later, so this is the tool-made anomaly only
+    const lift = clamp(((background?.pressure[k] ?? b.p[k]) - g[k].pressure - 2) / 6, 0, 1); // storm vortices are added later; compare tools to the current background
     g[k].rain = Math.min(60, 6 * clamp((g[k].humidity - 0.75) / 0.25, 0, 1) * clamp(g[k].updraft, 0, 3) / 3
       + 12 * lift * clamp((g[k].humidity - 0.45) / 0.3, 0, 1));
   }
@@ -1144,10 +1411,15 @@ function refreshGrid(state: GameState): void {
     });
   });
   }
+  for (let k = 0; k < g.length; k++) {
+    if (centreLand(k)) { g[k].u = recU[k] + LAND_WIND_FACTOR * (g[k].u - recU[k]); g[k].v = recV[k] + LAND_WIND_FACTOR * (g[k].v - recV[k]); }
+  }
+  for (const hazard of state.weatherHazards ?? []) {
+    forCellsNear(hazard.lon, hazard.lat, hazard.radiusKm, k => applyHazardField(hazard, g[k]));
+  }
   for (let k = 0; k < g.length; k++) { // display-only snow: precipitation below freezing; a blizzard is heavy snow in a gale
     const c = g[k];
-    if (centreLand(k)) { c.u = recU[k] + LAND_WIND_FACTOR * (c.u - recU[k]); c.v = recV[k] + LAND_WIND_FACTOR * (c.v - recV[k]); } // same land test as totalWind
-    c.snow = c.airTemperature <= 0 ? c.rain : 0;
+    c.snow = c.airTemperature <= 0 ? c.rain * clamp(1 + 0.2 * c.instability, 0.6, 1.4) : 0;
     c.blizzard = c.snow >= 1 && Math.hypot(c.u, c.v) >= 15;
   }
 }
@@ -1172,12 +1444,12 @@ export const RECOVERY_TAU_HOURS = 168;
  * cell's people are counted at most once per damage level whatever passes over it.
  * Returns the people-weighted damage added (0 when the cell's damage did not grow).
  */
-function damageCell(state: GameState, k: number, speed: number, coverage: number, ratio: number = damageRatio(speed) * coverage): number {
+function damageCell(state: GameState, k: number, speed: number, coverage: number, ratio: number = damageRatio(speed) * coverage, weatherExposure = false): number {
   const c = state.grid[k];
   if (c.population <= 0) return 0;
   const cs = getStaticGrid().shares[k];
   for (const s of cs) if (speed > state.cities[s.city].maxWind) state.cities[s.city].maxWind = speed;
-  if (speed >= GALE && !c.exposed) {
+  if ((speed >= GALE || (weatherExposure && ratio > 0)) && !c.exposed) {
     c.exposed = true;
     state.exposedPopulation += c.population;
     for (const s of cs) state.cities[s.city].exposedPopulation += s.share;
@@ -1200,11 +1472,14 @@ const SNOW_DAMAGE_MIN_CM = 20;
 /** Reads the freshly refreshed grid, so the displayed wind is exactly the scored wind. */
 function applyDamage(state: GameState): void {
   const { shares } = getStaticGrid();
+  const disasters = new Map((state.disasters ?? []).map(record => [record.id, record]));
+  const blizzard = (state.disasters ?? []).find(record => record.kind === 'blizzard' && record.endedHour === undefined);
   const beforeDamage = Float64Array.from(state.cities, c => c.damage);
   const beforeExposed = Float64Array.from(state.cities, c => c.exposedPopulation);
   const cyclone = new Set<number>();
   const convective = new Set<number>();
   const winter = new Set<number>();
+  const weather = new Map<number, WeatherHazardKind>();
   const blizzardNow = new Set<number>();
   const beforeBlizzard = Float64Array.from(state.cities, c => c.blizzardHours);
   for (const storm of state.storms) {
@@ -1220,7 +1495,11 @@ function applyDamage(state: GameState): void {
     if (t.gustMs < GALE) continue;
     const k = gridIndex(t.lon, t.lat);
     const cellKm2 = GRID_STEP * 111.32 * cosLat(state.grid[k].lat) * GRID_STEP * 110.57;
-    if (damageCell(state, k, t.gustMs, Math.min(1, (Math.PI * t.radiusKm ** 2) / cellKm2)) > 0) for (const s of shares[k]) convective.add(s.city);
+    const footprint = t.tornado ? Math.max(0.02, Math.min(1, (Math.PI * 8 ** 2) / cellKm2)) : Math.min(1, (Math.PI * t.radiusKm ** 2) / cellKm2);
+    const added = damageCell(state, k, t.gustMs, footprint);
+    const record = disasters.get(`${t.tornado ? 'tornado' : 'thunderstorm'}-${t.id}`);
+    if (record) record.damageScore += added;
+    if (added > 0) for (const s of shares[k]) convective.add(s.city);
   }
   let blizzardCells = 0; let bLon = 0; let bLat = 0;
   for (let k = 0; k < state.grid.length; k++) {
@@ -1233,7 +1512,34 @@ function applyDamage(state: GameState): void {
         if (speed > state.cities[s.city].maxWind) state.cities[s.city].maxWind = speed;
       }
     }
-    if (c.snowCm >= SNOW_DAMAGE_MIN_CM && c.population > 0 && damageCell(state, k, speed, 1, blizzardDamageRatio(c.snowCm, speed)) > 0) for (const s of shares[k]) winter.add(s.city);
+    if (c.snowCm >= SNOW_DAMAGE_MIN_CM && c.population > 0) {
+      const added = damageCell(state, k, speed, 1, blizzardDamageRatio(c.snowCm, speed));
+      if (blizzard) blizzard.damageScore += added;
+      else if (added > 0) {
+        // A cold-wave/downpour combination can build damaging snow without a gale.
+        // Keep that loss with its contributing event rather than leaving it out of rankings.
+        let source: string | undefined, strength = 0;
+        for (const hazard of state.weatherHazards ?? []) {
+          if (hazard.kind !== 'coldwave' && hazard.kind !== 'downpour' && hazard.kind !== 'hail') continue;
+          const influence = hazardInfluence(hazard, c);
+          if (influence > strength) { source = `weather-${hazard.id}`; strength = influence; }
+        }
+        const record = source && disasters.get(source);
+        if (record) record.damageScore += added;
+      }
+      if (added > 0) for (const s of shares[k]) winter.add(s.city);
+    }
+  }
+  for (const hazard of state.weatherHazards ?? []) {
+    const record = disasters.get(`weather-${hazard.id}`);
+    forCellsNear(hazard.lon, hazard.lat, hazard.radiusKm, k => {
+      const cell = state.grid[k], ratio = hazardDamageRatio(hazard, cell);
+      const added = damageCell(state, k, Math.hypot(cell.u, cell.v), 1, ratio, true);
+      if (record) record.damageScore += added;
+      if (added > 0) {
+        for (const share of shares[k]) weather.set(share.city, hazard.kind);
+      }
+    });
   }
   // Recovery: a damaged cell untouched for RECOVERY_DELAY_HOURS repairs exponentially; `score` and `state.score` stay cumulative.
   for (let k = 0; k < state.grid.length; k++) {
@@ -1261,7 +1567,7 @@ function applyDamage(state: GameState): void {
       addNews(state, { id: `blizzard-${city.id}`, kind: 'blizzard', cityId: city.id, title: `Blizzard hits ${city.name}`,
         text: `Blowing snow and winds of ${impact.maxWind.toFixed(0)} m/s cut visibility in ${city.name}. Roads and airports are closing.` });
     }
-    if (beforeExposed[i] === 0 && impact.exposedPopulation > 0) {
+    if (beforeExposed[i] === 0 && impact.exposedPopulation > 0 && impact.maxWind >= GALE) {
       addNews(state, { id: `city-${city.id}-gale`, kind: 'city', cityId: city.id, title: `Gales reach ${city.name}`,
         text: `Winds above gale force cover parts of ${city.name}. Peak wind ${impact.maxWind.toFixed(0)} m/s.` });
     }
@@ -1271,7 +1577,8 @@ function applyDamage(state: GameState): void {
       beforeDamage[i] / city.population < threshold && impact.damage / city.population >= threshold ? index : last, -1);
     if (level >= 0) {
       addNews(state, { id: `city-${city.id}-${level}-${state.tick}`, kind: 'city', cityId: city.id,
-        ...cityDamageBulletin(city, impact, level, cyclone.has(i) ? 'cyclone' : winter.has(i) ? 'blizzard' : convective.has(i) ? 'thunderstorm' : 'cyclone') });
+        ...(weather.has(i) ? { phenomenon: weather.get(i) } : {}),
+        ...cityDamageBulletin(city, impact, level, weather.get(i) ?? (cyclone.has(i) ? 'cyclone' : winter.has(i) ? 'blizzard' : convective.has(i) ? 'thunderstorm' : 'cyclone')) });
     }
     if (beforeDamage[i] / city.population >= CITY_DAMAGE_LEVELS[0] && impact.damage / city.population < CITY_DAMAGE_LEVELS[0]) {
       const damage = estimateCityDamage(city, impact);
@@ -1289,22 +1596,47 @@ export const THUNDERSTORM_THRESHOLD = 1;
 export const MAX_THUNDERSTORMS = 24;
 const THUNDERSTORM_SPACING_KM = 250;
 const THUNDERSTORM_NEWS_KM = 800;
+const LONG_TRACK_TORNADO_KM = 100;
 
 /** Game convective potential: lift from warm low-level air and updraft × moisture × warmth.
  * The untouched climate has no lift, so thunderstorms need player conditions; cold air,
  * downdraft and dry air suppress them. */
-export function convectivePotential(humidity: number, airHeating: number, updraft: number, airTemperature: number): number {
+export function convectivePotential(humidity: number, airHeating: number, updraft: number, airTemperature: number, instability = 0): number {
   const lift = Math.max(0, 0.25 * airHeating + 0.6 * updraft);
-  return lift * clamp((humidity - 0.5) / 0.2, 0, 1.5) * smoothstep(14, 24, airTemperature);
+  return lift * clamp((humidity - 0.5) / 0.2, 0, 1.5) * smoothstep(14, 24, airTemperature) * clamp(1 + 0.4 * instability, 0.2, 1.8);
 }
 
 /** Life-cycle envelope × local support; a seeded peak per id keeps cells distinct and replayable. */
 function setThunderstormStrength(state: GameState, t: Thunderstorm, convection: number): void {
   const peak = 0.55 + 0.45 * hash01(state.seed, 8811, t.id);
   t.intensity = peak * Math.sin((Math.PI * t.ageHours) / t.durationHours) * smoothstep(0.3, THUNDERSTORM_THRESHOLD, convection);
-  t.gustMs = 8 + 30 * t.intensity;
+  t.gustMs = (t.tornado ? 45 : 8) + 30 * t.intensity;
   t.radiusKm = 20 + 25 * t.intensity;
   t.cloudTopC = -20 - 55 * t.intensity;
+}
+
+function reportTornado(state: GameState, t: Thunderstorm): void {
+  if (t.tornadoReported) return;
+  t.tornadoReported = true;
+  const city = nearestCity(t.lon, t.lat);
+  const near = city && distanceKm(city.lon, city.lat, t.lon, t.lat) < 250 ? city : null;
+  addNews(state, { id: `tornado-${t.id}`, kind: 'tornado', cityId: near?.id,
+    title: near ? `Tornado touches down near ${near.name}` : 'Tornado touches down',
+    text: `A rotating thunderstorm produced a tornado near ${fmt(t.lon, t.lat)}. Strong wind shear, moist rising air and atmospheric instability combined.` });
+}
+
+/** Interpolate the cell-centred wind so a tornado does not turn abruptly at grid boundaries. */
+export function tornadoSteering(grid: EnvironmentCell[], lon: number, lat: number): { u: number; v: number } {
+  const x = (((lon - BOUNDS.west) / GRID_STEP - 0.5) % GRID_COLS + GRID_COLS) % GRID_COLS;
+  const y = clamp((lat - BOUNDS.south) / GRID_STEP - 0.5, 0, GRID_ROWS - 1);
+  const i = Math.floor(x), j = Math.floor(y);
+  const i2 = (i + 1) % GRID_COLS, j2 = Math.min(j + 1, GRID_ROWS - 1);
+  const tx = x - i, ty = y - j;
+  const a = grid[j * GRID_COLS + i], b = grid[j * GRID_COLS + i2];
+  const c = grid[j2 * GRID_COLS + i], d = grid[j2 * GRID_COLS + i2];
+  const interpolate = (v0: number, v1: number, v2: number, v3: number) =>
+    (v0 + (v1 - v0) * tx) * (1 - ty) + (v2 + (v3 - v2) * tx) * ty;
+  return { u: interpolate(a.u, b.u, c.u, d.u), v: interpolate(a.v, b.v, c.v, d.v) };
 }
 
 /** Drift, age and fade existing cells with the refreshed grid, then start new ones on the hour. */
@@ -1312,13 +1644,49 @@ function updateThunderstorms(state: GameState, dt: number): void {
   const g = state.grid;
   state.thunderstorms = state.thunderstorms.filter(t => {
     const here = g[gridIndex(t.lon, t.lat)];
-    const p = moveKm(t.lon, t.lat, here.u * dt * 3.6, here.v * dt * 3.6);
-    t.lon = p.lon; t.lat = p.lat;
+    if (t.tornado) {
+      moveTornado(t, state.seed, dt, point => ({ ...tornadoSteering(g, point.lon, point.lat), shear: g[gridIndex(point.lon, point.lat)].shear }));
+    } else Object.assign(t, moveKm(t.lon, t.lat, here.u * dt * 3.6, here.v * dt * 3.6));
     t.ageHours += dt;
     if (t.ageHours >= t.durationHours) return false;
-    setThunderstormStrength(state, t, g[gridIndex(t.lon, t.lat)].convection);
+    const cell = g[gridIndex(t.lon, t.lat)];
+    setThunderstormStrength(state, t, cell.convection);
+    const supported = t.ageHours >= 1 && t.intensity >= 0.3
+      && cell.convection >= 1.2 && cell.humidity >= 0.68 && cell.shear >= 14 && cell.instability >= 0.65;
+    if (supported && !t.tornadoEnded && t.tornadoStartAgeHours === undefined) {
+      t.tornadoStartAgeHours = t.ageHours;
+      t.tornadoTrack = [{ lon: t.lon, lat: t.lat }];
+      t.tornadoDistanceKm = 0;
+    }
+    t.tornado = supported && !t.tornadoEnded && t.tornadoStartAgeHours !== undefined;
+    if (t.tornadoStartAgeHours !== undefined && !t.tornado) t.tornadoEnded = true;
+    if (t.tornado) {
+      t.gustMs = 45 + 30 * t.intensity;
+      reportTornado(state, t);
+    } else t.gustMs = 8 + 30 * t.intensity;
+    if (t.tornado && !t.tornadoLongReported && (t.tornadoDistanceKm ?? 0) >= LONG_TRACK_TORNADO_KM) {
+      t.tornadoLongReported = true;
+      const city = nearestCity(t.lon, t.lat);
+      const near = city && distanceKm(city.lon, city.lat, t.lon, t.lat) < 250 ? city : null;
+      addNews(state, { id: `tornado-long-${t.id}`, kind: 'tornado', cityId: near?.id,
+        title: near ? `Long-track tornado near ${near.name}` : 'Long-track tornado',
+        text: `The tornado has traveled ${Math.round(t.tornadoDistanceKm!)} km while its rotating thunderstorm remains in warm, moist, unstable air with strong wind shear.` });
+    }
     return t.intensity >= 0.02 || t.ageHours <= 1;
   });
+  for (const effect of state.effects) {
+    if (effect.formation !== 'tornado' || effect.type !== 'updraft' || effect.triggered || effect.ageHours < RAMP_HOURS) continue;
+    const cell = g[gridIndex(effect.lon, effect.lat)];
+    if (cell.convection < 1.6 || cell.humidity < 0.75 || cell.shear < 17 || cell.instability < 1) continue;
+    const t: Thunderstorm = { id: state.nextThunderstormId++, lon: effect.lon, lat: effect.lat,
+      intensity: 0, radiusKm: 0, gustMs: 0, cloudTopC: 0, ageHours: 1.5, durationHours: 8,
+      tornado: true, tornadoStartAgeHours: 1.5, tornadoTrack: [{ lon: effect.lon, lat: effect.lat }], tornadoDistanceKm: 0 };
+    setThunderstormStrength(state, t, cell.convection);
+    state.thunderstorms.push(t);
+    reportTornado(state, t);
+    for (const same of state.effects) if (same.formation === 'tornado' && same.type === 'updraft'
+      && same.lon === effect.lon && same.lat === effect.lat) same.triggered = true;
+  }
   if (state.tick % TICKS_PER_HOUR !== 0) return;
   const hour = state.tick / TICKS_PER_HOUR;
   for (let k = 0; k < g.length && state.thunderstorms.length < MAX_THUNDERSTORMS; k++) {
@@ -1387,7 +1755,7 @@ const GENESIS_CONDITIONS: ToolType[] = ['warm', 'moisture', 'low', 'warm-air', '
 function climateGenesisPotential(seed: number, systems: PressureSystem[], lon: number, lat: number): number {
   const temperature = baseTemperature(seed, lon, lat);
   return genesisPotential({
-    temperature, airTemperature: temperature - 1.5, airHeating: 0, updraft: 0, drying: 0, cooling: 0,
+    temperature, airTemperature: temperature - 1.5, airHeating: 0, updraft: 0, instability: 0, drying: 0, cooling: 0,
     humidity: baseHumidity(seed, lon, lat), shear: Math.max(0, baseShear(seed, lon, lat)),
     pressure: REFERENCE_PRESSURE + systemsAt(systems, lon, lat).p, u: 0, v: 0, land: false,
   }, lat);
@@ -1501,6 +1869,7 @@ function updateCandidates(state: GameState, systems: PressureSystem[], dt: numbe
   for (const e of state.effects) {
     if (!formed.has(e.id)) continue;
     const storm = newStorm(state.nextStormId++, e.lon, e.lat, REFERENCE_PRESSURE + systemsAt(systems, e.lon, e.lat).p);
+    if (e.formation === 'typhoon') storm.formation = true;
     state.storms.push(storm);
     state.peakWind = Math.max(state.peakWind, storm.wind);
     addNews(state, { id: `formation-${storm.id}`, kind: 'formation', title: `Tropical Depression #${storm.id} forms`,
@@ -1539,7 +1908,7 @@ function stepRemnants(state: GameState, systems: PressureSystem[], dt: number): 
   if (!state.remnants.length) return;
   const day = seasonDay(state);
   state.remnants = state.remnants.filter(r => {
-    const flow = steeringAt(systems, r, r.wind, day);
+    const flow = steeringAt(systems, r, r.wind, day, currentWeather(state));
     const next = moveKm(r.lon, r.lat, (flow.u * dt * 3600) / 1000, (flow.v * dt * 3600) / 1000);
     r.lon = next.lon;
     r.lat = next.lat;
@@ -1579,7 +1948,7 @@ function stepStorm(state: GameState, storm: Storm, systems: PressureSystem[], mo
     const land = isLand(storm.lon, storm.lat);
     const w = recorded.wind + storm.windDelta;
     const envWith = environmentAt(state, systems, storm.lon, storm.lat, land);
-    const envBase = environmentAt(state, baseSystems(state.seed), storm.lon, storm.lat, land, false);
+    const envBase = environmentAt(state, state.initialWeather ? [] : baseSystems(state.seed), storm.lon, storm.lat, land, false);
     storm.windDelta += (intensityTendency(envWith, w, lf) - intensityTendency(envBase, w, lf)) * dt;
     storm.windDelta *= Math.exp(-dt / WIND_DELTA_RELAX_HOURS);
     storm.wind = Math.max(0, recorded.wind + storm.windDelta);
@@ -1607,7 +1976,7 @@ function stepStorm(state: GameState, storm: Storm, systems: PressureSystem[], mo
       title: `${label} ${storm.stage} makes landfall${near ? ` near ${near.name}` : ''}`,
       text: `Centre crossed the coast at ${fmt(storm.lon, storm.lat)} with ${storm.wind.toFixed(0)} m/s winds. Land friction and lost ocean heat weaken it.` });
   }
-  const gone = recorded ? '' : storm.wind < 10 ? 'weakened into a remnant low' : Math.abs(storm.lat) > 65 ? 'became a cold-core storm at high latitude' : '';
+  const gone = recorded ? '' : storm.wind < 10 ? 'weakened into a remnant low' : !storm.formation && Math.abs(storm.lat) > 65 ? 'became a cold-core storm at high latitude' : '';
   if (gone) {
     addNews(state, { id: `ended-${storm.id}`, kind: 'ended', title: `#${storm.id} dissipates`,
       text: `The storm ${gone} at ${fmt(storm.lon, storm.lat)} after ${storm.ageHours.toFixed(0)} hours. Peak ${storm.peakWind.toFixed(0)} m/s.` });
@@ -1668,15 +2037,34 @@ function mergeStorms(state: GameState, archive = true): Set<number> {
 /** Advance exactly one fixed step of STEP_HOURS. The world never ends. */
 export function stepGame(state: GameState): void {
   const dt = STEP_HOURS;
-  for (const e of state.effects) { e.ageHours += dt; e.remainingHours -= dt; }
+  for (const e of state.effects) {
+    const was = effectWeight(e);
+    e.ageHours += dt; e.remainingHours -= dt;
+    // As a pressure tool fades, transfer the lost part to the evolving atmosphere.
+    // Its marker can disappear without uncovering the downloaded pressure map again.
+    const retained = Math.max(0, was - Math.max(0, effectWeight(e)));
+    if (state.weather && retained > 0 && isPressureTool(e.type)) {
+      const weather = state.weather;
+      const sys = [{ ...effectSystem(e), amp: (THERMAL_PRESSURE[e.type] ?? EFFECT_STRENGTH[e.type]) * retained }];
+      forCellsNear(e.lon, e.lat, e.radiusKm / 2 * SYSTEM_CUTOFF_SIGMA, k => {
+        const cell = state.grid[k], change = systemsAt(sys, cell.lon, cell.lat);
+        const friction = centreLand(k) ? LAND_WIND_FACTOR : 1;
+        weather.pressure[k] = clamp(weather.pressure[k] + change.p, 800, 1100);
+        weather.u[k] = clamp(weather.u[k] + change.u * friction, -200, 200);
+        weather.v[k] = clamp(weather.v[k] + change.v * friction, -200, 200);
+      });
+    }
+  }
   state.effects = state.effects.filter(e => e.remainingHours > 1e-9);
+  if (state.weather) stepLiveWeather(state.weather, dt, { dayOfYear: dayOfYear(state), cells: state.grid });
   state.tick += 1;
   state.hours = state.tick * STEP_HOURS;
 
+  stepWeatherHazards(state, dt, point => state.grid[gridIndex(point.lon, point.lat)], item => addNews(state, item));
   let systems = allSystems(state);
   if (state.storms.length > 0) {
     const day = seasonDay(state);
-    const motions = state.storms.map(s => coupledSteering(systems, s, state.storms, day)); // same pre-move snapshot
+    const motions = state.storms.map(s => coupledSteering(systems, s, state.storms, day, currentWeather(state))); // same pre-move snapshot
     state.storms = state.storms.filter((s, k) => stepStorm(state, s, systems, motions[k], dt));
   }
   stepRemnants(state, systems, dt);
@@ -1694,9 +2082,34 @@ export function stepGame(state: GameState): void {
     if (c.land || c.population > 0) c.snowCm = Math.max(0, c.snowCm + c.snow * 0.5 * STEP_HOURS - c.snowCm * 0.02 * STEP_HOURS - (c.airTemperature > 0 ? STEP_HOURS * Math.min(4, c.airTemperature) : 0));
   }
   updateThunderstorms(state, dt);
+  syncDisasters(state, point => state.grid[gridIndex(point.lon, point.lat)]);
   applyDamage(state);
   for (const s of state.storms) recordStormSample(state, s, merged.has(s.id));
   if (state.tick % TICKS_PER_HOUR === 0 || merged.size) refreshForecasts(state, systems);
+  const trafficMotions = stormMotions(state, systems);
+  stepTraffic(state, dt, point => {
+    let disasterId: string | undefined, hazardStrength = 0;
+    for (const hazard of state.weatherHazards ?? []) {
+      const flow = hazardWind(hazard, point), strength = Math.hypot(flow.u, flow.v);
+      if (strength > hazardStrength) { hazardStrength = strength; disasterId = `weather-${hazard.id}`; }
+    }
+    // Away from vortices use the freshly computed wind field. Resolve narrow storm wind walls
+    // at the vehicle's actual position instead of repeatedly evaluating global weather in calm areas.
+    const nearVortex = [...state.storms, ...state.remnants].some(storm => distanceKm(point.lon, point.lat, storm.lon, storm.lat) < outerRadiusKm(storm) + 50);
+    if (!nearVortex) {
+      const cell = state.grid[gridIndex(point.lon, point.lat)];
+      return { speed: Math.hypot(cell.u, cell.v), disasterId };
+    }
+    const wind = totalWind(state, point.lon, point.lat);
+    let source: Storm | undefined, strength = 0;
+    state.storms.forEach((storm, i) => {
+      const vortex = stormVortexAt(storm, trafficMotions[i], point.lon, point.lat);
+      const speed = Math.hypot(vortex.u, vortex.v);
+      if (speed > strength) { strength = speed; source = storm; }
+    });
+    return { speed: Math.hypot(wind.u, wind.v), ...(hazardStrength > strength ? { disasterId } : { stormId: source?.id }) };
+  });
+  recordDisasterHistory(state);
 }
 
 /** Coupled 72 h paths, sampled every 6 h. Freeze effects/intensity, advance all centres
@@ -1710,11 +2123,11 @@ function refreshForecasts(state: GameState, systems = allSystems(state)): void {
   const forecast: GameState = { ...state, news: [], storms: natural.map(s => ({ ...s })) };
   const day = seasonDay(state);
   for (let tick = 1; tick <= FORECAST_HOURS * TICKS_PER_HOUR; tick++) {
-    const motions = forecast.storms.map(s => coupledSteering(systems, s, forecast.storms, day));
+    const motions = forecast.storms.map(s => coupledSteering(systems, s, forecast.storms, day, currentWeather(state)));
     forecast.storms = forecast.storms.filter((s, i) => {
       const p = moveKm(s.lon, s.lat, motions[i].u * 3.6 * STEP_HOURS, motions[i].v * 3.6 * STEP_HOURS);
       s.lon = p.lon; s.lat = p.lat; s.ageHours += STEP_HOURS;
-      return Math.abs(s.lat) <= 65;
+      return !!s.formation || Math.abs(s.lat) <= 65;
     });
     // Record an absorbed path's last position even when merger falls between samples.
     const before = forecast.storms.slice();
@@ -1745,7 +2158,7 @@ export function validateActions(actions: unknown, untilTick: number = REPLAY_MAX
   for (let k = 0; k < actions.length; k++) {
     const a: unknown = actions[k];
     if (typeof a !== 'object' || a === null) return { ok: false, reason: `Action ${k + 1} is not an object.` };
-    const { tick, type, lon, lat, on, typhoonId, key, value, dayOfYear: day } = a as Record<string, unknown>;
+    const { tick, type, lon, lat, on, typhoonId, key, value, dayOfYear: day, formation } = a as Record<string, unknown>;
     if (typeof tick !== 'number' || !Number.isInteger(tick) || tick < 0) return { ok: false, reason: `Action ${k + 1} has an invalid tick.` };
     if (tick > untilTick) return { ok: false, reason: `Action ${k + 1} is after the replay end tick ${untilTick}.` };
     if (tick < lastTick) return { ok: false, reason: `Action ${k + 1} is out of time order.` };
@@ -1766,7 +2179,8 @@ export function validateActions(actions: unknown, untilTick: number = REPLAY_MAX
     } else {
       if (typeof type !== 'string' || !TOOL_TYPES.includes(type as ToolType)) return { ok: false, reason: `Action ${k + 1} has an unknown tool.` };
       if (typeof lon !== 'number' || typeof lat !== 'number' || !inBounds(lon, lat)) return { ok: false, reason: `Action ${k + 1} has an invalid position.` };
-      clean.push({ tick, type: type as ToolType, lon, lat });
+      if (formation !== undefined && !['typhoon', 'blizzard', 'tornado'].includes(formation as string) && !isWeatherHazardKind(formation)) return { ok: false, reason: `Action ${k + 1} has an invalid formation tag.` };
+      clean.push({ tick, type: type as ToolType, lon, lat, ...(formation ? { formation: formation as FormationKind } : {}) });
     }
   }
   return { ok: true, actions: clean };
@@ -1778,15 +2192,19 @@ export function validateActions(actions: unknown, untilTick: number = REPLAY_MAX
  * REPLAY_MAX_TICKS steps and REPLAY_MAX_ACTIONS actions. Historic reanalysis data must already be
  * registered (setHistoricEnvironment) for every typhoon the log loads.
  */
-export function replayGame(seed: unknown, actions: unknown, untilTick: unknown, startDayOfYear: unknown = DEFAULT_START_DOY): { ok: true; state: GameState } | { ok: false; reason: string } {
+export function replayGame(seed: unknown, actions: unknown, untilTick: unknown, startDayOfYear: unknown = DEFAULT_START_DOY, trafficDispatches: unknown = [], initialWeather?: LiveWeatherSnapshot): { ok: true; state: GameState } | { ok: false; reason: string } {
   if (!isValidDayOfYear(startDayOfYear)) return { ok: false, reason: 'Replay start day must be a number from 0 to 366.' };
   if (!isValidSeed(seed)) return { ok: false, reason: 'Replay seed must be an integer between 0 and 4294967295.' };
   if (!isValidUntilTick(untilTick)) return { ok: false, reason: `Replay end tick must be an integer between 0 and ${REPLAY_MAX_TICKS} (${REPLAY_MAX_HOURS} hours).` };
+  if (initialWeather !== undefined && !isLiveWeatherSnapshot(initialWeather)) return { ok: false, reason: 'Replay starting weather is invalid.' };
   const checked = validateActions(actions, untilTick);
   if (!checked.ok) return checked;
-  const state = createGame(seed, startDayOfYear);
+  const traffic = validateTrafficDispatches(trafficDispatches, untilTick);
+  if (!traffic.ok) return traffic;
+  const state = createGame(seed, startDayOfYear, initialWeather);
   const list = checked.actions;
   let k = 0;
+  let dispatchIndex = 0;
   const applyDue = (): string | null => {
     while (k < list.length && list[k].tick === state.tick) {
       const a = list[k];
@@ -1794,9 +2212,13 @@ export function replayGame(seed: unknown, actions: unknown, untilTick: unknown, 
         : a.type === 'climate' ? setClimate(state, a.key, a.value)
         : a.type === 'season' ? setSeason(state, a.dayOfYear)
         : a.type === 'historic' ? loadHistoric(state, a.typhoonId)
-        : placeTool(state, a.type, a.lon, a.lat);
+        : placeTool(state, a.type, a.lon, a.lat, a.formation);
       if (!r.ok) return `Action ${k + 1} was rejected at hour ${state.hours}: ${r.reason}`;
       k++;
+    }
+    while (dispatchIndex < traffic.dispatches.length && traffic.dispatches[dispatchIndex].tick === state.tick) {
+      const result = applyTrafficDispatch(state, traffic.dispatches[dispatchIndex++]);
+      if (!result.ok) return result.reason ?? 'Invalid traffic dispatch.';
     }
     return null;
   };

@@ -1,6 +1,7 @@
 /** First-visit tutorial: a step card that explains typhoon formation, has the player build one, then try a defence. */
 import { setText } from '../i18n';
 import { distanceKm } from '../simulation/geo';
+import { MAX_TIME_SPEED, TIME_SPEEDS, timeSpeedLabel } from '../time';
 import type { GameState, GeoPoint, ToolType } from '../types';
 import { el } from './dom';
 
@@ -30,7 +31,8 @@ export interface TutorialStep {
 
 const placed = (type: ToolType) => (state: GameState): boolean =>
   state.effects.some(e => e.type === type && distanceKm(e.lon, e.lat, TUTORIAL_SPOT.lon, TUTORIAL_SPOT.lat) <= TUTORIAL_RADIUS_KM);
-const tool = (type: string) => `[data-testid="tool-${type}"]`;
+const paired: Record<string, string> = { cool: 'warm', dry: 'moisture', high: 'low', 'cold-air': 'warm-air', downdraft: 'updraft', 'high-shear': 'low-shear', 'stable-air': 'unstable-air' };
+const tool = (type: string) => `[data-testid="tool-${paired[type] ?? type}"]`;
 
 export const TUTORIAL_STEPS: readonly TutorialStep[] = [
   { id: 'welcome', title: 'Welcome to Typhoon Lab', body: 'You place weather conditions on the map and watch what happens. Let\'s make a typhoon.' },
@@ -39,13 +41,13 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     body: 'A typhoon needs warm sea (above about 26.5 °C), moist air, and a low-pressure disturbance. It must also be at least 5° from the equator, so the Earth\'s spin can make it turn. Weak wind shear helps.',
     highlight: [tool('warm'), tool('moisture'), tool('low')], palette: true,
   },
-  { id: 'warm', title: 'Add warm water', body: 'Drag Warm water onto the marked spot.', highlight: [tool('warm')], marker: TUTORIAL_SPOT, palette: true, done: placed('warm') },
-  { id: 'moisture', title: 'Add moisture', body: 'Now drag Moisture onto the same spot.', highlight: [tool('moisture')], marker: TUTORIAL_SPOT, palette: true, done: placed('moisture') },
-  { id: 'low', title: 'Add low pressure', body: 'Last, drag Low pressure onto the same spot.', highlight: [tool('low')], marker: TUTORIAL_SPOT, palette: true, done: placed('low') },
+  { id: 'warm', title: 'Add warm water', body: 'The seven condition buttons each have two settings. The large icon is active; the small faded icon shows the other setting. Click or tap to select, then press again to switch. Choose Warm water (+), then drag it onto the marked spot. Q switches this pair.', highlight: [tool('warm')], marker: TUTORIAL_SPOT, palette: true, done: placed('warm') },
+  { id: 'moisture', title: 'Add moisture', body: 'On the Moisture / Dry air button, select Moisture and drag it onto the same spot. W switches this pair.', highlight: [tool('moisture')], marker: TUTORIAL_SPOT, palette: true, done: placed('moisture') },
+  { id: 'low', title: 'Add low pressure', body: 'On the Low pressure / High pressure button, select Low pressure and drag it onto the same spot. E switches this pair.', highlight: [tool('low')], marker: TUTORIAL_SPOT, palette: true, done: placed('low') },
   {
     id: 'play', title: 'Let time run',
-    body: 'Set the speed to 12×, and press Play if time is paused. A depression forms when the conditions overlap for a while.',
-    highlight: ['[data-testid="play-toggle"]', '[data-testid="speed-12"]'], marker: TUTORIAL_SPOT,
+    body: `Use the speed arrows to select ${timeSpeedLabel(MAX_TIME_SPEED)} (or press ${TIME_SPEEDS.length}), then press Play if time is paused. A depression forms after the conditions overlap for a while.`,
+    highlight: ['[data-testid="play-toggle"]', '[data-testid="speed-next"]'], marker: TUTORIAL_SPOT,
     done: state => state.storms.length > 0,
     stuck: { hours: STUCK_HOURS, text: 'Nothing yet? Make sure all three conditions sit on the marked spot. Place them again if they faded.' },
   },
@@ -60,7 +62,7 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
   },
   {
     id: 'weaken', title: 'Weaken the storm',
-    body: 'Cool water cuts the ocean heat supply. Dry air starves the rain bands. High pressure pushes air down and steers the storm. Strong shear tears the tower apart. Cold air and downdraft also suppress convection. Drop Cool water in front of the storm.',
+    body: 'Cool water cuts off the ocean heat supply. Dry air and Strong shear also weaken storms; High pressure can steer them. On the Warm water / Cool water button, click or tap until Cool water is the large icon, or press Q to switch. Drag it in front of the storm.',
     highlight: [tool('cool'), tool('dry'), tool('high'), tool('high-shear')], palette: true,
     done: state => state.effects.some(e => WEAKENING.includes(e.type)),
   },

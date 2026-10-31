@@ -1,5 +1,7 @@
 import { LOCALES, getLanguage, setLanguage, localizeTree, localizedText, setText, t, typhoonName } from '../i18n';
 import { CITIES, SCENARIO } from '../data/world';
+import { WEATHER_HAZARDS, isWeatherHazardKind } from '../data/weather-hazards';
+import { TRAFFIC_DEPARTURES } from '../data/traffic';
 import { isLake } from '../data/lakes';
 import { TYPHOONS, typhoonById } from '../data/typhoons';
 import { layerLegend, type LayerLegend } from '../render/fields';
@@ -10,24 +12,29 @@ import { wrapLon } from '../render/view';
 import { SEAS, seaName } from '../data/seas';
 import { GENESIS_HOURS, GENESIS_THRESHOLD, TICKS_PER_HOUR, TOOLS, dayOfYear } from '../simulation/engine';
 import { distanceKm } from '../simulation/geo';
+import { TRAFFIC_SPEED } from '../simulation/traffic';
+import { trafficDistance } from '../simulation/traffic-routing';
 import { DEFAULT_MAP_OVERLAYS } from '../types';
 import type {
-  ActionRecord, City, ClimateKey, GameState, GeoPoint, MapOverlays, NewsItem, PlacementResult, Storm, StormRecord, ToolDefinition, ToolType, WorkerRequest, WorkerResponse,
+  ActionRecord, City, ClimateKey, DisasterRecord, GameState, GeoPoint, MapOverlays, NewsItem, PlacementResult, Storm, StormRecord, ToolDefinition, ToolType, TrafficVehicle, WorkerRequest, WorkerResponse,
 } from '../types';
 import { stageChanges, stormGradeLabel, stormOutcome } from '../storm-info';
-import { estimateCityDamage, stormLossUsd } from '../simulation/damage-news';
+import { estimateCityDamage, stormTotalLossUsd } from '../simulation/damage-news';
+import { disasterDamage, disasterName } from '../simulation/disasters';
 import { newsArt } from './art';
-import { el, svgEl, fmtClock, fmtClockDate, fmtClockShort, fmtCoord, fmtInt, fmtMoney, fmtPop, fmtUtc, rovingKeys } from './dom';
-import { SEASONS, fmtMonthDay, parseStartParam, realDayOfYear, seasonIdOf } from './calendar';
+import { DISASTER_HELP, DISASTER_HELP_INTRO, DISASTER_HELP_TIMING } from './disaster-help';
+import { el, svgEl, fmtClock, fmtClockLive, fmtClockShort, fmtCoord, fmtInt, fmtMoney, fmtPop, fmtUtc, rovingKeys } from './dom';
+import { SEASONS, fmtMonthDay, parseStartParam, realTimeOfYear, seasonIdOf } from './calendar';
+import { DEFAULT_TIME_SPEED, TIME_SPEEDS, adjacentTimeSpeed, timeSpeedLabel, type TimeSpeed } from '../time';
 import { attachMapInput } from './input';
 import { attachPalette } from './palette';
 import { attachTooltips } from './tooltip';
 import { createTutorial, shouldAutoStart } from './tutorial';
 import { initialiseLocation } from './initial-location';
-import { CLIMATE_ROWS, CYCLONE_PATH, FORMATION_TOOLS, PALETTE_TABS, FORMATION_KEYS, SPEEDS, TOOL_KEYS, footerHtml, shellHtml, terrainIconSvg, toolIconSvg, type FormationToolId, type Terrain } from './shell';
+import { CLIMATE_ROWS, CONDITION_GROUPS, CYCLONE_PATH, FORMATION_TOOLS, PALETTE_TABS, FORMATION_KEYS, TOOL_KEYS, footerHtml, shellHtml, terrainIconSvg, toolIconSvg, type FormationToolId, type Terrain } from './shell';
 import { MAX_REPLAY_BYTES, buildReplay, downloadJson, parseReplay, parseSeedParam, randomSeed, replayExportProblem } from './storage';
-import { deleteMyData, queuedCount, flushQueue, resultFromRecord, setNickname, storedNickname, defaultNickname, subscribe as subscribeLeaderboard, submit as submitResult, type LbView, type LbWindow } from '../net/leaderboard';
-import { entryFromStorm, localRankingStore, rankBy, upsert, type RankingEntry, type RankingMetric } from './rankings';
+import { deleteMyData, queuedCount, flushQueue, resultFromRecord, resultFromDisaster, setNickname, storedNickname, defaultNickname, subscribe as subscribeLeaderboard, submit as submitResult, type LbView, type LbWindow } from '../net/leaderboard';
+import { entryFromStorm, entryFromDisaster, localRankingStore, rankBy, upsert, type RankingEntry, type RankingMetric } from './rankings';
 
 /** Ended storms listed before the "Show all" link appears. */
 const ARCHIVE_VISIBLE = 8;
@@ -37,7 +44,7 @@ type ToastKind = 'info' | 'ok' | 'error';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const clamp = (n: number, lo: number, hi: number) => (n < lo ? lo : n > hi ? hi : n);
-const END_REASON_LABEL: Record<RankingEntry['endReason'], string> = { active: 'Active', dissipated: 'Dissipated', extratropical: 'Extratropical transition', merged: 'Merged' };
+const END_REASON_LABEL: Record<RankingEntry['endReason'], string> = { active: 'Active', ended: 'Ended', dissipated: 'Dissipated', extratropical: 'Extratropical transition', merged: 'Merged' };
 const TOOL_BY_TYPE = new Map<ToolType, ToolDefinition>(TOOLS.map(t => [t.type, t]));
 /** Anything the palette can arm: a weather condition, or a formation probe that opens the recipe popover. */
 type ArmedTool = ToolType | FormationToolId;
@@ -48,7 +55,7 @@ const LEGEND_KEY = 'typhoon-lab-legend';
 function storedPaletteTab(): string {
   try { const v = localStorage.getItem(PALETTE_TAB_KEY); return PALETTE_TABS.some(t => t.id === v) ? v! : PALETTE_TABS[0].id; } catch { return PALETTE_TABS[0].id; }
 }
-const actionsSig = (a: ActionRecord[]) => JSON.stringify(a.map(x => x.type === 'genesis' ? [x.tick, x.type, x.on] : x.type === 'historic' ? [x.tick, x.type, x.typhoonId] : x.type === 'climate' ? [x.tick, x.type, x.key, x.value] : x.type === 'season' ? [x.tick, x.type, x.dayOfYear] : [x.tick, x.type, x.lon, x.lat]));
+const actionsSig = (a: ActionRecord[]) => JSON.stringify(a.map(x => x.type === 'genesis' ? [x.tick, x.type, x.on] : x.type === 'historic' ? [x.tick, x.type, x.typhoonId] : x.type === 'climate' ? [x.tick, x.type, x.key, x.value] : x.type === 'season' ? [x.tick, x.type, x.dayOfYear] : [x.tick, x.type, x.lon, x.lat, ...(x.formation ? [x.formation] : [])]));
 /** UI-only setting, remembered like the language. */
 const PATHS_KEY = 'typhoon-lab-recorded-paths';
 function storedShowPaths(): boolean {
@@ -92,6 +99,11 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   };
 
   const stage = ref('stage');
+  const trafficPopup = ref('trafficPopup');
+  let selectedTrafficId: string | null = null;
+  let trafficPopupAt = 0;
+  const closeTrafficPopup = () => { selectedTrafficId = null; trafficPopup.hidden = true; };
+  ref('trafficClose').addEventListener('click', () => { closeTrafficPopup(); stage.focus({ preventScroll: true }); });
   const veil = ref('veil');
   const sidebar = ref('sidebar');
   const sidebarBesideMap = window.matchMedia('(min-width: 48rem)');
@@ -104,7 +116,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   const toolButtons = new Map<ArmedTool, HTMLButtonElement>();
   root.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach(b => toolButtons.set(b.dataset.tool as ArmedTool, b));
   const overlayButtons = [...root.querySelectorAll<HTMLButtonElement>('[data-overlay]')];
-  const speedButtons = [...root.querySelectorAll<HTMLButtonElement>('[data-speed]')];
+  const speedButtons = [...root.querySelectorAll<HTMLButtonElement>('[data-speed-action]')];
   const historicSelect = ref<HTMLSelectElement>('historicSelect');
   /** Typhoon names are data, so options are labelled here instead of through the translation tables. */
   function labelHistoricOptions(): void {
@@ -139,15 +151,18 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     drag: null as { tool: ArmedTool; point: GeoPoint | null } | null,
     overlays: { ...DEFAULT_MAP_OVERLAYS },
     showRecordedPaths: storedShowPaths(),
-    speed: 1 as number,
+    speed: DEFAULT_TIME_SPEED as TimeSpeed,
+    clockHours: 0,
     playing: true,
     selectedStormId: null as number | null,
+    selectedDisasterId: null as string | null,
     selectedCityId: null as string | null,
     expect: 'normal' as Expect,
     expectBaseTick: 0,
     expectUntil: 0,
     expectSeed: 0,
     expectSig: '',
+    expectTrafficSig: '',
     newsKey: '',
     newsSeen: 0,
     tab: 'storms',
@@ -169,19 +184,24 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   let rankings = rankingStore.load();
   /** Ranking keys of this world's ended storms already written to the store, by storm id. */
   const rankedKeys = new Map<number, string>();
+  const rankedDisasters = new Map<string, string>();
   let expectTimer = 0;
   let toastTimer = 0;
   /** Phones show the starting hint for a few seconds only; this stays true once it has timed out. */
   let hintDismissed = false;
   let statsAt = 0;
+  let trafficFocusAt = 0;
+  let trafficFocusKey = '';
 
   // ---- renderer ----------------------------------------------------------------------------
   let renderer: MapRenderer | null = null;
   const params = new URLSearchParams(location.search);
   const urlSeed = parseSeedParam(location.search);
   const urlStart = parseStartParam(location.search);
-  /** A new world starts on the real date (UTC), or on the `?start=` / `?doy=` date that tests pin. */
-  const newStartDay = () => urlStart ?? realDayOfYear();
+  /** A new world starts at local wall-clock date and time; URL-pinned dates start at midnight. */
+  const newStartDay = () => urlStart ?? realTimeOfYear();
+  // A pinned scenario date stays reproducible; weather=live can explicitly override it.
+  const useLiveWeather = params.get('weather') === 'live' || (params.get('weather') !== 'base' && urlStart === null);
   const canvasNote = 'Canvas 2D map (WebGL unavailable). Fewer wind particles; the simulation is unaffected. Globe view needs WebGL; showing the flat map.';
   const queryMode = params.get('map');
   const requestedMode: 'flat' | 'globe' = queryMode === 'flat' || queryMode === 'globe' ? queryMode : storedMapMode() ?? 'globe';
@@ -207,6 +227,28 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
 
   // ---- helpers -----------------------------------------------------------------------------
   const post = (msg: WorkerRequest) => worker.postMessage(msg);
+
+  function syncTrafficView(now: number): void {
+    if (!renderer || renderer.isInteracting || !ui.latest || !ui.playing || ui.expect !== 'normal' || now - trafficFocusAt < 750) return;
+    trafficFocusAt = now;
+    const view = renderer.view;
+    const projected = new Float64Array(3);
+    const visible = (point: GeoPoint, padding = 0) => {
+      view.projectZ(point.lon, point.lat, projected);
+      return projected[2] > 0.05 && projected[0] >= -padding && projected[0] <= view.width + padding
+        && projected[1] >= -padding && projected[1] <= view.height + padding;
+    };
+    // Prefer links whose destination is also on screen, to keep return services nearby.
+    const departures = TRAFFIC_DEPARTURES.filter(departure => visible(departure.start))
+      .map(departure => ({ id: departure.id, local: visible(departure.end) }))
+      .sort((a, b) => Number(b.local) - Number(a.local)).map(departure => departure.id);
+    const visibleVehicles = ui.latest.traffic.vehicles.filter(vehicle => vehicle.status !== 'inactive'
+      && vehicle.status !== 'crashed' && vehicle.status !== 'sunk' && visible(vehicle, 40)).map(vehicle => vehicle.id);
+    const key = JSON.stringify([ui.latest.seed, ui.latest.tick, departures, visibleVehicles]);
+    if (key === trafficFocusKey) return;
+    trafficFocusKey = key;
+    post({ type: 'traffic-view', tick: ui.latest.tick, departures, visibleVehicles });
+  }
 
   function toast(text: string, kind: ToastKind = 'info', ms = 5000): void {
     const t = ref('status');
@@ -266,7 +308,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       rainTip.setAttribute('data-tip', sample.snowCm >= 1 ? `${note} · ${sample.snowCm.toFixed(0)} cm on ground` : note);
     }
     setLegendValue('pressure', `${sample.pressure.toFixed(0)} hPa`, sample.pressure);
-    setLegendValue('temperature', sample.land ? `${sample.airTemperature.toFixed(1)} °C` : `${sample.temperature.toFixed(1)} / ${sample.airTemperature.toFixed(1)} °C`, sample.land ? NaN : sample.temperature);
+    setLegendValue('temperature', sample.land ? '—' : `${sample.temperature.toFixed(1)} °C`, sample.land ? NaN : sample.temperature);
+    setLegendValue('airTemperature', `${sample.airTemperature.toFixed(1)} °C`, sample.airTemperature);
     setLegendValue('population', fmtPop(sample.population), sample.population);
   }
 
@@ -282,8 +325,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   function refreshOverlay(): void {
     if (!renderer) return;
     const type = ui.drag?.tool ?? ui.tool;
-    // A formation probe previews the footprint of the low it would seed.
-    const def = type ? TOOL_BY_TYPE.get(isFormation(type) ? 'low' : type) ?? null : null;
+    const previewType = type && isFormation(type) ? FORMATION_BY_ID.get(type)!.preview : type;
+    const def = previewType ? TOOL_BY_TYPE.get(previewType) ?? null : null;
     const overlay: MapOverlay = {
       tool: def,
       target: ui.drag ? ui.drag.point : ui.tool ? ui.hover ?? ui.cursor : null,
@@ -322,6 +365,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
 
   function armTool(type: ArmedTool | null): void {
     ui.tool = ui.tool === type ? null : type;
+    if (ui.tool) closeTrafficPopup();
     ui.cursor = null;
     closeSpot();
     if (isFormation(ui.tool)) toast(`${FORMATION_BY_ID.get(ui.tool)!.name} armed. Tap or click a spot to see what it needs; Esc puts it away.`, 'info', 3500);
@@ -330,20 +374,56 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     refreshOverlay();
   }
 
+  function armPaletteTool(type: ArmedTool): void {
+    const pair = CONDITION_GROUPS.find(([first]) => first === type);
+    armTool(pair ? (ui.tool === pair[0] ? pair[1] : pair[0]) : type);
+  }
+
+  function draggedVariant(type: ArmedTool): ArmedTool {
+    const pair = CONDITION_GROUPS.find(([first]) => first === type);
+    return pair && (ui.tool === pair[0] || ui.tool === pair[1]) ? ui.tool : type;
+  }
+
   function renderTools(): void {
     for (const [type, b] of toolButtons) {
-      const on = ui.tool === type;
+      const pair = CONDITION_GROUPS.find(([first]) => first === type);
+      const on = pair ? ui.tool === pair[0] || ui.tool === pair[1] : ui.tool === type;
+      const variant = on ? ui.tool! : type;
       b.setAttribute('aria-pressed', String(on));
       b.classList.toggle('is-armed', on);
+      if (pair && b.dataset.variant !== variant) {
+        const def = TOOL_BY_TYPE.get(variant as ToolType)!;
+        const alternate = variant === pair[0] ? pair[1] : pair[0];
+        b.dataset.variant = variant;
+        b.dataset.alternate = alternate;
+        b.style.setProperty('--tool-color', `var(--fx-${variant})`);
+        b.style.setProperty('--tool-alt-color', `var(--fx-${alternate})`);
+        b.querySelector('.tool__icon:not(.tool__icon--secondary)')!.outerHTML = toolIconSvg(variant as ToolType);
+        b.querySelector('.tool__icon--secondary')!.outerHTML = toolIconSvg(alternate, 'tool__icon tool__icon--secondary');
+        setText(b.querySelector('.tool__name')!, def.name);
+        b.setAttribute('aria-label', `${def.name}: drag onto the map, or press to arm it`);
+        b.dataset.tipTitle = def.name;
+        b.dataset.tip = def.description;
+        localizeTree(b);
+      }
     }
     stage.dataset.armed = ui.tool ?? '';
   }
 
   // ---- clock and controls ------------------------------------------------------------------
+  const clockOffset = (s: GameState) => (s.startDayOfYear % 1) * 24;
+  function renderClockText(): void {
+    const s = ui.latest;
+    const hours = s ? ui.clockHours + clockOffset(s) : 0;
+    const date = s ? fmtMonthDay(s.startDayOfYear + ui.clockHours / 24) : '';
+    setText(ref('clockText'), s ? `${fmtClockLive(hours)} · ${date}` : fmtClockLive(0));
+    ref('clockText').dataset.short = fmtClockShort(hours);
+    renderer?.setSimulationClock(ui.clockHours, ui.speed, ui.playing && ui.expect === 'normal');
+  }
+
   function renderClock(): void {
     const s = ui.latest;
-    setText(ref('clockText'), s ? fmtClockDate(s.hours, fmtMonthDay(dayOfYear(s))) : fmtClock(0));
-    ref('clockText').dataset.short = fmtClockShort(s?.hours ?? 0);
+    renderClockText();
     const play = ref<HTMLButtonElement>('play');
     const label = ui.playing ? 'Pause' : 'Play';
     play.dataset.state = ui.playing ? 'playing' : 'paused';
@@ -356,11 +436,9 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       play.dataset.label = label;
       play.replaceChildren(playIcon(ui.playing), localizedText(label));
     }
-    for (const b of speedButtons) {
-      const on = Number(b.dataset.speed) === ui.speed;
-      b.setAttribute('aria-checked', String(on));
-      b.tabIndex = on ? 0 : -1;
-    }
+    setText(ref('speedValue'), timeSpeedLabel(ui.speed));
+    for (const b of speedButtons) b.disabled = !s;
+    ref<HTMLButtonElement>('speedReset').disabled = !s || ui.speed === DEFAULT_TIME_SPEED;
   }
 
   function playIcon(playing: boolean): SVGSVGElement {
@@ -383,27 +461,11 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     renderClock();
   }
 
-  function setSpeed(speed: number): void {
+  function setSpeed(speed: TimeSpeed): void {
+    if (speed === ui.speed) return;
     ui.speed = speed;
     post({ type: 'speed', speed });
     renderClock();
-  }
-
-  function resetWorld(): void {
-    ui.playing = true;
-    ui.speed = 1;
-    ui.tool = null;
-    ui.cursor = null;
-    closeSpot();
-    ui.expectBaseTick = ui.latest?.tick ?? 0;
-    ui.expectSeed = urlSeed ?? randomSeed();
-    arm('reset');
-    post({ type: 'reset', seed: ui.expectSeed, startDayOfYear: newStartDay() });
-    post({ type: 'speed', speed: 1 });
-    toast('World reset. It is empty again.', 'info', 3000);
-    renderTools();
-    renderClock();
-    refreshOverlay();
   }
 
   function renderMapLegend(): void {
@@ -422,21 +484,44 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         ticks: [{ label: '0', pos: 0 }, { label: '50', pos: 0.5 }, { label: '100', pos: 1 }],
         note: ui.overlays.wind ? 'Higher humidity makes wind streaks brighter.' : 'Turn on Wind to see humidity colours.',
       } : layerLegend(id);
-      if (id === 'temperature') legend.note = 'Sea-surface / air temperature; over land, air only. Water above about 26.5 °C helps development.';
       const row = el('div', { class: 'legend__item', testid: `legend-${id}` });
       const value = el('span', { class: 'legend__value', 'data-legend-value': true, text: legend.unit });
       const info = id === 'humidity' || id === 'rain' || id === 'pressure' || id === 'temperature'
         ? el('button', { type: 'button', class: 'legend__info', 'aria-label': legend.title, 'data-tip-title': legend.title, 'data-tip': legend.note, text: '?' })
         : null;
       if (id === 'rain') rainTip = info;
-      row.append(el('p', { class: 'legend__title' }, [
+      const title = el('p', { class: 'legend__title' }, [
         id === 'pressure' ? el('span', { class: 'legend__line', 'aria-hidden': 'true' }) : null,
-        el('span', { class: 'legend__name' }, [localizedText(legend.title)]), info, value,
-      ]));
+        el('span', { class: 'legend__name' }, [localizedText(legend.title)]), info, id === 'temperature' ? null : value,
+      ]);
+      row.append(title);
+      let airTick: HTMLElement | null = null;
+      let airValue: HTMLElement | null = null;
+      if (id === 'temperature') {
+        airValue = el('span', { class: 'legend__value', 'data-legend-value': true, testid: 'legend-temperature-air', text: '°C' });
+        value.dataset.testid = 'legend-temperature-sea';
+        const reading = (kind: 'air' | 'sea', label: string, number: HTMLElement) => {
+          const icon = svgEl('svg', { class: 'legend__temperature-icon', viewBox: '0 0 24 24', role: 'img', 'aria-label': label, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+            svgEl('path', { d: kind === 'sea'
+              ? 'M2 9c2-2 3.5 2 5.5 0s3.5 2 5.5 0 3.5 2 5.5 0 2.5 1 3.5 0M2 16c2-2 3.5 2 5.5 0s3.5 2 5.5 0 3.5 2 5.5 0 2.5 1 3.5 0'
+              : 'M10 14V5a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0ZM12 9v9' }),
+          ]);
+          return el('span', { class: 'legend__temperature-reading', 'data-temperature-kind': kind, title: label }, [icon, number]);
+        };
+        title.classList.add('legend__title--temperature');
+        title.append(el('span', { class: 'legend__temperature-values' }, [
+          reading('air', 'Surface air temperature', airValue), reading('sea', 'Sea-surface temperature', value),
+        ]));
+      }
       let tick: HTMLElement | null = null;
       if (id !== 'humidity' || ui.overlays.wind) {
         tick = el('span', { class: 'legend__tick', hidden: true, 'aria-hidden': 'true' });
         const bar = el('div', { class: 'legend__bar' }, [tick]);
+        if (id === 'temperature') {
+          tick.classList.add('legend__tick--sea');
+          airTick = el('span', { class: 'legend__tick legend__tick--air', hidden: true, 'aria-hidden': 'true' });
+          bar.append(airTick);
+        }
         bar.style.background = legend.gradient;
         const ticks = el('div', { class: 'legend__ticks' }, legend.ticks.map(t => {
           const label = el('span', { text: t.label, 'data-edge': t.pos === 0 ? 'start' : t.pos === 1 ? 'end' : 'mid' });
@@ -446,6 +531,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         row.append(bar, ticks);
       }
       legendLive.set(id, { value, tick, ticks: legend.ticks });
+      if (airValue) legendLive.set('airTemperature', { value: airValue, tick: airTick, ticks: legend.ticks });
       rows.push(row);
     }
     ref('legend').replaceChildren(...rows);
@@ -465,7 +551,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     sidebar.hidden = !open;
     app.dataset.sidebar = open ? 'open' : 'closed';
     ref('sidebarToggle').setAttribute('aria-expanded', String(open));
-    setText(ref('sidebarToggleLabel'), open ? 'Hide' : 'Storms');
+    setText(ref('sidebarToggleLabel'), open ? 'Hide' : 'Disasters');
     if (open) renderSidebar();
     refreshOverlay();
     syncLeaderboard();
@@ -486,6 +572,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
 
   function selectStorm(id: number | null, center = false): void {
     ui.selectedStormId = id;
+    ui.selectedDisasterId = null;
     const s = findStorm(id);
     if (s && center) {
       if ('endReason' in s) {
@@ -498,17 +585,88 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   }
 
   const stormRows = new Map<number, HTMLLIElement>();
+  const disasterRows = new Map<string, HTMLLIElement>();
+  const findDisaster = (id: string | null) => ui.state?.disasters?.find(record => record.id === id);
+  function selectDisaster(id: string | null, center = false): void {
+    ui.selectedDisasterId = id;
+    ui.selectedStormId = null;
+    const record = findDisaster(id);
+    if (record && center) renderer?.view.centerOn(record.lon, record.lat);
+    if (id) activateTab('storms');
+    else renderSidebar();
+    refreshOverlay();
+  }
+  function disasterCondition(record: Pick<DisasterRecord, 'kind' | 'airTemperature' | 'humidity' | 'rain' | 'snowCm' | 'wind'>): string {
+    if (record.kind === 'heatwave' || record.kind === 'coldwave') return `${t('Air temperature')} ${record.airTemperature.toFixed(1)} °C`;
+    if (record.kind === 'drought' || record.kind === 'dust') return `${t('Humidity')} ${(record.humidity * 100).toFixed(0)}%`;
+    if (record.kind === 'downpour' || record.kind === 'hail') return `${t('Rainfall')} ${record.rain.toFixed(1)} mm/h`;
+    if (record.kind === 'blizzard') return `${t('Snow depth')} ${record.snowCm.toFixed(0)} cm`;
+    return `${t('Max wind')} ${record.wind.toFixed(0)} m/s`;
+  }
+  function renderDisasterRows(state: GameState): void {
+    const records = state.disasters ?? [];
+    const seen = new Set<string>();
+    for (const record of records) {
+      seen.add(record.id);
+      const archived = record.endedHour !== undefined;
+      const list = ref(archived ? 'stormArchive' : 'stormList');
+      let li = disasterRows.get(record.id);
+      if (!li) {
+        const icon = isWeatherHazardKind(record.kind) ? WEATHER_HAZARDS[record.kind].iconPath
+          : record.kind === 'blizzard' ? WEATHER_HAZARDS.coldwave.iconPath : record.kind === 'tornado' ? 'M2 4h20M4 8h16M6 12h12M8 16h8M10 20h4' : WEATHER_HAZARDS.downpour.iconPath;
+        li = el('li', {}, [el('button', { type: 'button', class: 'storm-row disaster-row', 'data-disaster-id': record.id, 'aria-pressed': 'false' }, [
+          el('span', { class: 'storm-row__name' }, [
+            svgEl('svg', { class: 'storm-row__icon', viewBox: '0 0 24 24', 'aria-hidden': 'true', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round' }, [svgEl('path', { d: icon })]),
+            el('span', { class: 'storm-row__title' }),
+          ]),
+          el('span', { class: 'storm-row__wind', 'data-disaster-reading': '' }),
+          el('span', { class: 'storm-row__pos', 'data-disaster-position': '' }),
+          el('span', { class: 'storm-row__conditions' }, [
+            ...['pressure', 'radius', 'age', 'loss'].map(key => el('span', {}, [
+              el('span', { class: 'storm-row__label', text: ({ pressure: 'Pressure', radius: 'Affected radius', age: 'Age', loss: 'Estimated loss' })[key]! }),
+              el('span', { class: 'mono', 'data-disaster-metric': key }),
+            ])),
+          ]),
+        ])]);
+        disasterRows.set(record.id, li);
+      }
+      if (li.parentElement !== list) { if (archived) list.prepend(li); else list.append(li); }
+      const button = li.firstElementChild as HTMLButtonElement;
+      button.dataset.testid = archived ? 'disaster-history-row' : 'disaster-row';
+      button.setAttribute('aria-pressed', String(record.id === ui.selectedDisasterId));
+      if (isWeatherHazardKind(record.kind)) button.style.setProperty('--disaster-color', WEATHER_HAZARDS[record.kind].color);
+      setText(button.querySelector('.storm-row__title')!, `${t(disasterName(record.kind))} #${record.id.split('-').at(-1)}`);
+      setText(button.querySelector('[data-disaster-reading]')!, disasterCondition(record));
+      setText(button.querySelector('[data-disaster-position]')!, `${t(archived ? 'Ended' : 'Active')} · ${fmtCoord(record.lon, record.lat)}`);
+      const values = { pressure: `${record.pressure.toFixed(0)} hPa`, radius: `${record.radiusKm.toFixed(0)} km`, age: `${record.ageHours.toFixed(1)} h`, loss: fmtMoney(disasterDamage(record).lossUsd) };
+      for (const [key, value] of Object.entries(values)) setText(button.querySelector(`[data-disaster-metric="${key}"]`)!, value);
+    }
+    for (const [id, li] of disasterRows) if (!seen.has(id)) { li.remove(); disasterRows.delete(id); }
+  }
+  function renderDisasterDetail(record: DisasterRecord): void {
+    const detail = ref('disasterDetail');
+    const damage = disasterDamage(record);
+    setText(ref('disasterTitle'), `${t(disasterName(record.kind))} #${record.id.split('-').at(-1)}`);
+    const values = { Kind: disasterName(record.kind), Status: record.endedHour === undefined ? 'Active' : 'Ended',
+      Intensity: `${(record.intensity * 100).toFixed(0)}%`, Position: fmtCoord(record.lon, record.lat), Radius: `${record.radiusKm.toFixed(0)} km`, Age: `${record.ageHours.toFixed(1)} h`,
+      Movement: `${record.movementSpeedKmh.toFixed(1)} km/h`, Pressure: `${record.pressure.toFixed(0)} hPa`, Wind: `${record.wind.toFixed(0)} m/s`, Peak: `${record.peakWind.toFixed(0)} m/s`,
+      Temperature: `${record.airTemperature.toFixed(1)} °C`, Humidity: `${(record.humidity * 100).toFixed(0)}%`, Rain: `${record.rain.toFixed(1)} mm/h`, Snow: `${record.snowCm.toFixed(0)} cm`,
+      Loss: fmtMoney(damage.lossUsd), Homes: fmtInt(damage.floodedHomes) };
+    for (const [key, value] of Object.entries(values)) setMetric(`disaster${key}`, value, detail);
+    ref('disasterHistory').replaceChildren(...record.history.slice(-8).map(sample => el('li', {
+      text: `${fmtClock(sample.hour + clockOffset(ui.latest!))} · ${disasterCondition({ ...sample, kind: record.kind })} · ${sample.pressure.toFixed(0)} hPa`,
+    })));
+  }
   function findStorm(id: number | null): Storm | StormRecord | undefined {
     return ui.state?.storms.find(x => x.id === id) ?? ui.state?.stormArchive.find(x => x.id === id);
   }
   function renderStorms(): void {
     const s = ui.state;
     if (!s) return;
-    setText(ref('stormSummary'), s.thunderstorms.length > 0
-      ? `Tropical storms: ${s.storms.length} · Thunderstorms: ${s.thunderstorms.length} · Forming patches: ${s.candidates.length}`
-      : s.storms.length === 0
-      ? s.candidates.length > 0 ? `No storms yet. ${s.candidates.length} patch${s.candidates.length === 1 ? ' is' : 'es are'} forming.` : 'No storms. The world is calm.'
-      : `${s.storms.length} active storm${s.storms.length === 1 ? '' : 's'}${s.candidates.length ? ` · ${s.candidates.length} forming` : ''}.`);
+    const disasters = s.disasters ?? [];
+    const activeDisasters = s.storms.length + disasters.filter(record => record.endedHour === undefined).length;
+    setText(ref('stormSummary'), `${t('Disasters')}: ${activeDisasters} · ${t('Forming patches')}: ${s.candidates.length}`);
+    root.querySelector<HTMLElement>('[data-testid="storm-wind-note"]')!.hidden = s.storms.length === 0;
     const seen = new Set<number>();
     for (const storm of [...s.storms, ...s.stormArchive]) {
       const archived = 'endReason' in storm;
@@ -548,29 +706,37 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         const record = storm as StormRecord;
         chip.dataset.reason = record.endReason;
         setText(chip, record.endReason === 'merged' ? 'Merged' : stormOutcome(record));
-        setText(when, fmtClock(record.endedHour));
+        setText(when, fmtClock(record.endedHour + clockOffset(s)));
       } else setText(when, fmtCoord(storm.lon, storm.lat));
       setText(b.querySelector('[data-testid="storm-movement-speed"]')!, `${storm.movementSpeedKmh.toFixed(1)} km/h`);
       setText(b.querySelector('[data-testid="storm-central-pressure"]')!, `${storm.pressure.toFixed(0)} hPa`);
       setText(b.querySelector('[data-testid="storm-gale-radius"]')!, `${storm.galeRadiusKm.toFixed(0)} km`);
-      setText(b.querySelector('[data-testid="storm-loss"]')!, fmtMoney(stormLossUsd(storm.damageScore)));
+      setText(b.querySelector('[data-testid="storm-loss"]')!, fmtMoney(stormTotalLossUsd(storm)));
     }
     for (const [id, li] of stormRows) if (!seen.has(id)) { li.remove(); stormRows.delete(id); }
+    renderDisasterRows(s);
 
     const detail = ref('stormDetail');
-    ref('stormArchiveEmpty').hidden = s.stormArchive.length > 0;
-    setText(ref('stormActiveTitle'), `Active storms · ${s.storms.length}`);
-    setText(ref('stormEndedTitle'), `Ended storms · ${s.stormArchive.length}`);
+    const endedCount = s.stormArchive.length + disasters.filter(record => record.endedHour !== undefined).length;
+    ref('stormArchiveEmpty').hidden = endedCount > 0;
+    setText(ref('stormActiveTitle'), `${t('Active disasters')} · ${activeDisasters}`);
+    setText(ref('stormEndedTitle'), `${t('Ended disasters')} · ${endedCount}`);
     // Newest ended storm first; only the first few stay visible until "Show all" is pressed (a selected record always stays visible).
     const ended = [...ref('stormArchive').children] as HTMLLIElement[];
     if (ended.length <= ARCHIVE_VISIBLE) ui.archiveOpen = false;
-    ended.forEach((li, i) => { li.hidden = !ui.archiveOpen && i >= ARCHIVE_VISIBLE && Number((li.firstElementChild as HTMLElement).dataset.stormId) !== ui.selectedStormId; });
+    ended.forEach((li, i) => {
+      const row = li.firstElementChild as HTMLElement;
+      li.hidden = !ui.archiveOpen && i >= ARCHIVE_VISIBLE && Number(row.dataset.stormId) !== ui.selectedStormId && row.dataset.disasterId !== ui.selectedDisasterId;
+    });
     const more = ref('stormArchiveMore');
     more.hidden = ui.archiveOpen || ended.length <= ARCHIVE_VISIBLE;
     setText(more, `Show all (${ended.length})`);
     const sel = findStorm(ui.selectedStormId);
     detail.hidden = !sel;
     if (sel) renderStormDetail(sel, detail);
+    const disaster = findDisaster(ui.selectedDisasterId);
+    ref('disasterDetail').hidden = !disaster;
+    if (disaster) renderDisasterDetail(disaster);
 
     ref('patchList').replaceChildren(...s.candidates.map(c => el('li', { class: 'patch' }, [
       el('span', { text: fmtCoord(c.lon, c.lat) }), el('span', { class: 'mono', text: `${Math.min(99, Math.floor((c.progressHours / GENESIS_HOURS) * 100))}% to a depression` }),
@@ -581,17 +747,21 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   function renderRanking(): void {
     const s = ui.state;
     if (!s) return;
-    const live = s.storms.map(storm => entryFromStorm(s.seed, storm, s.hours, s.actions));
-    const worldKeys = new Set([...rankedKeys.values(), ...live.map(e => e.key)]);
+    const live = [...s.storms.map(storm => entryFromStorm(s.seed, storm, s.hours, s.actions, undefined, s.traffic.dispatches)),
+      ...(s.disasters ?? []).filter(record => record.endedHour === undefined).map(record => entryFromDisaster(s.seed, record, s.hours, s.actions, undefined, s.traffic.dispatches))];
+    const worldKeys = new Set([...rankedKeys.values(), ...rankedDisasters.values(), ...live.map(e => e.key)]);
     const ranked = rankBy(live.reduce(upsert, rankings), ui.rankMetric);
     ref('stormRank').replaceChildren(...ranked.map((entry, i) => {
-      const storm = worldKeys.has(entry.key) ? findStorm(entry.stormId) : undefined;
+      const storm = !entry.disasterId && worldKeys.has(entry.key) ? findStorm(entry.stormId) : undefined;
+      const disaster = entry.disasterId && worldKeys.has(entry.key) ? findDisaster(entry.disasterId) : undefined;
       const content = [
-        el('span', { class: 'storm-row__name' }, [el('span', { class: 'storm-rank__no', text: `${i + 1}.` }), ` ${entry.name}`]),
+        el('span', { class: 'storm-row__name' }, [el('span', { class: 'storm-rank__no', text: `${i + 1}.` }), localizedText(` ${entry.kind ? `${t(disasterName(entry.kind))} #${entry.disasterId!.split('-').at(-1)}` : entry.name}`)]),
         el('span', { class: 'storm-row__wind', testid: 'rank-value', text: rankValue(entry, ui.rankMetric) }),
         el('span', { class: 'storm-row__pos', text: storm ? stormOutcome(storm) : END_REASON_LABEL[entry.endReason] }),
       ];
-      return el('li', {}, [storm
+      return el('li', {}, [disaster
+        ? el('button', { type: 'button', class: 'storm-row', 'data-disaster-id': disaster.id, 'aria-pressed': String(disaster.id === ui.selectedDisasterId) }, content)
+        : storm
         ? el('button', { type: 'button', class: 'storm-row', 'data-storm-id': storm.id, 'aria-pressed': String(storm.id === ui.selectedStormId) }, content)
         : el('div', { class: 'storm-row storm-row--past' }, content)]);
     }));
@@ -703,13 +873,13 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     setMetric('gale', `${sel.galeRadiusKm.toFixed(0)} km`, detail);
     setMetric('age', `${sel.ageHours.toFixed(0)} h`, detail);
     setMetric('peak', `${sel.peakWind.toFixed(0)} m/s`, detail);
-    setMetric('loss', fmtMoney(stormLossUsd(sel.damageScore)), detail);
+    setMetric('loss', fmtMoney(stormTotalLossUsd(sel)), detail);
     for (const n of metrics.get('windDelta') ?? []) n.parentElement!.hidden = !sel.record;
     setMetric('windDelta', `${sel.windDelta > 0.5 ? '+' : sel.windDelta < -0.5 ? '\u2212' : ''}${Math.abs(sel.windDelta) < 0.5 ? 0 : Math.abs(sel.windDelta).toFixed(0)} m/s`, detail);
     const spark = ref<HTMLElement>('spark') as unknown as SVGSVGElement;
     const [line, area] = spark.querySelectorAll('path');
     ref('stormStages').replaceChildren(...stageChanges(sel).map(sample => el('li', {
-      text: `Grade ${sample.grade} · ${sample.stage} · ${fmtClock(sample.hour)}`,
+      text: `Grade ${sample.grade} · ${sample.stage} · ${fmtClock(sample.hour + clockOffset(ui.latest!))}`,
     })));
     const h = sel.history.map(sample => ({ h: sample.hour, wind: sample.wind }));
     if (h.length >= 2) {
@@ -767,7 +937,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     const share = impact ? impact.exposedPopulation / city.population : 0;
     const items: [string, string][] = [
       ['Population', `${fmtPop(city.population)} (${city.populationYear})`],
-      ['In gale-force winds', impact ? `${fmtInt(impact.exposedPopulation)} (${(share * 100).toFixed(0)}%)` : '—'],
+      ['People exposed to disasters', impact ? `${fmtInt(impact.exposedPopulation)} (${(share * 100).toFixed(0)}%)` : '—'],
       ['Peak wind here', impact ? `${impact.maxWind.toFixed(0)} m/s` : '—'],
       ['Total impact score', impact ? fmtInt(impact.score) : '—'],
       ['Current damage', impact ? fmtInt(impact.damage) : '—'],
@@ -845,11 +1015,15 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     const s = ui.state;
     if (!s) return;
     const last = s.news[s.news.length - 1];
-    const key = `${s.news.length}|${last?.id ?? ''}`;
+    const key = `${s.news.length}|${last?.id ?? ''}|${ui.selectedCityId ?? ''}`;
     if (key !== ui.newsKey) {
       ui.newsKey = key;
-      ref('newsList').replaceChildren(...[...s.news].reverse().slice(0, 60).map(newsRow));
-      ref('newsEmpty').hidden = s.news.length > 0;
+      const news = ui.selectedCityId ? s.news.filter(item => item.cityId === ui.selectedCityId) : s.news;
+      ref('newsList').replaceChildren(...news.slice(-60).reverse().map(newsRow));
+      const empty = ref('newsEmpty');
+      empty.hidden = news.length > 0;
+      const city = CITIES.find(item => item.id === ui.selectedCityId);
+      setText(empty, city ? `${city.name}: ${t('No reports yet.')}` : t('No reports yet.'));
     }
   }
 
@@ -908,6 +1082,22 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     hud.replaceChildren(...(parts.length ? [localizedText('Climate:'), ' ', ...parts.flatMap((p, i) => [i ? ' · ' : '', localizedText(p)])] : []));
   }
 
+  function weatherSourceLines(state: GameState): HTMLElement[] {
+    const lines: HTMLElement[] = [];
+    if (state.initialWeather) {
+      lines.push(el('p', { text: `${t('Starting weather')} · NOAA GFS · ${fmtUtc(state.initialWeather.modelRun, 0)}${state.weatherSource === 'cached' ? ` · ${t('Saved analysis')}` : ''}` }));
+    } else if (state.weatherSource === 'base') {
+      lines.push(el('p', { text: t('Live weather unavailable · using base climate') }));
+    } else lines.push(el('p', { text: 'base climate' }));
+    for (const load of state.historic) {
+      const typhoon = typhoonById(load.typhoonId);
+      if (!typhoon) continue;
+      const ended = load.finished ? state.stormArchive.find(x => x.id === load.stormId)?.endedHour : undefined;
+      const hours = (ended ?? state.hours) - load.startHour;
+      lines.push(el('p', { text: `${typhoonName(typhoon)} (${typhoon.year}) · ${fmtUtc(typhoon.points[0].t, hours)} · ${load.environment === 'loaded' ? 'NCEP/NCAR R1 + ERSST v5' : 'base climate'}${load.finished ? ' · record ended' : ''}` }));
+    }
+    return lines;
+  }
   function renderWorld(state: GameState): void {
     renderClimate(state);
     const on = state.genesis.enabled;
@@ -916,27 +1106,24 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     const wave = ref('genesisWave');
     wave.hidden = !on;
     if (on) setText(wave, `Natural formation · wave ${state.genesis.waves} · next conditions in ${Math.max(0, (state.genesis.nextSpawnTick - state.tick) / TICKS_PER_HOUR).toFixed(0)} h`);
-    const lines: HTMLElement[] = [];
-    for (const load of state.historic) {
-      const typhoon = typhoonById(load.typhoonId);
-      if (!typhoon) continue;
-      const ended = load.finished ? state.stormArchive.find(x => x.id === load.stormId)?.endedHour : undefined;
-      const hours = (ended ?? state.hours) - load.startHour;
-      lines.push(el('p', { text: `${typhoonName(typhoon)} (${typhoon.year}) · ${fmtUtc(typhoon.points[0].t, hours)} · ${load.environment === 'loaded' ? 'NCEP/NCAR R1 + ERSST v5' : 'base climate'}${load.finished ? ' · record ended' : ''}` }));
-    }
-    ref('historicHud').replaceChildren(...lines);
-    ref('historicHud').hidden = lines.length === 0;
+    ref('historicHud').hidden = true;
+    const sources = root.querySelector('[data-help-weather]');
+    if (sources && helpDialog.open) sources.replaceChildren(...weatherSourceLines(state));
     const totals = state.cities.reduce((sum, impact, i) => {
       const report = estimateCityDamage(CITIES[i], impact);
       sum.displaced += report.displaced; sum.missing += report.missing; sum.deaths += report.deaths;
       sum.flooded += report.floodedHomes; sum.loss += report.lossUsd;
       return sum;
     }, { displaced: 0, missing: 0, deaths: 0, flooded: 0, loss: 0 });
-    const ended = state.stormArchive.filter(s => s.endReason === 'dissipated');
-    const average = ended.length ? ended.reduce((sum, s) => sum + s.endedHour - (s.history[0]?.hour ?? 0), 0) / ended.length : null;
+    totals.loss += state.traffic.lossUsd;
+    const ended = state.stormArchive;
+    const endedDisasters = (state.disasters ?? []).filter(record => record.endedHour !== undefined);
+    const endedCount = ended.length + endedDisasters.length;
+    const average = endedCount ? (ended.reduce((sum, s) => sum + s.endedHour - (s.history[0]?.hour ?? 0), 0)
+      + endedDisasters.reduce((sum, record) => sum + record.endedHour! - record.startedHour, 0)) / endedCount : null;
     setText(ref('damageLoss'), `Estimated loss: ${fmtMoney(totals.loss)}`);
     const scope = ref('damagePanel');
-    setMetric('damageDissipated', String(ended.length), scope);
+    setMetric('damageDissipated', String(endedCount), scope);
     setMetric('damageTime', average === null ? '—' : `${average.toFixed(1)} h`, scope);
     setMetric('damageDisplaced', fmtInt(totals.displaced), scope);
     setMetric('damageMissing', fmtInt(totals.missing), scope);
@@ -949,15 +1136,21 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     return el('li', { class: `news news--${n.kind}` }, [
       el('div', { class: 'news__art' }, [newsArt(n)]),
       el('div', { class: 'news__body' }, [
-        el('p', { class: 'news__meta', text: `${fmtClock(n.hour)} · ${kindLabel(n.kind)}` }),
+        el('p', { class: 'news__meta', text: `${fmtClock(n.hour + clockOffset(ui.latest!))} · ${kindLabel(n.kind)}` }),
         el('h3', { class: 'news__title', text: n.title }),
         el('p', { class: 'news__text', text: n.text }),
+        n.transport && n.transport.lossUsd > 0 ? el('dl', { class: 'news__damage', testid: 'transport-damage' }, [
+          ...[
+            ['Peak wind here', `${n.transport.windMs.toFixed(0)} m/s`],
+            ['Estimated loss', fmtMoney(n.transport.lossUsd)],
+          ].map(([label, value]) => el('div', {}, [el('dt', { text: label }), el('dd', { text: value })])),
+        ]) : null,
         n.damage ? el('dl', { class: 'news__damage', testid: 'news-damage' }, [
           ...[
             ['Displaced people', `${fmtInt(n.damage.displaced)} people`],
             ['Missing (estimated)', `${fmtInt(n.damage.missing)} people`],
             ['Deaths (estimated)', `${fmtInt(n.damage.deaths)} people`],
-            ['Flooded homes', `${fmtInt(n.damage.floodedHomes)} homes`],
+            ['Damaged homes', `${fmtInt(n.damage.floodedHomes)} homes`],
             ['Estimated loss', fmtMoney(n.damage.lossUsd)],
           ].map(([label, value]) => el('div', {}, [el('dt', { text: label }), el('dd', { text: value })])),
         ]) : null,
@@ -965,7 +1158,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       ]),
     ]);
   }
-  const kindLabel = (k: NewsItem['kind']): string => ({ formation: 'Formation', intensity: 'Intensity', landfall: 'Landfall', city: 'City', ended: 'Dissipated', merger: 'Merger', blizzard: 'Blizzard', recovery: 'Recovery', info: 'Watch' })[k];
+  const kindLabel = (k: NewsItem['kind']): string => ({ formation: 'Formation', intensity: 'Intensity', landfall: 'Landfall', city: 'City', ended: 'Dissipated', merger: 'Merger', blizzard: 'Blizzard', tornado: 'Tornado', recovery: 'Recovery', info: 'Watch', transport: 'Transport', weather: 'Weather' })[k];
 
   function renderReplayPanel(): void {
     const n = ui.latest?.actions.length ?? 0;
@@ -996,23 +1189,37 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     ref('helpScroll').scrollTop = 0;
   }
   function buildHelp(): void {
-    const toolItems = TOOLS.map((t, i) => `
-      <li class="help-tool" style="--fx: var(--fx-${t.type})">
-        <span class="help-tool__icon">${toolIconSvg(t.type, 'help-tool__svg')}</span>
-        <span class="help-tool__text"><strong>${t.name}</strong> (${t.radiusKm} km, ${t.durationHours} h): ${t.description}</span>
-        <kbd class="help-key">${TOOL_KEYS[i]}</kbd>
-      </li>`).join('');
+    const toolItems = CONDITION_GROUPS.map(([first, second], i) => {
+      const a = TOOL_BY_TYPE.get(first)!, b = TOOL_BY_TYPE.get(second)!;
+      return `
+      <li class="help-tool" style="--fx: var(--fx-${first})">
+        <span class="help-tool__icon">${toolIconSvg(first, 'help-tool__svg')}</span>
+        <span class="help-tool__text">
+          <span class="help-tool__condition" data-help-condition="${first}"><strong>${a.name}</strong><span>${a.description}</span></span>
+          <span class="help-tool__condition" data-help-condition="${second}"><strong>${b.name}</strong><span>${b.description}</span></span>
+        </span>
+        <kbd class="help-key">${TOOL_KEYS[i].toUpperCase()}</kbd>
+      </li>`;
+    }).join('');
+    const disasterItems = DISASTER_HELP.map(entry => {
+      const icon = FORMATION_TOOLS.find(tool => tool.kind === entry.kind)?.icon ?? `<path d="${WEATHER_HAZARDS.downpour.iconPath}"/>`;
+      return `<li class="help-disaster" data-help-disaster="${entry.kind}">
+        <h3 class="help-disaster__title"><svg class="help-tool__svg" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icon}</svg><span>${entry.name}</span></h3>
+        <p class="help-disaster__conditions"><strong>Formation conditions</strong>: <span>${entry.conditions}</span></p>
+        <p>${entry.description}</p>
+      </li>`;
+    }).join('');
     const panels: Record<string, string> = {
       basics: `
-        <p>The world starts empty and keeps running in real time. You cannot place a storm. You place weather conditions, and storms grow where they overlap.</p>
+        <p>The world starts empty and keeps running at the selected speed. You cannot place a storm. You place weather conditions, and storms grow where they overlap.</p>
         <ol class="help__steps">
           <li>Drag <strong>Warm water</strong>, <strong>Moisture</strong> and <strong>Low pressure</strong> from the bottom palette onto the same tropical ocean spot.</li>
           <li>Wait. Overlapping conditions accumulate time, then a depression forms. Several separate spots can each make their own storm.</li>
           <li>Young depressions strengthen and their circulation grows. <strong>High pressure</strong> changes the flow around them and steers them.</li>
         </ol>
-        <p>Open the Formation tab, pick Typhoon formation and tap a sea spot to see what it needs to form a typhoon, then place the recipe in one click.</p>
+        <p>Open Formation for typhoons, blizzards, tornadoes, heatwaves, droughts, downpours, cold waves, hail, yellow dust and wind gusts. Tap a map spot to prepare the conditions. The seven weather phenomena begin after six model hours.</p>
         <h3 class="dialog__sub">Time</h3>
-        <p>Play and Pause start and stop time, the speed buttons run the world faster, and Reset starts over with an empty world.</p>
+        <p>Use the arrows to choose x1, x2, x4, x8, x16 or x48. Number keys 1–6 select the same steps. Reset speed returns to x1 without changing the world or pause state.</p>
         <h3 class="dialog__sub">The map</h3>
         <ul class="help__list">
           <li>The map is a globe by default: drag to rotate it and use the wheel or pinch to zoom. Switch Globe view off in the right panel for the flat Equal Earth map.</li>
@@ -1022,10 +1229,10 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <li>Choose a nickname in the Ranking tab to appear on the online leaderboard. Nicknames are public.</li>
         </ul>
         <h3 class="dialog__sub">Without a mouse</h3>
-        <p class="fine">Press a palette button to arm it, then click or tap the map. Or focus the map: arrow keys move the target (Shift ×5, Alt ¼°) and Enter places. Number keys 1–9, 0, - and = select a condition, Q, W, E and R select a formation tool, Shift + and Shift - zoom, Space plays or pauses, Esc puts the tool away. The World tab can place by exact coordinates.</p>
+        <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L and Z select the formation tools in order. 1–6 set the speed steps. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
         <p class="fine">Shortcuts work from anywhere on the page, except while you type in a field or a dialog is open; with a button or tab focused, Space and Enter press it instead of playing or pausing.</p>`,
       conditions: `
-        <p>The bottom palette has twelve conditions. Each covers a radius for a set time, and the key on the right selects it.</p>
+        <p>The bottom palette has seven paired condition buttons. The large icon is the selected setting; the small faded icon shows the opposite. Click or tap once to select, then again to switch, or use Q–U. Drag the large icon onto the map.</p>
         <ul class="help__tools">${toolItems}</ul>
         <h3 class="dialog__sub">Making a storm</h3>
         <ul class="help__list">
@@ -1037,6 +1244,10 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         <p>Weakening recipe: overlap Cool water, Dry air, Cold air, Downdraft and Strong shear on a storm or in its path. The more of them overlap, the faster it dissipates.</p>
         <h3 class="dialog__sub">Mergers</h3>
         <p>Nearby storms in the same hemisphere affect each other’s movement: they can rotate around each other and draw closer. They merge within 100 km once both are at least 24 model hours old with winds of 17.2 m/s or more. The stronger storm keeps its ID and wind speed. Forming lows keep their own progress. Overlapping wind areas alone do not trigger a merger.</p>`,
+      disasters: `
+        <p>${DISASTER_HELP_INTRO}</p>
+        <p class="fine">${DISASTER_HELP_TIMING}</p>
+        <ul class="help-disasters">${disasterItems}</ul>`,
       climate: `
         <h3 class="dialog__sub">Natural formation</h3>
         <p>Turn on Natural typhoon formation in the right panel and nature starts storms for you: a wave of formation conditions appears over warm tropical ocean somewhere in the world every two to three days. Use Cool water, Dry air, Cold air and Downdraft to weaken them before a depression forms, or let them grow. Turn it off to stop new waves.</p>
@@ -1062,6 +1273,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <dd>Conditions you place change its strength but not its path.</dd>
         </dl>`,
       data: `
+        <h3 class="dialog__sub">Current weather data</h3>
+        <div data-help-weather data-testid="help-weather-data"></div>
         <h3 class="dialog__sub">About the data</h3>
         <p>Coastlines and city positions are real (Natural Earth). Weather, population and damage numbers are simulated.</p>
         <h3 class="dialog__sub">Sources</h3>
@@ -1079,14 +1292,24 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <dt>Natural Earth</dt>
           <dd>Coastlines, and the positions and populations of cities.</dd>
         </dl>
+        <h3 class="dialog__sub">Acknowledgements</h3>
+        <p>Japan Meteorological Agency (JMA) best-track data. TypoStudio edited and processed this data for the game; JMA did not create the edited version.</p>
+        <p>NCEP Reanalysis data provided by the NOAA PSL, Boulder, Colorado, USA, from their website at https://psl.noaa.gov.</p>
+        <p>NOAA IBTrACS: Knapp, K. R. et al., 2010, doi:10.1175/2009BAMS2755.1.</p>
+        <h3 class="dialog__sub">License</h3>
+        <p>This game is licensed under CC BY-NC-SA 4.0: free to use and modify, no commercial use, and modified versions must be shared under the same license with credit to TypoStudio.</p>
+        <p>Open-source libraries keep their own licenses. Data sources keep their own terms, listed under Sources above.</p>
+        <p><a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener license">CC BY-NC-SA 4.0</a> <span aria-hidden="true">·</span> <a href="/third-party-licenses.txt" target="_blank" rel="noopener">Third-party licenses</a></p>
         <h3 class="dialog__sub">Damage estimates</h3>
         <p>Damage figures are fictional story estimates, not hydrology or insurance models. Their rates are gameplay constants fitted to public records of Typhoon Maemi (2003) and cross-checked with Rusa (2002), Hinnamnor (2022) and Haiyan (2013), so they land at the right order of magnitude. Counts are city totals at the time of the report.</p>
         <h3 class="dialog__sub">Online leaderboard and privacy</h3>
-        <p>When a storm ends, your score (storm count, grade and estimated damage) is uploaded to the online leaderboard under an anonymous ID created on this device. The nickname shown there is chosen by you and is public, so do not use your real name. You can change it any time in the Ranking tab. Details are in the privacy policy linked below.</p>
+        <p>When a disaster ends, its estimated loss and duration are added to the online leaderboard under this device's anonymous ID. Typhoon grades are included for typhoons. Your public nickname can be changed in Ranking.</p>
         <p>You can delete your nickname and all your uploaded results yourself: open the Ranking tab and press Delete my records. It takes effect immediately. If you no longer have the device, email us at the address in the privacy policy.</p>
         ${footerHtml()}`,
     };
     for (const p of helpPanels) p.innerHTML = panels[p.dataset.helpPanel!] ?? '';
+    const sources = root.querySelector('[data-help-weather]');
+    if (sources && ui.state) sources.replaceChildren(...weatherSourceLines(ui.state));
   }
   /** The policy opens in a popup in the player's current language; the href stays for middle-click and new-tab use. */
   const privacyDialog = ref<HTMLDialogElement>('privacyDialog');
@@ -1161,6 +1384,27 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     });
   } else if (new URL(window.location.href).searchParams.get('help') !== '0' && !helpSeen()) openHelp();
 
+  // iPhone Safari cannot be forced to full screen; once, point to Hide Toolbar and Add to Home Screen.
+  const IPHONE_HINT_KEY = 'typhoon-lab-iphone-hint-seen';
+  const inBrowserTab = (navigator as Navigator & { standalone?: boolean }).standalone !== true
+    && !matchMedia('(display-mode: standalone)').matches && !matchMedia('(display-mode: fullscreen)').matches;
+  if (/iPhone|iPod/.test(navigator.userAgent) && inBrowserTab) {
+    let hintSeen = true;
+    try { hintSeen = localStorage.getItem(IPHONE_HINT_KEY) !== null; } catch { /* storage is optional */ }
+    if (!hintSeen) {
+      const showHint = (): void => {
+        try { localStorage.setItem(IPHONE_HINT_KEY, '1'); } catch { /* storage is optional */ }
+        toast('More room for the map: tap aA in the address bar and choose Hide Toolbar. For full screen, use Share → Add to Home Screen.', 'info', 12000);
+      };
+      let shown = false;
+      stateListeners.push(() => {
+        if (shown) return;
+        shown = true;
+        showHint();
+      });
+    }
+  }
+
   // ---- replay files ------------------------------------------------------------------------
   function exportReplay(): void {
     const s = ui.latest;
@@ -1192,10 +1436,11 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     ui.expectUntil = r.untilTick;
     ui.expectSeed = r.seed;
     ui.expectSig = actionsSig(r.actions);
+    ui.expectTrafficSig = JSON.stringify(r.trafficDispatches ?? []);
     // The worker keeps its previous play state if it rejects the replay, so only pause once it accepts.
     arm('replay');
     setReplayMessage('Re-running the replay on the simulation…', 'info');
-    post({ type: 'replay', seed: r.seed, actions: r.actions, untilTick: r.untilTick, startDayOfYear: r.startDayOfYear });
+    post({ type: 'replay', seed: r.seed, actions: r.actions, untilTick: r.untilTick, startDayOfYear: r.startDayOfYear, trafficDispatches: r.trafficDispatches, initialWeather: r.initialWeather });
     renderClock();
   }
 
@@ -1240,7 +1485,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       ui.expect = 'normal';
       ui.pendingEvent = 'reset';
     } else if (ui.expect === 'replay') {
-      if (state.tick !== ui.expectUntil || state.seed !== ui.expectSeed || actionsSig(state.actions) !== ui.expectSig) return false;
+      if (state.tick !== ui.expectUntil || state.seed !== ui.expectSeed || actionsSig(state.actions) !== ui.expectSig
+        || JSON.stringify(state.traffic.dispatches) !== ui.expectTrafficSig) return false;
       window.clearTimeout(expectTimer);
       ui.expect = 'normal';
       ui.pendingEvent = 'replay';
@@ -1255,11 +1501,17 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
 
   worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const msg = event.data;
-    if (msg.type === 'state') {
+    if (msg.type === 'state' || msg.type === 'interaction') {
       if (!accept(msg.state)) return;
+      ui.clockHours = msg.clockHours;
       ui.pending = msg.state;
       renderClock();
+      // Settle an in-flight tick at gesture start; releasing never catches up a hidden backlog.
+      if (msg.type === 'interaction' && msg.active && renderer?.isInteracting) applyPending();
       if (document.hidden && !renderer?.isInteracting) applyPending();
+    } else if (msg.type === 'progress') {
+      ui.clockHours = msg.clockHours;
+      renderClockText();
     } else if (msg.type === 'placement') {
       ui.placementQueue.shift()?.(msg.result);
     } else if (msg.type === 'error') {
@@ -1285,31 +1537,46 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   }
 
   function beginWorld(event: 'reset' | 'replay' | null): void {
+    trafficFocusKey = '';
+    closeTrafficPopup();
     ui.tool = null;
     closeSpot();
     renderTools();
     ui.newsKey = '';
     ui.newsSeen = 0;
     ui.selectedStormId = null;
+    ui.selectedDisasterId = null;
     ui.cursor = null;
     for (const li of stormRows.values()) li.remove();
     stormRows.clear();
+    for (const li of disasterRows.values()) li.remove();
+    disasterRows.clear();
     rankedKeys.clear();
+    rankedDisasters.clear();
     ui.playing = event !== 'replay';
   }
 
   /** Writes newly ended storms of this world to the ranking store; active storms are display-only. */
   function recordRankings(state: GameState): void {
     const ended = state.stormArchive.filter(record => !rankedKeys.has(record.id));
-    const fresh = ended.map(record => entryFromStorm(state.seed, record, state.hours, state.actions));
+    const endedDisasters = (state.disasters ?? []).filter(record => record.endedHour !== undefined && !rankedDisasters.has(record.id));
+    const fresh = [...ended.map(record => entryFromStorm(state.seed, record, state.hours, state.actions, undefined, state.traffic.dispatches)),
+      ...endedDisasters.map(record => entryFromDisaster(state.seed, record, state.hours, state.actions, undefined, state.traffic.dispatches))];
     if (!fresh.length) return;
     for (const record of ended) {
       const result = resultFromRecord(state.seed, record);
       if (result) void submitResult(result);
     }
+    for (const record of endedDisasters) {
+      const result = resultFromDisaster(state.seed, record);
+      if (result) void submitResult(result);
+    }
     // Re-read first so another tab's entries are kept (last writer wins only for the same key).
     rankings = fresh.reduce(upsert, rankingStore.load());
-    for (const entry of fresh) rankedKeys.set(entry.stormId, entry.key);
+    for (const entry of fresh) {
+      if (entry.disasterId) rankedDisasters.set(entry.disasterId, entry.key);
+      else rankedKeys.set(entry.stormId, entry.key);
+    }
     rankingStore.save(rankings);
   }
 
@@ -1326,12 +1593,13 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       if (item.kind === 'merger' && item.absorbedId === ui.selectedStormId && followLiveMerger && item.mergedIntoId !== undefined) ui.selectedStormId = item.mergedIntoId;
     }
     if (ui.selectedStormId !== null && !findStorm(ui.selectedStormId)) ui.selectedStormId = null;
+    if (ui.selectedDisasterId !== null && !findDisaster(ui.selectedDisasterId)) ui.selectedDisasterId = null;
 
     renderer?.setState(state);
     stage.dataset.renderedTick = String(state.tick);
     app.dataset.ready = 'true';
     if (renderer && veil.dataset.state !== 'error') veil.hidden = true;
-    setText(ref('stormCount'), String(state.storms.length + state.thunderstorms.length));
+    setText(ref('stormCount'), String(state.storms.length + (state.disasters ?? []).filter(record => record.endedHour === undefined).length));
     renderWorld(state);
     ref('hint').hidden = state.storms.length > 0 || state.thunderstorms.length > 0 || state.candidates.length > 0 || state.effects.length > 0 || state.actions.length > 0 || hintDismissed;
     renderClock();
@@ -1354,6 +1622,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     ui.newsKey = '';
     if (ui.state) renderWorld(ui.state);
     renderSidebar();
+    renderTools();
     renderLeaderboard();
     refreshOverlay();
     spotSig = '';
@@ -1367,18 +1636,19 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       const at = r.view.pxToLonLat(cx - box.left, cy - box.top);
       return at ? { lon: at[0], lat: at[1] } : null;
     },
-    onDragStart: tool => { ui.drag = { tool, point: null }; closeSpot(); refreshOverlay(); },
+    onDragStart: tool => { ui.drag = { tool: draggedVariant(tool), point: null }; closeSpot(); refreshOverlay(); },
     onDragMove: (_tool, point) => { if (ui.drag) { ui.drag.point = point; refreshOverlay(); } },
     onDrop: (tool, point) => {
+      const variant = ui.drag?.tool ?? draggedVariant(tool);
       ui.drag = null;
       refreshOverlay();
-      if (point && isFormation(tool)) { ui.tool = tool; renderTools(); openSpot(point.lon, point.lat); }
-      else if (point) placeAt(tool as ToolType, point.lon, point.lat);
+      if (point && isFormation(variant)) { ui.tool = variant; renderTools(); openSpot(point.lon, point.lat); }
+      else if (point) placeAt(variant as ToolType, point.lon, point.lat);
       else toast('Dropped outside the map. Drag the icon onto the map to place it.', 'error', 3500);
     },
     onCancel: () => { ui.drag = null; refreshOverlay(); },
   });
-  for (const [type, b] of toolButtons) b.addEventListener('click', () => armTool(type));
+  for (const [type, b] of toolButtons) b.addEventListener('click', () => armPaletteTool(type));
   const paletteTabButtons = [...root.querySelectorAll<HTMLButtonElement>('[data-palette-tab]')];
   const palettePanels = [...root.querySelectorAll<HTMLElement>('[data-palette-panel]')];
   function setPaletteTab(id: string, focus = false): void {
@@ -1396,7 +1666,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   setPaletteTab(storedPaletteTab());
 
   ref('play').addEventListener('click', togglePlay);
-  ref('reset').addEventListener('click', resetWorld);
+  ref('speedReset').addEventListener('click', () => setSpeed(DEFAULT_TIME_SPEED));
   labelHistoricOptions();
   historicSelect.addEventListener('change', showHistoricPeak);
   ref('genesisToggle').addEventListener('click', () => {
@@ -1477,8 +1747,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     refreshOverlay();
   });
   renderGlobeToggle();
-  for (const b of speedButtons) b.addEventListener('click', () => setSpeed(Number(b.dataset.speed)));
-  rovingKeys(ref('speedGroup'), b => setSpeed(Number(b.dataset.speed)));
+  for (const b of speedButtons) b.addEventListener('click', () => setSpeed(adjacentTimeSpeed(ui.speed, b.dataset.speedAction === 'next' ? 1 : -1)));
   for (const button of overlayButtons) button.addEventListener('click', () => {
     const id = button.dataset.overlay as keyof MapOverlays;
     setMapOverlays({ ...ui.overlays, [id]: !ui.overlays[id] });
@@ -1510,16 +1779,19 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   });
   ref('stormArchiveMore').addEventListener('click', () => { ui.archiveOpen = true; renderStorms(); });
   for (const name of ['stormList', 'stormArchive', 'stormRank']) ref(name).addEventListener('click', ev => {
+    const disaster = (ev.target as HTMLElement).closest<HTMLElement>('[data-disaster-id]');
+    if (disaster) {
+      const id = disaster.dataset.disasterId!;
+      selectDisaster(ui.tab === 'rank' || id !== ui.selectedDisasterId ? id : null, true);
+      return;
+    }
     const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-storm-id]');
     if (b) selectStorm(Number(b.dataset.stormId) === ui.selectedStormId ? null : Number(b.dataset.stormId), true);
   });
   ref('stormCenter').addEventListener('click', () => {
     selectStorm(ui.selectedStormId, true);
   });
-  ref('placeConfirm').addEventListener('click', () => {
-    const type = ref<HTMLSelectElement>('placeTool').value as ToolType;
-    placeAt(type, parseFloat(ref<HTMLInputElement>('placeLon').value), parseFloat(ref<HTMLInputElement>('placeLat').value));
-  });
+  ref('disasterCenter').addEventListener('click', () => selectDisaster(ui.selectedDisasterId, true));
 
   ref('zoomIn').addEventListener('click', () => zoomCentre(1.5));
   ref('zoomOut').addEventListener('click', () => zoomCentre(1 / 1.5));
@@ -1593,6 +1865,45 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     spot.style.setProperty('--caret-x', `${Math.round(clamp(x - left, 14, width - 14))}px`);
   }
 
+  const trafficTime = (state: GameState, hour: number): string => {
+    const localHour = hour + clockOffset(state);
+    const within = ((Math.round(localHour * 60) % 1440) + 1440) % 1440;
+    return `${fmtMonthDay(state.startDayOfYear + hour / 24)} · ${String(Math.floor(within / 60)).padStart(2, '0')}:${String(within % 60).padStart(2, '0')}`;
+  };
+
+  function renderTrafficPopup(): void {
+    const state = ui.state;
+    const r = renderer;
+    if (!state || !r || !selectedTrafficId) return;
+    const vehicle: TrafficVehicle | undefined = state.traffic.vehicles.find(item => item.id === selectedTrafficId);
+    if (!vehicle || vehicle.status !== 'travelling' || vehicle.grounded) { closeTrafficPopup(); return; }
+    const point = r.trafficPoint(vehicle.id);
+    if (!point) { trafficPopup.hidden = true; return; }
+    setText(ref('trafficKind'), vehicle.kind === 'planes' ? 'Plane' : 'Ship');
+    setText(ref('trafficTitle'), vehicle.id);
+    setText(ref('trafficFrom'), vehicle.homeName);
+    setText(ref('trafficTo'), vehicle.destinationName);
+    const speed = vehicle.holding ? 0 : TRAFFIC_SPEED[vehicle.kind];
+    setText(ref('trafficSpeed'), `${speed.toLocaleString(getLanguage())} km/h`);
+    setText(ref('trafficDeparture'), vehicle.departedAtHour === undefined ? '—' : trafficTime(state, vehicle.departedAtHour));
+    let remaining = 0;
+    let from: GeoPoint = vehicle;
+    for (let i = vehicle.next; i < vehicle.route.length; i++) {
+      remaining += trafficDistance(from, vehicle.route[i]);
+      from = vehicle.route[i];
+    }
+    const modelHour = Math.max(state.hours, ui.clockHours);
+    remaining = Math.max(0, remaining - (vehicle.holding ? 0 : TRAFFIC_SPEED[vehicle.kind] * (modelHour - state.hours)));
+    setText(ref('trafficArrival'), vehicle.holding ? '—' : trafficTime(state, modelHour + remaining / TRAFFIC_SPEED[vehicle.kind]));
+    trafficPopup.hidden = false;
+    const box = r.overlayCanvas.getBoundingClientRect();
+    const x = box.left + point[0], y = box.top + point[1], gap = 18;
+    const width = trafficPopup.offsetWidth, height = trafficPopup.offsetHeight;
+    const right = x + gap + width <= innerWidth - 8 || x - gap - width < 8;
+    trafficPopup.style.left = `${Math.round(clamp(right ? x + gap : x - gap - width, 8, Math.max(8, innerWidth - width - 8)))}px`;
+    trafficPopup.style.top = `${Math.round(clamp(y - height / 2, 8, Math.max(8, innerHeight - height - 8)))}px`;
+  }
+
   /** Recomputes the recipe from the newest state; the list is rebuilt only when it changes so focus and tooltips survive. */
   function renderSpot(): void {
     const state = ui.latest;
@@ -1604,10 +1915,11 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     setText(ref('spotSst'), readings.land ? '–' : `${readings.sst.toFixed(1)} °C`);
     setText(ref('spotAir'), `${readings.airTemperature.toFixed(1)} °C`);
     setText(ref('spotHumidity'), `${(readings.humidity * 100).toFixed(0)}%`);
+    setText(ref('spotInstability'), readings.instability > 0.05 ? `+${readings.instability.toFixed(1)}` : readings.instability < -0.05 ? readings.instability.toFixed(1) : '0');
     setText(ref('spotShear'), `${readings.shear.toFixed(1)} m/s`);
     setText(ref('spotPressure'), `${readings.pressure.toFixed(0)} hPa`);
-    setText(ref('spotScore'), `Formation score: ${advice.potential.toFixed(2)} / ${GENESIS_THRESHOLD.toFixed(2)}`);
-    const hasRecipe = !advice.land && !advice.impossibleShear;
+    setText(ref('spotScore'), `${advice.scoreLabel}: ${advice.potential.toFixed(2)} / ${advice.threshold.toFixed(2)}`);
+    const hasRecipe = (!advice.requiresSea || !advice.land) && !advice.impossibleShear;
     ref('spotRecipeBox').hidden = !hasRecipe;
     const sig = hasRecipe ? advice.placements.join(',') : '';
     if (sig !== spotSig) {
@@ -1621,16 +1933,17 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       }));
     }
     spotPlacements = advice.placements;
-    const note = advice.land ? 'Typhoons cannot form over land. Tap an ocean spot.'
+    const note = advice.requiresSea && advice.land ? 'Typhoons cannot form over land. Tap an ocean spot.'
       : advice.impossibleShear ? 'The upper winds here are too strong to calm. No recipe can work.'
       : advice.maxEffects ? 'Too many conditions are active. Wait for some to fade.'
+      : advice.note ? advice.note
       : !advice.ok ? 'Even this recipe is not enough here.'
       : !advice.placements.length ? 'The recipe is already in place. Give it time to organise.'
       : advice.cold ? 'The water is very cold, so this needs many warm-water patches.'
-      : 'Place these together, then give them time to organise.';
+      : 'The recipe stacks as much as needed. Let the conditions build up to form the event.';
     setText(ref('spotNote'), note);
     ref('spotNote').dataset.kind = advice.ok && !advice.maxEffects ? 'ok' : 'warn';
-    ref<HTMLButtonElement>('spotPlaceBtn').disabled = !advice.ok || advice.land || advice.maxEffects || !advice.placements.length;
+    ref<HTMLButtonElement>('spotPlaceBtn').disabled = !advice.ok || (advice.requiresSea && advice.land) || advice.maxEffects || !advice.placements.length;
     positionSpot();
   }
 
@@ -1659,11 +1972,12 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     const types = spotPlacements;
     if (!types.length) return;
     ui.lastPlacementAt = performance.now();
-    types.forEach((type, i) => ui.placementQueue.push(result => {
-      if (!result.ok) toast(result.reason ?? `${TOOL_BY_TYPE.get(type)!.name} could not be placed there.`, 'error');
-      else if (i === types.length - 1) { toast(`Recipe placed at ${fmtCoord(at.lon, at.lat)}.`, 'ok', 3500); announce('Recipe placed.'); }
-    }));
-    for (const type of types) post({ type: 'place', tool: type, lon: at.lon, lat: at.lat });
+    ui.placementQueue.push(result => {
+      if (!result.ok) toast(result.reason ?? 'The formation recipe could not be prepared.', 'error');
+      else { toast(`Recipe placed at ${fmtCoord(at.lon, at.lat)}.`, 'ok', 3500); announce('Recipe placed.'); }
+    });
+    const kind = FORMATION_BY_ID.get(spotTool)!.kind;
+    post({ type: 'formation', kind, lon: at.lon, lat: at.lat });
     // The recipe is placed: close the popover but keep the formation probe armed for the next spot.
     closeSpot();
     stage.focus({ preventScroll: true });
@@ -1673,16 +1987,27 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   if (renderer) {
     const r = renderer;
     detachInput = attachMapInput(r.overlayCanvas, () => r.view, {
+      onHold: (px, py) => {
+        if (!phoneLayout.matches || ui.tool || ui.drag) return false;
+        const at = r.view.pxToLonLat(px, py);
+        if (!at) return false;
+        showAt(at[0], at[1]);
+        setLegendOpen(true, false);
+        return true;
+      },
+      onHoldEnd: () => setLegendOpen(false, false),
       onTap: (px, py) => {
         const at = r.view.pxToLonLat(px, py);
         stage.focus({ preventScroll: true });
         if (ui.tool) {
+          closeTrafficPopup();
           if (!at) toast('Outside the map.', 'error');
           else if (isFormation(ui.tool)) openSpot(at[0], at[1]);
           else placeAt(ui.tool, at[0], at[1]);
           return;
         }
         if (!at) {
+          closeTrafficPopup();
           ui.selectedCityId = null;
           ui.selectedStormId = null;
           renderSidebar();
@@ -1691,21 +2016,42 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         }
         const stormId = r.pickStorm(px, py);
         if (stormId !== null) {
+          closeTrafficPopup();
           const name = findStorm(stormId)?.name;
           selectStorm(stormId);
           showReadout(name ? `${name} selected. Open the panel for details.` : `Storm #${stormId} selected. Open the panel for details.`);
           return;
         }
+        const disaster = (ui.state?.disasters ?? []).filter(record => record.endedHour === undefined).map(record => {
+          const point = r.view.lonLatToPx(record.lon, record.lat);
+          return { record, distance: point ? Math.hypot(point[0] - px, point[1] - py) : Infinity };
+        }).sort((a, b) => a.distance - b.distance)[0];
+        if (disaster && disaster.distance < 18) {
+          closeTrafficPopup();
+          selectDisaster(disaster.record.id);
+          setSidebar(true);
+          return;
+        }
+        const trafficId = r.pickTraffic(px, py);
+        if (trafficId) {
+          selectedTrafficId = trafficId;
+          trafficPopupAt = 0;
+          renderTrafficPopup();
+          return;
+        }
+        closeTrafficPopup();
         const cityId = r.pickCity(px, py);
         if (cityId) { selectCity(cityId); return; }
         ui.selectedCityId = null;
         ui.selectedStormId = null;
+        ui.selectedDisasterId = null;
         showAt(at[0], at[1]);
         renderSidebar();
         refreshOverlay();
       },
       onHover: (px, py) => {
         const at = px === null || py === null ? null : r.view.pxToLonLat(px, py);
+        stage.dataset.trafficHover = String(!!at && px !== null && py !== null && r.pickTraffic(px, py) !== null);
         if (!at) ui.hover = null;
         else {
           ui.hover = { lon: at[0], lat: at[1] };
@@ -1714,9 +2060,12 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         refreshOverlay();
       },
       onInteract: active => {
+        if (active) stage.dataset.trafficHover = 'false';
         if (active) { ui.hover = null; closeSpot(); refreshOverlay(); }
+        if (active) applyPending();
         r.setInteracting(active);
         stage.dataset.interacting = String(active);
+        post({ type: 'interaction', active });
         if (!active) applyPending();
       },
     });
@@ -1754,16 +2103,24 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     if (ev.defaultPrevented || ev.ctrlKey || ev.metaKey) return;
     const t = ev.target instanceof Element ? ev.target : document.body;
     if (t.closest(TYPING) || document.querySelector('dialog[open]')) return;
-    const slot = (TOOL_KEYS as readonly string[]).indexOf(ev.key);
     // Letter shortcuts follow the typed character, falling back to the physical key under a non-Latin layout (Korean, Japanese, Chinese input).
     const letter = /^[a-z]$/i.test(ev.key) ? ev.key.toLowerCase() : /^Key([A-Z])$/.exec(ev.code)?.[1].toLowerCase() ?? '';
+    const slot = ev.altKey || ev.shiftKey ? -1 : (TOOL_KEYS as readonly string[]).indexOf(letter);
     const formationSlot = ev.altKey || ev.shiftKey ? -1 : (FORMATION_KEYS as readonly string[]).indexOf(letter);
     const dir: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
-    if (ev.key === 'Escape') {
+    if (ev.key === 'Tab' && !ev.altKey && ui.latest) {
+      ev.preventDefault();
+      if (!ev.repeat) setSpeed(adjacentTimeSpeed(ui.speed, ev.shiftKey ? -1 : 1));
+    } else if (ev.key === 'Escape') {
       if (ui.tool) { ev.preventDefault(); armTool(null); }
-    } else if (slot >= 0 && slot < TOOLS.length && !ev.altKey) {
+      else if (selectedTrafficId) { ev.preventDefault(); closeTrafficPopup(); }
+    } else if (/^[1-6]$/.test(ev.key) && !ev.altKey) {
+      ev.preventDefault();
+      const n = Number(ev.key) - 1;
+      if (n < TIME_SPEEDS.length) setSpeed(TIME_SPEEDS[n]);
+    } else if (slot >= 0 && slot < CONDITION_GROUPS.length) {
       setPaletteTab('conditions');
-      armTool(TOOLS[slot].type);
+      armPaletteTool(CONDITION_GROUPS[slot][0]);
     } else if (formationSlot >= 0 && formationSlot < FORMATION_TOOLS.length) {
       setPaletteTab('formation');
       armTool(FORMATION_TOOLS[formationSlot].id);
@@ -1771,7 +2128,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       if (t.closest(PRESSABLE)) return;
       ev.preventDefault();
       togglePlay();
-    } else if (ev.key === '+') { ev.preventDefault(); zoomCentre(1.5); } // '-' and '=' select the 11th and 12th conditions
+    } else if (ev.key === '+') { ev.preventDefault(); zoomCentre(1.5); }
     else if (ev.key === '_') { ev.preventDefault(); zoomCentre(1 / 1.5); }
     else if (renderer && dir[ev.key] && (t === stage || !t.closest(ARROW_OWNERS))) {
       const step = ev.altKey ? 0.25 : ev.shiftKey ? 5 : 1;
@@ -1800,19 +2157,23 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   renderCityDetail();
   veil.hidden = false;
   ui.expectSeed = urlSeed ?? randomSeed();
-  post({ type: 'init', seed: ui.expectSeed, startDayOfYear: newStartDay() });
+  if (useLiveWeather) setText(ref('veilText'), 'Loading global weather…');
+  post({ type: 'init', seed: ui.expectSeed, startDayOfYear: newStartDay(), weather: useLiveWeather ? 'live' : 'base' });
 
   let raf = 0;
   const loop = (now: number) => {
     raf = requestAnimationFrame(loop);
     if (!renderer?.isInteracting) applyPending();
     renderer?.frame(now);
+    syncTrafficView(now);
+    if (selectedTrafficId && now - trafficPopupAt > 150) { trafficPopupAt = now; renderTrafficPopup(); }
     if (spotAt) positionSpot();
     if (renderer && now - statsAt > 750) {
       statsAt = now;
       const st = renderer.stats();
       stage.dataset.fps = String(st.fps);
       stage.dataset.particles = String(st.particles);
+      if (st.firstWindReduction) stage.dataset.windFpsBeforeReduction = String(st.firstWindReduction.fpsBefore);
       const note = ref('rendererNote');
       if (renderer.kind === 'webgl' && !st.lost) { note.hidden = !st.reduced; if (st.reduced) setText(note, `Particles reduced to ${fmtInt(st.particles)} to keep the map smooth.`); }
     }
@@ -1826,6 +2187,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       get state() { return ui.latest; },
       /** Map camera; lonLatToPx / pxToLonLat convert between geography and stage pixels. */
       get mapView() { return renderer?.view ?? null; },
+      get renderStats() { return renderer?.stats() ?? null; },
       /** 'globe' or 'flat'. */
       get mapMode() { return renderer?.mode ?? 'none'; },
       get playing() { return ui.playing; },
@@ -1833,7 +2195,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       get renderedTick() { return ui.state?.tick ?? -1; },
       get interacting() { return renderer?.isInteracting ?? false; },
       get renderer() { return renderer?.kind ?? 'none'; },
-      get speeds() { return SPEEDS; },
+      get speed() { return ui.speed; },
     },
   });
 

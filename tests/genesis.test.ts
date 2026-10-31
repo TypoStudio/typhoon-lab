@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { setLanguage, t } from '../src/i18n';
-import { createGame, GENESIS_MAX_STORMS, MAX_ACTIVE_EFFECTS, genesisPotential, intensityTendency, isLand, loadHistoric, placeTool, replayGame, sampleEnvironment, setGenesis, stepGame, TICKS_PER_HOUR } from '../src/simulation/engine';
+import { createGame, EFFECT_STACK_LIMITS, GENESIS_MAX_STORMS, MAX_ACTIVE_EFFECTS, genesisPotential, intensityTendency, isLand, loadHistoric, placeTool, replayGame, sampleEnvironment, setGenesis, stepGame, TICKS_PER_HOUR } from '../src/simulation/engine';
 import { distanceKm, moveKm } from '../src/simulation/geo';
 import { buildReplay, parseReplay } from '../src/ui/storage';
 import type { GameState, Storm, ToolType } from '../src/types';
@@ -125,11 +125,11 @@ describe('natural typhoon formation and weakening conditions', () => {
 
   it('caps negative fields and keeps the fast grid consistent with sampling', () => {
     const s = createGame(); const before = sampleEnvironment(s, 140, 16);
-    for (let i = 0; i < 4; i++) protect(s, 140, 16);
+    for (let i = 0; i < 12; i++) protect(s, 140, 16); // 36 °C of cooling, -36 °C of air heating and -12 m/s of updraft requested: all past the stack limits
     run(s, 6);
     const after = sampleEnvironment(s, 140, 16);
-    expect(after.temperature).toBeCloseTo(before.temperature - 9);
-    expect(after.airHeating).toBe(-6); expect(after.updraft).toBe(-3); expect(after.humidity).toBe(0);
+    expect(after.temperature).toBeCloseTo(before.temperature - EFFECT_STACK_LIMITS.cooling);
+    expect(after.airHeating).toBe(-EFFECT_STACK_LIMITS.air); expect(after.updraft).toBe(-EFFECT_STACK_LIMITS.vertical); expect(after.humidity).toBe(0);
     for (const c of s.grid.filter(c => c.lon >= 137 && c.lon <= 143 && c.lat >= 13 && c.lat <= 19)) {
       const sampled = sampleEnvironment(s, c.lon, c.lat);
       for (const key of ['temperature', 'airTemperature', 'updraft', 'humidity'] as const) expect(c[key]).toBeCloseTo(sampled[key], 9);

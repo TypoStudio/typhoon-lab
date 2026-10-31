@@ -16,9 +16,9 @@ describe('warm air and updraft conditions', () => {
     place(s, ['warm-air', 'warm-air', 'warm-air', 'updraft', 'updraft', 'updraft', 'updraft']);
     run(s, 24);
     const env = sample(s);
-    expect(env.airTemperature - base.airTemperature).toBeCloseTo(6);
-    expect(env.airHeating).toBe(6);
-    expect(env.updraft).toBe(3);
+    expect(env.airTemperature - base.airTemperature).toBeCloseTo(9);
+    expect(env.airHeating).toBe(9);
+    expect(env.updraft).toBe(4);
     expect(env.temperature).toBe(base.temperature);
     expect(env.humidity).toBe(base.humidity);
     expect(env.pressure).toBe(base.pressure);

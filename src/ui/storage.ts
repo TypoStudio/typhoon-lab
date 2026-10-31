@@ -2,7 +2,9 @@ import { SCENARIO } from '../data/world';
 import {
   REPLAY_FILE_VERSION, REPLAY_MAX_ACTIONS, REPLAY_MAX_TICKS, TICKS_PER_HOUR, isValidDayOfYear, isValidSeed, isValidUntilTick, validateActions,
 } from '../simulation/engine';
-import type { ActionRecord, GameState } from '../types';
+import type { ActionRecord, GameState, LiveWeatherSnapshot, TrafficDispatch } from '../types';
+import { isLiveWeatherSnapshot } from '../simulation/live-weather';
+import { MAX_TRAFFIC_DISPATCHES, validateTrafficDispatches } from '../simulation/traffic';
 
 /** `?seed=<uint32>` from a query string; null when absent or not a plain non-negative integer. */
 export function parseSeedParam(search: string): number | null {
@@ -18,22 +20,26 @@ export function randomSeed(): number {
 
 export const REPLAY_FORMAT = 'typhoon-lab-replay';
 export const REPLAY_VERSION = REPLAY_FILE_VERSION;
-/** Room for REPLAY_MAX_ACTIONS pretty-printed placements (about 120 bytes each) plus headers. */
-export const MAX_REPLAY_BYTES = 1_000_000;
+/** Room for placements, the initial five-field weather snapshot and replay headers. */
+export const MAX_REPLAY_BYTES = 2_000_000;
 
 export interface ReplayFile {
   format: typeof REPLAY_FORMAT; formatVersion: number;
   scenarioId: string; version: string; seed: number; untilTick: number; startDayOfYear: number;
-  actions: ActionRecord[]; exportedAt?: string;
+  actions: ActionRecord[]; exportedAt?: string; trafficDispatches?: TrafficDispatch[]; initialWeather?: LiveWeatherSnapshot;
 }
 
 /** Why the world can no longer be exported as a replay, or null when it can. Live play is never limited. */
 export function replayExportProblem(state: GameState): string | null {
+  if (state.traffic.dispatches.length > MAX_TRAFFIC_DISPATCHES) return 'Too many traffic dispatches to export this replay.';
   if (state.tick > REPLAY_MAX_TICKS) {
     return `Replays cover at most ${Math.round(REPLAY_MAX_TICKS / TICKS_PER_HOUR / 24)} model days (tick ${REPLAY_MAX_TICKS}); this world is at tick ${state.tick}. The world keeps running; reset to record a new replay.`;
   }
   if (state.actions.length > REPLAY_MAX_ACTIONS) {
     return `Replays hold at most ${REPLAY_MAX_ACTIONS} placements; this world has ${state.actions.length}. The world keeps running; reset to record a new replay.`;
+  }
+  if ((state.initialWeather || state.traffic.dispatches.length) && new TextEncoder().encode(JSON.stringify(buildReplay(state), null, 2)).length > MAX_REPLAY_BYTES) {
+    return `Replay is larger than ${Math.round(MAX_REPLAY_BYTES / 1000)} kB.`;
   }
   return null;
 }
@@ -47,12 +53,14 @@ export function buildReplay(state: GameState): ReplayFile {
       : a.type === 'climate' ? { tick: a.tick, type: a.type, key: a.key, value: a.value }
       : a.type === 'season' ? { tick: a.tick, type: a.type, dayOfYear: a.dayOfYear }
       : a.type === 'historic' ? { tick: a.tick, type: a.type, typhoonId: a.typhoonId }
-      : { tick: a.tick, type: a.type, lon: a.lon, lat: a.lat }),
+      : { tick: a.tick, type: a.type, lon: a.lon, lat: a.lat, ...(a.formation ? { formation: a.formation } : {}) }),
     exportedAt: new Date().toISOString(),
+    ...(state.initialWeather ? { initialWeather: structuredClone(state.initialWeather) } : {}),
+    ...(state.traffic.dispatches.length ? { trafficDispatches: structuredClone(state.traffic.dispatches) } : {}),
   };
 }
 
-const TOP_KEYS = new Set(['format', 'formatVersion', 'scenarioId', 'version', 'seed', 'untilTick', 'startDayOfYear', 'actions', 'exportedAt']);
+const TOP_KEYS = new Set(['format', 'formatVersion', 'scenarioId', 'version', 'seed', 'untilTick', 'startDayOfYear', 'actions', 'exportedAt', 'trafficDispatches', 'initialWeather']);
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Strictly validates untrusted replay JSON text with the simulation's own limits. */
@@ -71,14 +79,19 @@ export function parseReplay(text: string): { ok: true; replay: ReplayFile } | { 
   if (!isValidSeed(data.seed)) return { ok: false, error: 'Replay seed must be an integer from 0 to 4294967295.' };
   if (!isValidUntilTick(data.untilTick)) return { ok: false, error: `Replay untilTick must be a whole number from 0 to ${REPLAY_MAX_TICKS}.` };
   if (!isValidDayOfYear(data.startDayOfYear)) return { ok: false, error: 'Replay startDayOfYear must be a number from 0 to 366.' };
+  if (data.initialWeather !== undefined && !isLiveWeatherSnapshot(data.initialWeather)) return { ok: false, error: 'Replay starting weather is invalid.' };
   const checked = validateActions(data.actions, data.untilTick);
   if (!checked.ok) return { ok: false, error: checked.reason };
+  const traffic = validateTrafficDispatches(data.trafficDispatches === undefined ? [] : data.trafficDispatches, data.untilTick);
+  if (!traffic.ok) return { ok: false, error: traffic.reason };
   if (data.exportedAt !== undefined && (typeof data.exportedAt !== 'string' || data.exportedAt.length > 40)) return { ok: false, error: 'Replay export time is invalid.' };
   return {
     ok: true,
     replay: {
       format: REPLAY_FORMAT, formatVersion: REPLAY_VERSION, scenarioId: SCENARIO.id, version: SCENARIO.version,
       seed: data.seed, untilTick: data.untilTick, startDayOfYear: data.startDayOfYear, actions: checked.actions, exportedAt: data.exportedAt as string | undefined,
+      ...(traffic.dispatches.length ? { trafficDispatches: traffic.dispatches } : {}),
+      ...(data.initialWeather ? { initialWeather: data.initialWeather as LiveWeatherSnapshot } : {}),
     },
   };
 }

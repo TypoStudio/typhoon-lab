@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { buildFieldData } from '../src/render/fields';
-import { MIN_TRAIL_PX, ParticleSystem, TRAIL_SECONDS } from '../src/render/particles';
-import { MapView } from '../src/render/view';
+import { ParticleSystem, WIND_STREAK_PX, setWindStreakTail } from '../src/render/particles';
+import { KM_PER_DEG_LAT, KM_PER_DEG_LON, MapView } from '../src/render/view';
 import { createGame } from '../src/simulation/engine';
+import { TIME_SPEEDS, windAnimationMultiplier } from '../src/time';
 
 const uniformField = (u: number, v: number) => {
   const state = createGame();
@@ -12,13 +13,13 @@ const uniformField = (u: number, v: number) => {
 const WORLD = { west: -180, east: 180, south: -90, north: 90 };
 
 describe('particle system', () => {
-  it('keeps the head-to-tail length in pixels constant while zooming', () => {
+  it('keeps projected streak speed consistent while zooming', () => {
     const field = uniformField(12, 5);
     const particles = new ParticleSystem();
     particles.resize(1);
     const tail = new Float64Array(2);
     const lengths: number[] = [];
-    for (const zoom of [1, 3, 9]) {
+    for (const zoom of [1, 2, 3]) {
       const view = new MapView();
       view.resize(1200, 800);
       view.setHome(130, 10, 30);
@@ -28,20 +29,71 @@ describe('particle system', () => {
       particles.tailLonLat(0, tail);
       const head = view.projectZ(130, 10);
       const end = view.projectZ(tail[0], tail[1]);
-      lengths.push(Math.hypot(head[0] - end[0], head[1] - end[1]));
+      const drawn = new Float64Array(2);
+      setWindStreakTail(head[0], head[1], end[0], end[1], drawn);
+      lengths.push(Math.hypot(head[0] - drawn[0], head[1] - drawn[1]));
     }
-    expect(lengths[0]).toBeGreaterThan(MIN_TRAIL_PX);
+    expect(lengths[0]).toBeCloseTo(WIND_STREAK_PX);
     expect(lengths[1] / lengths[0]).toBeCloseTo(1, 1);
     expect(lengths[2] / lengths[0]).toBeCloseTo(1, 1);
   });
 
-  it('stretches the streak and reports a blizzard factor inside a blizzard cell', () => {
+  it('restores the initial wind display speed across real-time frames', () => {
+    const field = uniformField(20, 0), particles = new ParticleSystem();
+    const scale = 100;
+    particles.resize(1); particles.life[0] = 100; particles.lon[0] = 140; particles.lat[0] = 0;
+    for (let i = 0; i < 60; i++) particles.update(1 / 60, field, WORLD, scale);
+    const expected = 20 * 2.4 / scale * KM_PER_DEG_LAT / KM_PER_DEG_LON;
+    expect(particles.lon[0] - 140).toBeCloseTo(expected, 6);
+    expect(particles.lat[0]).toBe(0);
+  });
+
+  it('holds the initial speed per screen pixel and limits exceptionally fast winds', () => {
+    const particles = new ParticleSystem(); particles.resize(1); particles.life[0] = 100;
+    for (const scale of [1, 10, 100]) {
+      particles.lon[0] = 140; particles.lat[0] = 0; particles.age[0] = 0;
+      particles.update(0.1, uniformField(20, 0), WORLD, scale);
+      expect(particles.vLon[0] * scale * KM_PER_DEG_LON / KM_PER_DEG_LAT).toBeCloseTo(48, 4);
+      particles.update(0, uniformField(1000, 0), WORLD, scale);
+      expect(particles.vLon[0] * scale * KM_PER_DEG_LON / KM_PER_DEG_LAT).toBeCloseTo(500, 4);
+    }
+  });
+
+  it('caps wind movement at the third time-speed step', () => {
+    const field = uniformField(20, 0);
+    const distances = TIME_SPEEDS.map(speed => {
+      const particles = new ParticleSystem();
+      particles.resize(1); particles.life[0] = 100; particles.age[0] = 0; particles.lon[0] = 140; particles.lat[0] = 0;
+      particles.update(0.1, field, WORLD, 100, undefined, undefined, windAnimationMultiplier(speed));
+      expect(particles.age[0]).toBeCloseTo(0.1);
+      return particles.lon[0] - 140;
+    });
+    const expectedMultipliers = [1, 2, 3, 3, 3, 3];
+    distances.forEach((distance, index) => expect(distance / distances[0]).toBeCloseTo(expectedMultipliers[index], 5));
+  });
+
+  it('pauses particle motion and lifetime and resumes at the same speed', () => {
+    const field = uniformField(0, 30), particles = new ParticleSystem();
+    particles.resize(1); particles.life[0] = 100; particles.lon[0] = 140; particles.lat[0] = 10;
+    particles.update(1, field, WORLD, 10);
+    expect(particles.lat[0] - 10).toBeCloseTo(7.2, 5);
+    particles.paused = true;
+    const before = { lon: particles.lon[0], lat: particles.lat[0], age: particles.age[0] };
+    particles.update(10, field, WORLD, 10);
+    expect({ lon: particles.lon[0], lat: particles.lat[0], age: particles.age[0] }).toEqual(before);
+    particles.paused = false;
+    particles.update(1, field, WORLD, 10);
+    expect(particles.lat[0] - before.lat).toBeCloseTo(7.2, 5);
+  });
+
+  it('reports a blizzard factor without lengthening the streak', () => {
     const tailLength = (blizzard: number) => {
-      const field = uniformField(12, 0);
+      const field = uniformField(20, 0);
       const k = field.cols * Math.floor(field.rows / 2) + Math.floor(field.cols / 2);
       const lon = -180 + (Math.floor(field.cols / 2) + 0.5) * (360 / field.cols);
       const lat = -90 + (Math.floor(field.rows / 2) + 0.5) * (180 / field.rows);
-      field.snow[k] = 10; field.blizzardF[k] = blizzard; field.blizzard[k] = blizzard;
+      field.rain[k] = 10; field.airTemperature[k] = blizzard ? -5 : 5;
+      field.snow[k] = blizzard ? 10 : 0; field.blizzardF[k] = blizzard; field.blizzard[k] = blizzard;
       const particles = new ParticleSystem();
       particles.resize(1);
       particles.lon[0] = lon; particles.lat[0] = lat; particles.life[0] = 100; particles.age[0] = 0;
@@ -55,10 +107,22 @@ describe('particle system', () => {
     expect(storm.factor).toBeCloseTo(1, 5);
     expect(calm.factor).toBe(0);
     expect(storm.snow).toBeCloseTo(0.5, 5);
-    expect(storm.len / calm.len).toBeCloseTo(2.0, 3);
+    expect(storm.len / calm.len).toBeCloseTo(1.0, 3);
   });
 
-  it('seeds a share of respawning particles inside blizzard cells', () => {
+  it('seeds equally in strong and calm wind', () => {
+    const state = createGame(1);
+    for (const cell of state.grid) { cell.u = cell.lon >= 0 ? 35 : 0; cell.v = 0; cell.blizzard = false; }
+    const field = buildFieldData(state.grid)!;
+    const particles = new ParticleSystem();
+    particles.resize(4000); particles.life.fill(0); particles.age.fill(0);
+    particles.update(0.001, field, { west: -20, east: 20, south: -10, north: 10 }, 10);
+    const strong = Array.from(particles.lon).filter(lon => lon >= 0).length;
+    expect(strong / particles.count).toBeGreaterThan(0.47);
+    expect(strong / particles.count).toBeLessThan(0.53);
+  });
+
+  it('does not concentrate wind particles inside blizzard cells', () => {
     const shareInCell = (withBlizzard: boolean) => {
       const field = uniformField(0, 0);
       const col = 120; const row = 60;
@@ -77,16 +141,15 @@ describe('particle system', () => {
     const calm = shareInCell(false);
     const storm = shareInCell(true);
     expect(calm.share).toBeLessThan(0.02);
-    expect(storm.share).toBeGreaterThan(0.06);
-    expect(storm.minLife).toBeLessThan(2.2 * 0.8 + 0.5);
-    expect(storm.minLife).toBeLessThan(calm.minLife);
+    expect(storm.share).toBe(calm.share);
+    expect(storm.minLife).toBe(calm.minLife);
   });
 
   it('wraps eastward motion across the dateline', () => {
     const field = uniformField(10, 0);
     const particles = new ParticleSystem();
     particles.resize(1);
-    particles.lon[0] = 179.9; particles.lat[0] = 0; particles.life[0] = 100; particles.age[0] = 0;
+    particles.lon[0] = 179.999999; particles.lat[0] = 0; particles.life[0] = 100; particles.age[0] = 0;
     particles.update(0.1, field, WORLD, 1);
     expect(particles.lon[0]).toBeLessThan(-170);
     expect(particles.lon[0]).toBeGreaterThanOrEqual(-180);
@@ -134,7 +197,7 @@ describe('particle system', () => {
     expect(particles.lon[0]).toBeGreaterThan(0);
   });
 
-  it('tailLonLat equals head minus velocity times the trail time', () => {
+  it('the geographic direction probe follows the wind velocity', () => {
     const field = uniformField(8, -6);
     const particles = new ParticleSystem();
     particles.resize(1);
@@ -142,8 +205,9 @@ describe('particle system', () => {
     particles.update(0, field, WORLD, 3);
     const tail = new Float64Array(2);
     particles.tailLonLat(0, tail);
-    expect(tail[0]).toBeCloseTo(particles.lon[0] - particles.vLon[0] * TRAIL_SECONDS, 6);
-    expect(tail[1]).toBeCloseTo(particles.lat[0] - particles.vLat[0] * TRAIL_SECONDS, 6);
+    const dx = particles.lon[0] - tail[0], dy = particles.lat[0] - tail[1];
+    expect(Math.hypot(dx, dy)).toBeCloseTo(0.001, 8);
+    expect(dx / dy).toBeCloseTo(particles.vLon[0] / particles.vLat[0], 6);
     expect(tail[0]).toBeLessThan(particles.lon[0]);
     expect(tail[1]).toBeGreaterThan(particles.lat[0]);
   });

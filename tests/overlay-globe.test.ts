@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CITIES } from '../src/data/world';
 import { placeName } from '../src/data/places';
 import { seaName } from '../src/data/seas';
@@ -11,13 +11,13 @@ import { visiblePlaces } from '../src/render/places';
 import { visibleSeas } from '../src/render/seas';
 import type { Theme } from '../src/render/theme';
 import { FlatView } from '../src/render/view';
-import { createGame } from '../src/simulation/engine';
-import type { GameState, MapOverlays, Storm } from '../src/types';
+import { createGame, TOOLS } from '../src/simulation/engine';
+import type { Effect, GameState, MapOverlays, Storm } from '../src/types';
 
 const W = 1440;
 const H = 900;
 
-interface Call { name: string; args: unknown[]; align?: unknown }
+interface Call { name: string; args: unknown[]; align?: unknown; alpha?: unknown }
 
 /** A recording stand-in for CanvasRenderingContext2D: every method call is logged, assignments are remembered. */
 function recorder() {
@@ -27,7 +27,7 @@ function recorder() {
     get(_, key: string) {
       if (key in store) return store[key];
       if (key === 'measureText') return (text: string) => ({ width: text.length * 6 });
-      return (...args: unknown[]) => { calls.push({ name: key, args, align: store.textAlign }); };
+      return (...args: unknown[]) => { calls.push({ name: key, args, align: store.textAlign, alpha: store.globalAlpha }); };
     },
     set(_, key: string, value) { store[key] = value; return true; },
   }) as unknown as CanvasRenderingContext2D;
@@ -59,7 +59,112 @@ const mkStorm = (id: number, lon: number, lat: number, extra: Partial<Storm> = {
   ageHours: 100, peakWind: 40, track: [], forecast: [], history: [], damageScore: 0, windDelta: 0, ...extra,
 });
 const stateWith = (patch: Partial<GameState>): GameState => ({ storms: [], stormArchive: [], thunderstorms: [], candidates: [], effects: [], cities: [], ...patch }) as unknown as GameState;
-const NO_LAYERS: MapOverlays = { wind: false, humidity: false, rain: false, pressure: false, temperature: false, population: false };
+const NO_LAYERS: MapOverlays = { wind: false, humidity: false, rain: false, pressure: false, temperature: false, population: false, ships: false, planes: false };
+
+describe('placed condition markers', () => {
+  const effect: Effect = { id: 1, type: 'moisture', lon: 150, lat: 20, radiusKm: 500, remainingHours: 144, ageHours: 0 };
+
+  it.each([['flat', flat], ['globe', globe]] as const)('shrinks and fades after one real second on the %s map, including while paused with reduced motion', (_kind, makeView) => {
+    const view = makeView();
+    const t = setup(view);
+    t.painter.reducedMotion = true;
+    let glyphAlpha = 0;
+    vi.spyOn(t.painter, 'glyph').mockImplementation(() => { glyphAlpha = t.ctx.globalAlpha; });
+    const draw = (now: number, tick: number) => {
+      t.calls.length = 0;
+      t.painter.draw(view, stateWith({ seed: 7, tick, effects: [{ ...effect }] }), NO_LAYERS, EMPTY_OVERLAY, null, now);
+      const scale = t.calls.filter(c => c.name === 'scale').at(-1)?.args;
+      const labelAlpha = t.calls.find(c => c.name === 'fillText' && c.args[0] === '144h')?.alpha;
+      return { scale, glyphAlpha, labelAlpha };
+    };
+    expect(draw(10_000, 50)).toEqual({ scale: [1, 1], glyphAlpha: 0.95, labelAlpha: 1 });
+    // A new worker snapshot keeps the timer; pausing the tick does not stop it.
+    expect(draw(10_999, 51)).toEqual({ scale: [1, 1], glyphAlpha: 0.95, labelAlpha: 1 });
+    expect(draw(11_000, 51)).toEqual({ scale: [0.75, 0.75], glyphAlpha: 0.76, labelAlpha: 0.8 });
+  });
+
+  it('gives each drop its own delay and clears old timers when conditions disappear or the world resets', () => {
+    const view = flat();
+    const t = setup(view);
+    t.painter.reducedMotion = true;
+    const alphas: number[] = [];
+    vi.spyOn(t.painter, 'glyph').mockImplementation(() => { alphas.push(t.ctx.globalAlpha); });
+    const draw = (now: number, effects: Effect[], seed = 7, tick = 50) => {
+      alphas.length = 0;
+      t.painter.draw(view, stateWith({ seed, tick, effects }), NO_LAYERS, EMPTY_OVERLAY, null, now);
+      return [...alphas];
+    };
+    expect(draw(100, [effect])).toEqual([0.95]);
+    expect(draw(1100, [effect, { ...effect, id: 2 }])).toEqual([0.76, 0.95]);
+    draw(1200, []);
+    expect(draw(1300, [effect])).toEqual([0.95]);
+    expect(draw(2300, [effect])).toEqual([0.76]);
+    expect(draw(2400, [effect], 8)).toEqual([0.95]);
+    expect(draw(3400, [effect], 8)).toEqual([0.76]);
+    expect(draw(3500, [effect], 8, 0)).toEqual([0.95]);
+  });
+
+  it.each([['flat', flat], ['globe', globe]] as const)('restores the original marker on hover or touch on the %s map, including with an armed tool', (_kind, makeView) => {
+    const view = makeView();
+    const t = setup(view);
+    t.painter.reducedMotion = true;
+    const state = stateWith({ seed: 7, tick: 50, effects: [effect] });
+    let glyphAlpha = 0;
+    vi.spyOn(t.painter, 'glyph').mockImplementation(() => { glyphAlpha = t.ctx.globalAlpha; });
+    t.painter.draw(view, state, NO_LAYERS, EMPTY_OVERLAY, null, 100);
+    for (const tool of [null, TOOLS[0]]) {
+      t.calls.length = 0;
+      t.painter.draw(view, state, NO_LAYERS, { ...EMPTY_OVERLAY, tool, hover: { lon: effect.lon, lat: effect.lat } }, null, 1100);
+      expect(glyphAlpha).toBe(0.95);
+      expect(t.calls.filter(c => c.name === 'scale').at(-1)?.args).toEqual([1, 1]);
+      expect(t.calls.find(c => c.name === 'fillText' && c.args[0] === '144h')?.alpha).toBe(1);
+    }
+    t.calls.length = 0;
+    t.painter.draw(view, state, NO_LAYERS, { ...EMPTY_OVERLAY, hover: { lon: 170, lat: 20 } }, null, 1200);
+    expect(glyphAlpha).toBe(0.76);
+    expect(t.calls.filter(c => c.name === 'scale').at(-1)?.args).toEqual([0.75, 0.75]);
+  });
+
+  it.each([['flat', flat], ['globe', globe]] as const)('animates both directions on the %s map and reverses smoothly mid-flight', (_kind, makeView) => {
+    const view = makeView();
+    const t = setup(view);
+    const state = stateWith({ seed: 7, tick: 50, effects: [effect] });
+    const draw = (clockNow: number, hovered = false) => {
+      t.calls.length = 0;
+      t.painter.draw(view, state, NO_LAYERS, { ...EMPTY_OVERLAY, hover: hovered ? { lon: effect.lon, lat: effect.lat } : null }, null, 0, null, clockNow);
+      const [scale] = t.calls.filter(c => c.name === 'scale').at(-1)!.args as number[];
+      return scale;
+    };
+    expect(draw(1000)).toBe(1);
+    expect(draw(1999)).toBe(1);
+    expect(draw(2000)).toBe(1); // the transition begins after the one-second delay
+    const partway = draw(2060);
+    expect(partway).toBeGreaterThan(0.75);
+    expect(partway).toBeLessThan(1);
+    expect(draw(2060, true)).toBe(partway); // reversing does not jump
+    expect(draw(2180, true)).toBeGreaterThan(partway);
+    expect(draw(2300, true)).toBe(1);
+    expect(draw(2300)).toBe(1);
+    expect(draw(2420)).toBeCloseTo(0.875);
+    expect(draw(2540)).toBe(0.75);
+    expect(draw(2540, true)).toBe(0.75);
+    expect(draw(2660, true)).toBeCloseTo(0.875);
+    expect(draw(2780, true)).toBe(1);
+  });
+
+  it('draws live storms above placed markers and the dragged tool preview', () => {
+    const view = flat();
+    const t = setup(view);
+    const order: string[] = [];
+    for (const method of ['effect', 'targetPreview', 'thunderstorm', 'storm']) t.priv[method] = () => { order.push(method); };
+    const state = stateWith({
+      effects: [effect], storms: [mkStorm(1, 150, 20)],
+      thunderstorms: [{ id: 2, lon: 150, lat: 20, intensity: 1, radiusKm: 20, gustMs: 15, cloudTopC: -40, ageHours: 1, durationHours: 4 }],
+    });
+    t.painter.draw(view, state, NO_LAYERS, { ...EMPTY_OVERLAY, tool: TOOLS[0], target: { lon: 150, lat: 20 }, dragging: true }, null, 100);
+    expect(order).toEqual(['effect', 'targetPreview', 'thunderstorm', 'storm']);
+  });
+});
 
 /** Every coordinate pair of moveTo/lineTo lies on the disc (within a pixel). */
 function pathInsideDisc(calls: Call[], g: GlobeView): boolean {

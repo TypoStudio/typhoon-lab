@@ -8,13 +8,16 @@ import { seaName } from '../data/seas';
 import { cityLabel, getLanguage, t as translate } from '../i18n';
 import { stageChanges, stormGradeLabel, stormOutcome } from '../storm-info';
 import { GENESIS_HOURS, stageRank } from '../simulation/engine';
+import { estimateCityDamage } from '../simulation/damage-news';
+import { fmtMoneyCompact } from '../ui/dom';
+import { drawTraffic, type TrafficCounts, type TrafficMarker } from './traffic';
+import { drawWeatherHazards } from './weather-hazards';
 import type { Effect, GameState, GeoPoint, MapOverlays, Storm, StormRecord, Thunderstorm, ToolDefinition, ToolType } from '../types';
-import { sampleGrid, type Contours, type FieldData, type Isobar } from './fields';
+import { type Contours, type FieldData, type Isobar } from './fields';
 import { geoToUnit, type MapCamera } from './camera';
 import { each, geoPolyline, geoPolylineLL, groundCircle, isGlobe, segmentsUnit, unitCache } from './geo-draw';
 import { COAST_THIN_ZOOM, COAST_TIER_MIN_ZOOM, LAKE_TIER_MIN_ZOOM, RIVER_LABEL_MIN_ZOOM, RIVER_TIER_MIN_ZOOM, visibleTierCount } from './detail';
 import { coastTierSegments, coastTierSegmentsLonLat, riverTierSegments, riverTierSegmentsLonLat, type CoastTiers } from './geometry';
-import { HEX_BUCKETS, HEX_MIN_RAIN, blurRadiusFor, hexAlpha, hexBucket, hexBucketRain, hexCentres, hexCorners, hexRadius } from './hexes';
 import { cityLabelEligible, minPopForDot, visiblePlaces, webZoom } from './places';
 import { visibleLakes, visibleSeas } from './seas';
 import type { GlobeView } from './globe-view';
@@ -57,6 +60,7 @@ export const DEFAULT_LABELS: Readonly<MapLabels> = { cities: true, isobars: true
 export const EMPTY_OVERLAY: MapOverlay = { tool: null, target: null, dragging: false, hover: null, selectedCityId: null, selectedStormId: null, showRecordedPaths: true, rightInset: 0 };
 
 const TAU = Math.PI * 2;
+const EFFECT_RESIZE_MS = 240;
 /** Scratch projections for picking and hover tests. */
 const P = new Float64Array(3);
 const Q = new Float64Array(3);
@@ -99,6 +103,7 @@ const REFERENCE_PARALLELS = [
 ] as const;
 
 export class OverlayPainter {
+  trafficCounts: TrafficCounts = { ships: 0, planes: 0, diverted: 0 };
   private readonly ctx: CanvasRenderingContext2D;
   private dpr = 1;
   private w = 1;
@@ -113,9 +118,11 @@ export class OverlayPainter {
   /** Whole isobars as unit vectors (xyz per vertex), for the globe. */
   private readonly isobarUnits = new WeakMap<Isobar, Float32Array>();
   private readonly occ = new LabelOccupancy();
-  private hexR = 0;
-  private hexOffsets: Float32Array = new Float32Array(12);
-  private hexCanvas: OffscreenCanvas | HTMLCanvasElement | null = null;
+  /** Real frame time when a placed condition first appeared, independent of simulation speed. */
+  private readonly effectPlacedAt = new Map<number, number>();
+  private readonly effectScale = new Map<number, { from: number; to: number; startedAt: number }>();
+  private effectSeed: number | undefined;
+  private effectTick = 0;
   reducedMotion = false;
 
   constructor(readonly canvas: HTMLCanvasElement, private readonly theme: Theme) {
@@ -163,7 +170,7 @@ export class OverlayPainter {
 
   // ---- drawing -----------------------------------------------------------------------------
 
-  draw(view: MapCamera, state: GameState | null, overlays: MapOverlays, overlay: MapOverlay, contours: Contours | null, now: number, field: FieldData | null = null): void {
+  draw(view: MapCamera, state: GameState | null, overlays: MapOverlays, overlay: MapOverlay, contours: Contours | null, now: number, _field: FieldData | null = null, clockNow = now, traffic: readonly TrafficMarker[] = [], thunderstorms: readonly Thunderstorm[] = state?.thunderstorms ?? []): void {
     const { ctx, w, h } = this;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
@@ -173,10 +180,11 @@ export class OverlayPainter {
     const labels = { ...DEFAULT_LABELS, ...overlay.labels };
     this.occ.clear();
 
-    // Bottom to top: reference lines, coast, cities and places, sea names, isobars, weather, tracks, storms, history, target preview, outline.
+    // Bottom to top: reference lines, coast, cities and places, sea names, isobars, tracks, effects, history, target preview, storms, outline.
     this.graticule(view);
     this.referenceParallels(view);
     this.coastline(view);
+    if (state?.weatherHazards?.length) drawWeatherHazards(ctx, view, state.weatherHazards, this.theme.font, this.theme.paper);
     // Pass 1: reference-parallel, storm and isobar labels claim their rectangles first, without drawing, so cities and places yield to them.
     const parallelLabels = this.referenceParallelLabelLayout(view, overlay.rightInset);
     const spots = state ? state.storms.map(s => this.stormLayout(view, s, s.id === overlay.selectedStormId)) : [];
@@ -189,23 +197,35 @@ export class OverlayPainter {
     this.places(view, labels.cities);
     // Pass 3: everything that draws over the cities.
     this.drawReferenceParallelLabels(parallelLabels);
-    if (overlays.rain && field) this.rainHexes(view, field, overlay.rightInset);
     if (overlays.pressure && contours) { this.isobars(view, contours); this.drawIsobarLabels(isobarLabels); }
+    this.trafficCounts = drawTraffic(ctx, view, traffic, overlays);
+    if (!state || state.seed !== this.effectSeed || state.tick < this.effectTick) {
+      this.effectPlacedAt.clear();
+      this.effectScale.clear();
+    }
+    this.effectSeed = state?.seed;
+    this.effectTick = state?.tick ?? 0;
     if (state) {
-      for (const storm of state.thunderstorms) this.thunderstorm(view, storm);
+      const ids = new Set(state.effects.map(e => e.id));
+      for (const id of this.effectPlacedAt.keys()) if (!ids.has(id)) {
+        this.effectPlacedAt.delete(id);
+        this.effectScale.delete(id);
+      }
       if (overlay.showRecordedPaths && labels.recordedPaths) for (const s of state.storms) this.recordedPath(view, s);
       for (const s of state.storms) { this.forecast(view, s); this.track(view, s, s.id === overlay.selectedStormId); }
       for (const e of state.effects) {
         let hovered = false;
-        if (!overlay.tool && overlay.hover !== null) {
+        if (overlay.hover !== null) {
           view.projectZ(e.lon, e.lat, P);
           view.projectZ(overlay.hover.lon, overlay.hover.lat, Q);
           hovered = P[2] > 0 && Math.hypot(P[0] - Q[0], P[1] - Q[1]) <= 22;
         }
-        this.effect(view, e, hovered);
+        const placedAt = this.effectPlacedAt.get(e.id) ?? clockNow;
+        this.effectPlacedAt.set(e.id, placedAt);
+        const scale = this.markerScale(e.id, clockNow - placedAt >= 1000 && !hovered ? 0.75 : 1, clockNow);
+        this.effect(view, e, hovered && !overlay.tool, scale);
       }
       for (const c of state.candidates) this.candidate(view, c.lon, c.lat, c.progressHours, tm);
-      state.storms.forEach((s, i) => this.storm(view, s, s.id === overlay.selectedStormId, tm, spots[i]));
     }
     const record = state?.stormArchive.find(s => s.id === overlay.selectedStormId);
     if (record) { this.track(view, record, true); this.history(view, record, overlay.rightInset); }
@@ -213,70 +233,12 @@ export class OverlayPainter {
       if (overlay.target) this.targetPreview(view, overlay, tm);
     }
     if (overlay.tutorialTarget) this.tutorialMarker(view, overlay.tutorialTarget, tm);
+    // Live systems stay above placed icons and the armed/dragged tool preview.
+    if (state) {
+      for (const storm of thunderstorms) this.thunderstorm(view, storm);
+      state.storms.forEach((s, i) => this.storm(view, s, s.id === overlay.selectedStormId, tm, spots[i]));
+    }
     if (isGlobe(view)) this.limb(view); else this.outline(view);
-  }
-
-  /** Offscreen canvas for the hexagon tiling, kept at the overlay's backing-store size. */
-  private hexLayer(): { canvas: OffscreenCanvas | HTMLCanvasElement; g: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D } | null {
-    const pw = Math.round(this.w * this.dpr);
-    const ph = Math.round(this.h * this.dpr);
-    this.hexCanvas ??= typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(pw, ph) : document.createElement('canvas');
-    const canvas = this.hexCanvas;
-    if (canvas.width !== pw || canvas.height !== ph) { canvas.width = pw; canvas.height = ph; }
-    const g = canvas.getContext('2d');
-    return g ? { canvas, g } : null;
-  }
-
-  /** Rain and snow as a screen-space hexagon tiling, one fill per intensity bucket and kind, drawn offscreen then blurred onto the overlay. */
-  private rainHexes(view: MapCamera, field: FieldData, rightInset: number): void {
-    const layer = this.hexLayer();
-    if (!layer) return;
-    const { ctx } = this;
-    const g = layer.g;
-    g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    g.clearRect(0, 0, this.w, this.h);
-    const R = hexRadius(view.width);
-    if (this.hexR !== R) { this.hexR = R; this.hexOffsets = hexCorners(R); }
-    const centres = hexCentres(this.w - Math.max(0, rightInset), this.h, R);
-    const n = centres.length / 2;
-    // Bucket per hexagon: snow buckets follow the rain ones; 255 = no hexagon.
-    const slot = new Uint8Array(n).fill(255);
-    for (let i = 0; i < n; i++) {
-      const at = view.pxToLonLat(centres[2 * i], centres[2 * i + 1]);
-      if (!at) continue;
-      const rain = sampleGrid(field, field.rain, at[0], at[1]);
-      if (rain < HEX_MIN_RAIN) continue;
-      slot[i] = hexBucket(rain) + (sampleGrid(field, field.snow, at[0], at[1]) > 0 ? HEX_BUCKETS : 0);
-    }
-    const c = this.hexOffsets;
-    const rgb = new Uint8Array(3);
-    for (let s = 0; s < 2 * HEX_BUCKETS; s++) {
-      const snow = s >= HEX_BUCKETS;
-      const rain = hexBucketRain(s % HEX_BUCKETS);
-      g.beginPath();
-      let any = false;
-      for (let i = 0; i < n; i++) {
-        if (slot[i] !== s) continue;
-        any = true;
-        const x = centres[2 * i];
-        const y = centres[2 * i + 1];
-        g.moveTo(x + c[0], y + c[1]);
-        for (let k = 1; k < 6; k++) g.lineTo(x + c[2 * k], y + c[2 * k + 1]);
-        g.closePath();
-      }
-      if (!any) continue;
-      (snow ? this.theme.ramps.snow : this.theme.ramps.rain).at(rain, rgb, 0);
-      g.fillStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${hexAlpha(rain, snow).toFixed(3)})`;
-      g.fill();
-    }
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    const blur = 'filter' in ctx;
-    if (blur) ctx.filter = `blur(${(blurRadiusFor(R) * this.dpr).toFixed(2)}px)`;
-    ctx.globalAlpha = 1;
-    ctx.drawImage(layer.canvas, 0, 0);
-    if (blur) ctx.filter = 'none';
-    ctx.restore();
   }
 
   /** Ordinary graticule: meridians are curves (sampled every 2° of latitude); parallels are straight in Equal Earth. */
@@ -858,7 +820,24 @@ export class OverlayPainter {
     ctx.restore();
   }
 
-  private effect(view: MapCamera, effect: Effect, hovered: boolean): void {
+  /** Reverses a size change from its current position when the pointer moves mid-animation. */
+  private markerScale(id: number, target: number, now: number): number {
+    const previous = this.effectScale.get(id);
+    if (this.reducedMotion || !previous) {
+      this.effectScale.set(id, { from: target, to: target, startedAt: now });
+      return target;
+    }
+    const progress = Math.max(0, Math.min(1, (now - previous.startedAt) / EFFECT_RESIZE_MS));
+    const eased = progress * progress * (3 - 2 * progress);
+    const current = previous.from + (previous.to - previous.from) * eased;
+    if (previous.to !== target) {
+      this.effectScale.set(id, { from: current, to: target, startedAt: now });
+      return current;
+    }
+    return current;
+  }
+
+  private effect(view: MapCamera, effect: Effect, hovered: boolean, scale: number): void {
     const { ctx, theme } = this;
     const { type, lon, lat, remainingHours: remaining } = effect;
     const [rx] = view.kmRadiiPx(effect.radiusKm, lat);
@@ -876,11 +855,14 @@ export class OverlayPainter {
         ctx.beginPath(); groundCircle(view, ctx, lon, lat, effect.radiusKm, 'stroke'); ctx.stroke();
         ctx.setLineDash([]);
       }
-      ctx.globalAlpha = 0.95 * a;
-      this.glyph(type, x, y, 8, color, lat < 0);
+      const opacity = 0.8 + (scale - 0.75) * 0.8;
+      ctx.translate(x, y);
+      ctx.scale(scale, scale);
+      ctx.globalAlpha = 0.95 * opacity * a;
+      this.glyph(type, 0, 0, 8, color, lat < 0);
       ctx.font = `600 10px ${theme.mono}`;
       ctx.textAlign = 'center';
-      this.halo(`${Math.ceil(remaining)}h`, x, y + 22, color, a);
+      this.halo(`${Math.ceil(remaining)}h`, 0, 22, color, opacity * a);
       ctx.restore();
     });
   }
@@ -894,8 +876,7 @@ export class OverlayPainter {
     ctx.lineWidth = 1.7;
     ctx.lineCap = 'round';
     if (type === 'warm' || type === 'cool') {
-      if (type === 'cool') { ctx.translate(x, y); ctx.scale(1, -1); ctx.translate(-x, -y); }
-      for (const dy of [-0.5, 0.3, 1.1]) {
+      for (const dy of [0.55, 1.1]) {
         ctx.beginPath();
         for (let i = 0; i <= 8; i++) {
           const px = x - size + (i / 8) * size * 2;
@@ -904,11 +885,23 @@ export class OverlayPainter {
         }
         ctx.stroke();
       }
-      ctx.beginPath(); ctx.moveTo(x, y - size * 1.35); ctx.lineTo(x - 4, y - size * 0.85); ctx.moveTo(x, y - size * 1.35); ctx.lineTo(x + 4, y - size * 0.85); ctx.stroke();
+      ctx.beginPath(); ctx.roundRect(x - size * 0.2, y - size * 1.3, size * 0.4, size * 1.45, size * 0.2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y + size * 0.12, size * 0.37, 0, TAU); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x, y - size * (type === 'warm' ? 0.85 : 0.4)); ctx.lineTo(x, y + size * 0.15); ctx.stroke();
+      if (type === 'warm') {
+        const px = x + size * 0.75, py = y - size * 0.7, arm = size * 0.22;
+        ctx.beginPath(); ctx.moveTo(px - arm, py); ctx.lineTo(px + arm, py);
+        ctx.moveTo(px, py - arm); ctx.lineTo(px, py + arm); ctx.stroke();
+      }
     } else if (type === 'warm-air' || type === 'cold-air') {
       ctx.beginPath(); ctx.arc(x, y + size * 0.65, size * 0.45, 0, TAU); ctx.stroke();
       ctx.beginPath(); ctx.roundRect(x - size * 0.22, y - size, size * 0.44, size * 1.35, size * 0.2); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(x, y - size * 0.45); ctx.lineTo(x, y + size * 0.65); ctx.stroke();
+      if (type === 'warm-air') {
+        const px = x + size * 0.75, py = y - size * 0.5, arm = size * 0.22;
+        ctx.beginPath(); ctx.moveTo(px - arm, py); ctx.lineTo(px + arm, py);
+        ctx.moveTo(px, py - arm); ctx.lineTo(px, py + arm); ctx.stroke();
+      }
     } else if (type === 'updraft' || type === 'downdraft') {
       if (type === 'downdraft') { ctx.translate(x, y); ctx.scale(1, -1); ctx.translate(-x, -y); }
       for (const dx of [-0.8, 0, 0.8]) {
@@ -937,6 +930,15 @@ export class OverlayPainter {
       ctx.bezierCurveTo(x - size * 0.75, y + size * 1.05, x - size * 1.1, y + size * 0.1, x, y - size * 1.1);
       ctx.stroke();
       if (type === 'dry') { ctx.beginPath(); ctx.moveTo(x - size, y + size); ctx.lineTo(x + size, y - size); ctx.stroke(); }
+    } else if (type === 'unstable-air' || type === 'stable-air') {
+      if (type === 'stable-air') {
+        for (const dy of [-0.75, 0, 0.75]) { ctx.beginPath(); ctx.moveTo(x - size, y + dy * size); ctx.lineTo(x + size, y + dy * size); ctx.stroke(); }
+      } else {
+        for (const dx of [-0.7, 0, 0.7]) {
+          const sx = x + dx * size;
+          ctx.beginPath(); ctx.moveTo(sx, y + size); ctx.bezierCurveTo(sx - 4, y + size * 0.4, sx + 4, y - size * 0.4, sx, y - size); ctx.stroke();
+        }
+      }
     } else {
       // Lows turn counter-clockwise and highs clockwise in the north; the south is reversed.
       const ccw = (type === 'low') !== southern;
@@ -989,6 +991,33 @@ export class OverlayPainter {
 
   private thunderstorm(view: MapCamera, storm: Thunderstorm): void {
     const { ctx, theme } = this;
+    if (storm.tornadoTrack && storm.tornadoTrack.length > 1) {
+      ctx.save();
+      ctx.strokeStyle = theme.warn;
+      ctx.globalAlpha = storm.tornado ? 0.75 : 0.4;
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([5, 3]);
+      ctx.beginPath();
+      let run: [number, number][] = [];
+      const drawRun = () => {
+        if (!run.length) return;
+        ctx.moveTo(run[0][0], run[0][1]);
+        for (let i = 1; i < run.length - 1; i++) {
+          ctx.quadraticCurveTo(run[i][0], run[i][1], (run[i][0] + run[i + 1][0]) / 2, (run[i][1] + run[i + 1][1]) / 2);
+        }
+        if (run.length > 1) ctx.lineTo(run[run.length - 1][0], run[run.length - 1][1]);
+        run = [];
+      };
+      for (const point of storm.tornadoTrack) {
+        const px = view.lonLatToPx(point.lon, point.lat);
+        const previous = run[run.length - 1];
+        if (!px || (previous && Math.hypot(px[0] - previous[0], px[1] - previous[1]) >= this.w / 2)) drawRun();
+        if (px) run.push(px);
+      }
+      drawRun();
+      ctx.stroke();
+      ctx.restore();
+    }
     const [rx] = view.kmRadiiPx(storm.radiusKm, storm.lat);
     each(view, storm.lon, storm.lat, Math.max(rx, 12) + 80, this.w, this.h, (x, y, a) => {
       ctx.save();
@@ -1001,15 +1030,21 @@ export class OverlayPainter {
       ctx.beginPath(); groundCircle(view, ctx, storm.lon, storm.lat, storm.radiusKm, 'stroke', 8);
       ctx.setLineDash([2, 4]); ctx.stroke(); ctx.setLineDash([]);
       ctx.globalAlpha = a;
-      // Steady lightning glyph: readable at small scales without flashing.
       ctx.beginPath();
-      ctx.moveTo(x + 2, y - 9); ctx.lineTo(x - 5, y + 1); ctx.lineTo(x, y + 1);
-      ctx.lineTo(x - 2, y + 9); ctx.lineTo(x + 6, y - 2); ctx.lineTo(x + 1, y - 2);
+      if (storm.tornado) {
+        ctx.moveTo(x - 8, y - 8); ctx.lineTo(x + 8, y - 8);
+        ctx.quadraticCurveTo(x + 3, y - 1, x + 1, y + 8);
+        ctx.lineTo(x - 1, y + 8); ctx.quadraticCurveTo(x - 3, y - 1, x - 8, y - 8);
+      } else {
+        // Steady lightning glyph: readable at small scales without flashing.
+        ctx.moveTo(x + 2, y - 9); ctx.lineTo(x - 5, y + 1); ctx.lineTo(x, y + 1);
+        ctx.lineTo(x - 2, y + 9); ctx.lineTo(x + 6, y - 2); ctx.lineTo(x + 1, y - 2);
+      }
       ctx.closePath(); ctx.fill();
       if (view.scale >= 8) {
         ctx.font = `500 11px ${theme.font}`;
         ctx.textAlign = 'left';
-        this.halo(`${translate('Thunderstorm')} · ${storm.gustMs.toFixed(0)} m/s`, x + 11, y + 4, theme.warn, a);
+        this.halo(`${translate(storm.tornado ? 'Tornado' : 'Thunderstorm')} · ${storm.gustMs.toFixed(0)} m/s`, x + 11, y + 4, theme.warn, a);
       }
       ctx.restore();
     });
@@ -1150,7 +1185,8 @@ export class OverlayPainter {
         const labelled = c.id === selected || exposed || cityLabelEligible(c.population, zoom);
         if (!labelled && c.population < dotMin) return; // small cities in a wide view draw neither dot nor label
         const r = labelled ? (population ? 2.5 + Math.sqrt(c.population / 1e6) * 0.9 : 3) : 2.2; // unlabelled dots stay small so a thousand cities do not blot out the map
-        const text = population ? `${cityLabel(c)} ${(c.population / 1e6).toFixed(1)}M` : cityLabel(c);
+        const lossUsd = impact ? estimateCityDamage(c, impact).lossUsd : 0;
+        const text = lossUsd > 0 ? `${cityLabel(c)} · ${fmtMoneyCompact(lossUsd)}` : cityLabel(c);
         const showLabel = labelled && (showLabels || c.id === selected);
         const tw = showLabel ? ctx.measureText(text).width : 0;
         ctx.fillStyle = color;

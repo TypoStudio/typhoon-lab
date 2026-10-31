@@ -1,3 +1,4 @@
+import { setSpeed } from './speed';
 import { test, expect, type Page } from '@playwright/test';
 
 async function expectedMetrics(page: Page) {
@@ -66,7 +67,7 @@ test('each storm shows movement speed, maximum wind, centre pressure and radii i
   for (const label of ['Max wind', 'Central pressure', 'Gale radius', 'Movement speed']) await expect(first).toContainText(label);
   await verifyRows(page, expected);
   // New worker states must refresh all metrics, not only the original maximum-wind field.
-  await page.getByTestId('speed-12').click();
+  await setSpeed(page, 14400);
   await page.getByTestId('play-toggle').click();
   await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.tick)).toBeGreaterThan(140);
   await page.getByTestId('play-toggle').click();

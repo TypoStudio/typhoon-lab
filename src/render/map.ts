@@ -1,8 +1,10 @@
 import { BOUNDS, GRID_COLS, GRID_ROWS, GRID_STEP, isLand } from '../simulation/engine';
 import { DEFAULT_MAP_OVERLAYS, type GameState, type MapOverlays } from '../types';
+import { windAnimationMultiplier } from '../time';
 import type { BaseRenderer } from './base';
 import { CanvasBase } from './canvas2d';
-import { buildContours, buildFieldData, buildCombinedImage, sampleGrid, type Contours, type FieldData } from './fields';
+import { buildContours, buildFieldData, buildCombinedImage, buildSurfaceImages, FIELD_IMAGE_COLS, FIELD_IMAGE_ROWS, sampleGrid, sampleWind, type Contours, type FieldData } from './fields';
+import { attachStormWind } from './storm-wind';
 import { DEFAULT_LABELS, EMPTY_OVERLAY, OverlayPainter, type MapLabels, type MapOverlay } from './overlay';
 import { ParticleSystem } from './particles';
 import { loadTheme, type Theme } from './theme';
@@ -10,6 +12,10 @@ import type { MapCamera, MapMode } from './camera';
 import { GlobeView } from './globe-view';
 import { FlatView, edgeBetween, wrapLon } from './view';
 import { ThreeBase } from './webgl';
+import { TrafficAnimation } from './traffic';
+import { ThunderstormAnimation } from './thunderstorm-animation';
+import { AnimationClock } from './animation-clock';
+import { WindParticleBudget, type WindBudgetAdjustment } from './wind-budget';
 
 export interface RenderStats {
   kind: 'webgl' | 'canvas';
@@ -18,13 +24,10 @@ export interface RenderStats {
   /** True when the particle budget was lowered because frames were slow. */
   reduced: boolean;
   lost: boolean;
+  firstWindReduction: WindBudgetAdjustment | null;
+  lastWindAdjustment: WindBudgetAdjustment | null;
 }
 
-const MIN_PARTICLES = 1200;
-/** Frames slower than this count toward lowering the particle budget. */
-const SLOW_FRAME_MS = 34;
-/** Real time spent slow before the budget drops one step. */
-const SLOW_BUDGET_MS = 2500;
 /** Longer gaps are tab suspension or debugger pauses, not rendering cost. */
 const SUSPENSION_MS = 2000;
 
@@ -48,6 +51,10 @@ export class MapRenderer {
   private base: BaseRenderer;
   private readonly overlayPainter: OverlayPainter;
   private readonly particles = new ParticleSystem();
+  private readonly traffic = new TrafficAnimation();
+  private readonly thunderstorms = new ThunderstormAnimation();
+  private readonly animationClock = new AnimationClock();
+  private windSpeedMultiplier = 1;
   private readonly observer: ResizeObserver;
   private readonly reducedMotion: MediaQueryList;
   private state: GameState | null = null;
@@ -58,21 +65,21 @@ export class MapRenderer {
   private drawOverlay: MapOverlay = EMPTY_OVERLAY;
   private field: FieldData | null = null;
   private image: Uint8Array | null = null;
+  private seaImage: Uint8Array | null = null;
+  private landImage: Uint8Array | null = null;
   private contours: Contours | null = null;
   private contoursDirty = true;
   private dpr = 1;
   private lastFrame = 0;
-  private ema = 16;
-  private slowMs = 0;
   private fpsShown = 0;
   private fpsAt = 0;
   private reduced = false;
   private maxParticles: number;
+  private readonly windBudget: WindParticleBudget;
   private lostFlag = false;
   private viewVersion = -1;
   private interacting = false;
-  private frozenNow = 0;
-  private lastNow = 0;
+  private lastAnimationFrame = 0;
   private reseedAfterGesture = false;
   private modeVersion = 0;
   private lastModeVersion = -1;
@@ -107,7 +114,8 @@ export class MapRenderer {
     this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     this.overlayPainter.reducedMotion = this.reducedMotion.matches;
     const coarse = window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 700;
-    this.maxParticles = this.kind === 'webgl' ? (coarse ? 6000 : 14000) : (coarse ? 1500 : 3500);
+    this.maxParticles = Math.round((this.kind === 'webgl' ? (coarse ? 6000 : 14000) : (coarse ? 1500 : 3500)) * 2 / 3 * 1.3);
+    this.windBudget = new WindParticleBudget(this.maxParticles);
     this.particles.resize(this.maxParticles);
 
     canvas.addEventListener('webglcontextlost', () => { this.lostFlag = true; this.onLostChange?.(true); });
@@ -177,15 +185,26 @@ export class MapRenderer {
     // Rebuild for every new worker state object: tick and counts alone cannot tell two snapshots apart.
     if (state === this.state) return;
     this.state = state;
+    this.traffic.update(state, this.animationClock.read(performance.now()));
+    this.thunderstorms.update(state, this.animationClock.read(performance.now()));
     this.field = buildFieldData(state.grid);
+    if (this.field) attachStormWind(this.field, state);
     this.contoursDirty = true;
     this.pushImage();
   }
 
+  /** Wind keeps illustrating the current field when model time is paused. */
+  setSimulationClock(hours: number, speed: number, playing: boolean): void {
+    this.windSpeedMultiplier = windAnimationMultiplier(speed);
+    this.traffic.setClock(hours, speed, playing, this.animationClock.read(performance.now()));
+    this.thunderstorms.setClock(hours, speed, playing, this.animationClock.read(performance.now()));
+  }
+
   setOverlays(overlays: MapOverlays): void {
-    const rasterChanged = this.overlays.temperature !== overlays.temperature || this.overlays.population !== overlays.population;
+    const tintChanged = this.overlays.temperature !== overlays.temperature || this.overlays.population !== overlays.population
+      || this.overlays.rain !== overlays.rain;
     this.overlays = { ...overlays };
-    if (rasterChanged) this.pushImage();
+    if (tintChanged) this.pushImage();
   }
 
   setOverlay(overlay: MapOverlay): void { this.overlay = overlay; this.mergeOverlay(); }
@@ -209,9 +228,11 @@ export class MapRenderer {
     const wl = wrapLon(lon);
     const i = Math.min(GRID_COLS - 1, Math.max(0, Math.floor((wl - BOUNDS.west) / GRID_STEP)));
     const j = Math.min(GRID_ROWS - 1, Math.max(0, Math.floor((lat - BOUNDS.south) / GRID_STEP)));
+    const wind = new Float64Array(2);
+    sampleWind(f, wl, lat, wind);
     return {
       land: isLand(wl, lat),
-      wind: Math.hypot(sampleGrid(f, f.u, wl, lat), sampleGrid(f, f.v, wl, lat)),
+      wind: Math.hypot(wind[0], wind[1]),
       pressure: sampleGrid(f, f.pressure, wl, lat),
       temperature: sampleGrid(f, f.temperature, wl, lat),
       airTemperature: sampleGrid(f, f.airTemperature, wl, lat),
@@ -236,20 +257,45 @@ export class MapRenderer {
   setInteracting(on: boolean): void {
     if (on === this.interacting) return;
     this.interacting = on;
-    if (on) this.frozenNow = this.lastNow;
-    else {
-      if (this.reducedMotion.matches) this.reseedAfterGesture = true;
-    }
+    this.animationClock.setPaused(on, on ? this.lastFrame || performance.now() : performance.now());
+    if (!on && this.reducedMotion.matches) this.reseedAfterGesture = true;
   }
 
   pickStorm(px: number, py: number): number | null { return this.state ? this.overlayPainter.pickStorm(this.view, this.state.storms, px, py) : null; }
 
   pickCity(px: number, py: number): string | null { return this.overlayPainter.pickCity(this.view, px, py); }
 
+  /** Visible moving vehicle under a map tap, using the same interpolated position as the icon. */
+  pickTraffic(px: number, py: number): string | null {
+    let best: string | null = null;
+    let bestDistance = 18;
+    const projected = new Float64Array(3);
+    for (const marker of this.traffic.frame(this.animationClock.read(performance.now()), this.reducedMotion.matches)) {
+      if (!this.overlays[marker.kind]) continue;
+      this.view.projectZ(marker.lon, marker.lat, projected);
+      if (projected[2] < 0.22) continue;
+      const distance = Math.hypot(projected[0] - px, projected[1] - py);
+      if (distance < bestDistance) { best = marker.id; bestDistance = distance; }
+    }
+    return best;
+  }
+
+  trafficPoint(id: string): [number, number] | null {
+    const marker = this.traffic.frame(this.animationClock.read(performance.now()), this.reducedMotion.matches).find(item => item.id === id);
+    if (!marker || !this.overlays[marker.kind]) return null;
+    const projected = this.view.projectZ(marker.lon, marker.lat);
+    return projected[2] > 0.22 && projected[0] >= 0 && projected[0] <= this.view.width
+      && projected[1] >= 0 && projected[1] <= this.view.height ? [projected[0], projected[1]] : null;
+  }
+
   private pushImage(): void {
     if (!this.field) return;
-    const { cols, rows } = this.field;
+    const cols = FIELD_IMAGE_COLS, rows = FIELD_IMAGE_ROWS;
     if (!this.image || this.image.length !== cols * rows * 4) this.image = new Uint8Array(cols * rows * 4);
+    this.seaImage ??= new Uint8Array(cols * rows * 4);
+    this.landImage ??= new Uint8Array(cols * rows * 4);
+    buildSurfaceImages(this.field, this.overlays, this.theme, this.seaImage, this.landImage);
+    this.base.setSurfaceImages(this.seaImage, this.landImage, cols, rows);
     buildCombinedImage(this.field, this.overlays, this.theme, this.image);
     this.base.setFieldImage(this.image, cols, rows);
   }
@@ -264,16 +310,19 @@ export class MapRenderer {
   }
 
   stats(): RenderStats {
-    return { kind: this.kind, fps: this.fpsShown, particles: this.particles.count, reduced: this.reduced, lost: this.lostFlag || this.base.isLost() };
+    return { kind: this.kind, fps: this.fpsShown, particles: this.particles.count, reduced: this.reduced,
+      lost: this.lostFlag || this.base.isLost(), firstWindReduction: this.windBudget.firstReduction,
+      lastWindAdjustment: this.windBudget.lastAdjustment };
   }
 
   frame(now: number): void {
-    // Real frame time drives the performance budget; the advection step is capped separately.
+    // Advance wind by animation time; a suspended tab resumes without a long visual jump.
     const frameMs = this.lastFrame ? now - this.lastFrame : 16;
-    const dt = Math.min(0.1, Math.max(0, frameMs / 1000));
+    const animationNow = this.animationClock.read(now);
+    const dt = frameMs > SUSPENSION_MS ? 0 : Math.min(0.1, Math.max(0, (this.lastAnimationFrame ? animationNow - this.lastAnimationFrame : 0) / 1000));
+    this.lastAnimationFrame = animationNow;
     this.lastFrame = now;
-    this.lastNow = now;
-    if (!this.interacting) this.trackPerformance(frameMs);
+    this.trackPerformance(frameMs);
 
     this.overlayPainter.reducedMotion = this.reducedMotion.matches;
     this.particles.frozen = this.reducedMotion.matches;
@@ -285,7 +334,8 @@ export class MapRenderer {
       this.viewVersion = view.version;
       this.lastModeVersion = this.modeVersion;
       if (this.overlays.wind) {
-        this.particles.update(dt, this.field, view.visibleBounds(), view.scale, this.visibleTest(), view.kind === 'flat' ? edgeBetween : undefined);
+        this.particles.update(dt, this.field, view.visibleBounds(), view.scale, this.visibleTest(), view.kind === 'flat' ? edgeBetween : undefined, this.windSpeedMultiplier);
+
       }
     }
 
@@ -294,29 +344,29 @@ export class MapRenderer {
     this.stage.dataset.wind = showWind ? 'visible' : 'hidden';
     this.stage.dataset.humidity = this.overlays.humidity ? 'wind' : 'off';
     this.base.draw(view, this.particles, showWind ? 1 : 0, this.theme, this.overlays.humidity);
-    this.overlayPainter.draw(view, this.state, this.overlays, this.drawOverlay, this.currentContours(), this.interacting ? this.frozenNow : now, this.field);
+    this.overlayPainter.draw(view, this.state, this.overlays, this.drawOverlay, this.currentContours(), animationNow, this.field, animationNow, this.traffic.frame(animationNow, this.reducedMotion.matches), this.thunderstorms.frame(animationNow, this.reducedMotion.matches));
+    const traffic = this.overlayPainter.trafficCounts;
+    this.stage.dataset.trafficShips = String(traffic.ships);
+    this.stage.dataset.trafficPlanes = String(traffic.planes);
+    this.stage.dataset.trafficDiverted = String(traffic.diverted);
+    this.stage.dataset.weatherHazards = String(this.state?.weatherHazards?.length ?? 0);
   }
 
   /**
-   * Lowers the particle budget when frames stay slow, within a few seconds even at a few fps:
-   * slow time accumulates in real milliseconds, so one 1 s frame counts as 1 s, not as one frame.
-   * No frame-rate target is promised.
+   * Reduce wind below about 35 fps and gradually restore it above about 45 fps.
+   * Camera gestures, reduced motion and hidden wind keep the current budget unchanged.
    */
   private trackPerformance(frameMs: number): void {
-    if (frameMs <= 0 || frameMs > SUSPENSION_MS) return;
-    this.ema += (frameMs - this.ema) * (frameMs > this.ema ? 0.3 : 0.08);
+    const active = !this.interacting && !!this.field && this.overlays.wind
+      && !this.reducedMotion.matches && !this.base.isLost();
+    const count = this.windBudget.sample(frameMs, active);
     const clock = performance.now();
     if (clock - this.fpsAt > 500) {
       this.fpsAt = clock;
-      this.fpsShown = Math.round(1000 / Math.max(1, this.ema));
+      this.fpsShown = this.windBudget.fps;
     }
-    if (frameMs > SLOW_FRAME_MS) this.slowMs += frameMs;
-    else this.slowMs = Math.max(0, this.slowMs - frameMs * 2);
-    if (this.slowMs > SLOW_BUDGET_MS && this.particles.count > MIN_PARTICLES) {
-      this.particles.resize(Math.max(MIN_PARTICLES, Math.floor(this.particles.count * 0.7)));
-      this.reduced = true;
-      this.slowMs = 0;
-    }
+    if (count !== this.particles.count) this.particles.resize(count);
+    this.reduced = count < this.maxParticles;
   }
 
   dispose(): void {

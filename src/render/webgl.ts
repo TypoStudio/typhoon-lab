@@ -10,17 +10,16 @@ import { projectedLakeTiers, projectedLand, type ProjectedPolygon } from './geom
 import { webZoom } from './places';
 import type { GlobeView } from './globe-view';
 import { atmosphereRing, lakeGlobeGeometries, landGlobeGeometry, rotationMatrix, uvSphere } from './globe-mesh';
-import type { ParticleSystem } from './particles';
+import { WIND_STREAK_SEGMENTS, type ParticleSystem } from './particles';
 import type { Theme, RGB } from './theme';
 import { LON0, MAP_OUTLINE, projectLambda, type MapView } from './view';
+import { surfaceMaterial } from './surface-material';
 
 const srgbToLinear = (c: number) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
 const linear = (rgb: RGB): RGB => [srgbToLinear(rgb[0]), srgbToLinear(rgb[1]), srgbToLinear(rgb[2])];
 /** Field grid: 170 rows × 72 columns of quads spanning λ ∈ [-180, 180] around LON0 and φ ∈ [-90, 90]. */
 const FIELD_ROWS = 170;
 const FIELD_COLS = 72;
-/** Streaks are never drawn shorter than this on screen. */
-const MIN_TRAIL_PX = 3;
 
 /**
  * A grid whose vertices sit at Equal Earth positions but whose UVs are linear in longitude and
@@ -70,6 +69,7 @@ interface GlobeScene {
   lakes: Mesh[];
   atmosphere: Mesh;
   materials: MeshBasicMaterial[];
+  surfaces: ShaderMaterial[];
 }
 
 /** Three.js (WebGL2) base layer: sea outline, land, data texture, and GPU-drawn wind streaks. */
@@ -85,8 +85,7 @@ export class ThreeBase implements BaseRenderer {
   private globeScene: GlobeScene | null = null;
   private readonly theme: Theme;
   private readonly head = new Float64Array(3);
-  private readonly tail = new Float64Array(3);
-  private readonly tailGeo = new Float64Array(2);
+  private readonly streak = new Float64Array((WIND_STREAK_SEGMENTS + 1) * 2);
   private readonly sea: Mesh;
   private readonly landUnder: Mesh;
   /** One mesh per lake area tier (`LAKE_TIER_MIN_ZOOM`); `visible` follows the zoom. */
@@ -94,7 +93,10 @@ export class ThreeBase implements BaseRenderer {
   private readonly field: Mesh;
   private particleMesh: Mesh | null = null;
   private fieldMaterial: MeshBasicMaterial;
+  private hasPrecipitation = false;
   private texture: DataTexture | null = null;
+  private seaTexture: DataTexture | null = null;
+  private landTexture: DataTexture | null = null;
   private texData: Uint8Array | null = null;
   private texSize = '';
   private particleGeo: BufferGeometry | null = null;
@@ -133,13 +135,13 @@ export class ThreeBase implements BaseRenderer {
     }
 
     // The sea is the filled map outline; outside it the paper colour shows.
-    this.sea = new Mesh(new ShapeGeometry(new Shape(MAP_OUTLINE.map(([x, y]) => new Vector2(x, y)))), overlayMaterial(null, col(theme.rgb.sea)));
+    this.sea = new Mesh(new ShapeGeometry(new Shape(MAP_OUTLINE.map(([x, y]) => new Vector2(x, y)))), surfaceMaterial(theme.rgb.sea, 'flat'));
     this.sea.renderOrder = 0;
     this.scene.add(this.sea);
 
-    this.landUnder = new Mesh(this.buildShapeGeometry(projectedLand()), overlayMaterial(null, col(theme.rgb.land)));
+    this.landUnder = new Mesh(this.buildShapeGeometry(projectedLand()), surfaceMaterial(theme.rgb.land, 'flat'));
     this.landUnder.renderOrder = 1;
-    // Lakes are sea-coloured water drawn over the field: their cells are land to the simulation and carry its population tint, which would turn the water olive.
+    // Lakes keep their sea colour above the field raster.
     const lakeMaterial = overlayMaterial(null, col(theme.rgb.sea));
     this.lakes = projectedLakeTiers().map(polygons => {
       const mesh = new Mesh(this.buildShapeGeometry(polygons), lakeMaterial);
@@ -175,6 +177,7 @@ export class ThreeBase implements BaseRenderer {
   }
 
   setFieldImage(rgba: Uint8Array, cols: number, rows: number): void {
+    this.hasPrecipitation = rgba.some((value, index) => index % 4 === 3 && value > 0);
     const size = `${cols}x${rows}`;
     if (!this.texture || this.texSize !== size) {
       this.texture?.dispose();
@@ -196,17 +199,46 @@ export class ThreeBase implements BaseRenderer {
     this.texture!.needsUpdate = true;
   }
 
+  setSurfaceImages(sea: Uint8Array, land: Uint8Array, cols: number, rows: number): void {
+    const upload = (texture: DataTexture | null, rgba: Uint8Array): DataTexture => {
+      if (!texture || texture.image.width !== cols || texture.image.height !== rows) {
+        texture?.dispose();
+        texture = new DataTexture(new Uint8Array(rgba.length), cols, rows, RGBAFormat, UnsignedByteType);
+        texture.minFilter = LinearFilter; texture.magFilter = LinearFilter;
+        texture.wrapS = RepeatWrapping; texture.wrapT = ClampToEdgeWrapping;
+        texture.generateMipmaps = false; texture.colorSpace = SRGBColorSpace;
+      }
+      (texture.image.data as Uint8Array).set(rgba);
+      texture.needsUpdate = true;
+      return texture;
+    };
+    this.seaTexture = upload(this.seaTexture, sea);
+    this.landTexture = upload(this.landTexture, land);
+    const materials = [this.sea.material, this.landUnder.material] as ShaderMaterial[];
+    for (const [i, texture] of [this.seaTexture, this.landTexture].entries()) {
+      materials[i].uniforms.surface.value = texture;
+      materials[i].uniforms.hasSurface.value = true;
+      if (this.globeScene) {
+        this.globeScene.surfaces[i].uniforms.surface.value = texture;
+        this.globeScene.surfaces[i].uniforms.hasSurface.value = true;
+      }
+    }
+  }
+
   private ensureParticles(capacity: number): void {
     if (this.particleGeo && capacity <= this.particleCapacity) return;
     if (this.particleMesh) this.particleScene.remove(this.particleMesh);
     this.particleGeo?.dispose();
     this.particleCapacity = capacity;
-    this.positions = new Float32Array(capacity * 4 * 3);
-    this.colors = new Float32Array(capacity * 4 * 4);
-    const index = new Uint32Array(capacity * 6);
+    const vertices = (WIND_STREAK_SEGMENTS + 1) * 2;
+    this.positions = new Float32Array(capacity * vertices * 3);
+    this.colors = new Float32Array(capacity * vertices * 4);
+    const index = new Uint32Array(capacity * WIND_STREAK_SEGMENTS * 6);
     for (let i = 0; i < capacity; i++) {
-      const v = i * 4;
-      index.set([v, v + 1, v + 2, v + 2, v + 1, v + 3], i * 6);
+      for (let j = 0; j < WIND_STREAK_SEGMENTS; j++) {
+        const v = i * vertices + j * 2;
+        index.set([v, v + 1, v + 2, v + 2, v + 1, v + 3], (i * WIND_STREAK_SEGMENTS + j) * 6);
+      }
     }
     const geo = new BufferGeometry();
     geo.setAttribute('position', new BufferAttribute(this.positions, 3).setUsage(DynamicDrawUsage));
@@ -227,8 +259,8 @@ export class ThreeBase implements BaseRenderer {
     const group = new Group();
     group.matrixAutoUpdate = false;
     const sphere = uvSphere();
-    const seaMaterial = overlayMaterial(null, col(this.theme.rgb.sea), 1, FrontSide);
-    const landMaterial = overlayMaterial(null, col(this.theme.rgb.land), 1, FrontSide);
+    const seaMaterial = surfaceMaterial(this.theme.rgb.sea, 'globe', this.seaTexture);
+    const landMaterial = surfaceMaterial(this.theme.rgb.land, 'globe', this.landTexture);
     const lakeMaterial = overlayMaterial(null, col(this.theme.rgb.sea), 1, FrontSide);
     const fieldMaterial = overlayMaterial(this.texture, new Color(1, 1, 1), 1, FrontSide);
     const sea = new Mesh(sphere, seaMaterial);
@@ -247,7 +279,7 @@ export class ThreeBase implements BaseRenderer {
     group.add(sea, land, ...lakes, field);
     const atmosphere = atmosphereRing(this.theme.rgb.sea);
     scene.add(group, atmosphere);
-    this.globeScene = { scene, group, sphere, fieldMaterial, field, lakes, atmosphere, materials: [seaMaterial, landMaterial, lakeMaterial] };
+    this.globeScene = { scene, group, sphere, fieldMaterial, field, lakes, atmosphere, materials: [lakeMaterial], surfaces: [seaMaterial, landMaterial] };
     return this.globeScene;
   }
 
@@ -266,7 +298,7 @@ export class ThreeBase implements BaseRenderer {
     const [x0, y0, x1, y1] = view.worldRect();
     this.camera.left = x0; this.camera.right = x1; this.camera.top = y1; this.camera.bottom = y0;
     this.camera.updateProjectionMatrix();
-    this.field.visible = !!this.texture;
+    this.field.visible = !!this.texture && this.hasPrecipitation;
     const lakeTiers = visibleTierCount(LAKE_TIER_MIN_ZOOM, webZoom(view));
     this.lakes.forEach((mesh, t) => { mesh.visible = t < lakeTiers; });
     this.renderer.render(this.scene, this.camera);
@@ -276,7 +308,7 @@ export class ThreeBase implements BaseRenderer {
     const g = this.ensureGlobe();
     rotationMatrix(view.rotation(), g.group.matrix);
     g.group.matrixWorldNeedsUpdate = true;
-    g.field.visible = !!this.texture;
+    g.field.visible = !!this.texture && this.hasPrecipitation;
     const lakeTiers = visibleTierCount(LAKE_TIER_MIN_ZOOM, webZoom(view));
     g.lakes.forEach((mesh, t) => { mesh.visible = t < lakeTiers; });
     const cam = this.globeCamera;
@@ -287,7 +319,7 @@ export class ThreeBase implements BaseRenderer {
     this.renderer.render(g.scene, cam);
   }
 
-  /** Streaks as screen-space quads: head and tail both go through view.projectZ, hidden heads are skipped. */
+  /** Curved screen-space ribbons follow the local wind field. */
   private drawParticles(view: MapCamera, particles: ParticleSystem, particleAlpha: number, humidity: boolean): void {
     const sc = this.screenCamera;
     const w = view.width;
@@ -300,8 +332,7 @@ export class ThreeBase implements BaseRenderer {
     const pos = this.positions;
     const col = this.colors;
     const head = this.head;
-    const tail = this.tail;
-    const tailGeo = this.tailGeo;
+    const streak = this.streak;
     const [wr, wg, wb] = this.windLin;
     const [ir, ig, ib] = this.inkLin;
     const [rr, rg, rb] = this.rainLin;
@@ -313,29 +344,25 @@ export class ThreeBase implements BaseRenderer {
       if (z <= 0) continue;
       const limb = limbFade(z);
       if (limb <= 0) continue;
-      particles.tailLonLat(i, tailGeo);
-      view.projectZ(tailGeo[0], tailGeo[1], tail);
-      const hx = head[0];
-      const hy = h - head[1];
-      let tx = tail[0];
-      let ty = h - tail[1];
-      let len = Math.hypot(hx - tx, hy - ty);
-      let dx = 1;
-      let dy = 0;
-      if (len > 1e-6) { dx = (hx - tx) / len; dy = (hy - ty) / len; }
-      if (len < MIN_TRAIL_PX) { len = MIN_TRAIL_PX; tx = hx - dx * len; ty = hy - dy * len; }
-      const nx = -dy;
-      const ny = dx;
+      const count = particles.traceStreak(i, view, streak);
+      if (count < 2) continue;
       const rainF = particles.rainFactor(i);
       const bliz = particles.blizzardFactor(i);
       const widen = 1 + 2 * rainF * (1 - bliz) + 0.8 * bliz;
-      const halfHead = 0.6 * widen;
-      const halfTail = 0.15 * widen;
-      const p = nv * 12;
-      pos[p] = tx + nx * halfTail; pos[p + 1] = ty + ny * halfTail; pos[p + 2] = 0;
-      pos[p + 3] = tx - nx * halfTail; pos[p + 4] = ty - ny * halfTail; pos[p + 5] = 0;
-      pos[p + 6] = hx + nx * halfHead; pos[p + 7] = hy + ny * halfHead; pos[p + 8] = 0;
-      pos[p + 9] = hx - nx * halfHead; pos[p + 10] = hy - ny * halfHead; pos[p + 11] = 0;
+      const vertices = (WIND_STREAK_SEGMENTS + 1) * 2;
+      for (let j = 0; j <= WIND_STREAK_SEGMENTS; j++) {
+        const point = Math.min(j, count - 1);
+        const before = Math.max(0, point - 1), after = Math.min(count - 1, point + 1);
+        const dx = streak[before * 2] - streak[after * 2];
+        const dy = streak[after * 2 + 1] - streak[before * 2 + 1];
+        const length = Math.hypot(dx, dy) || 1;
+        const nx = -dy / length, ny = dx / length;
+        const half = (0.6 - 0.45 * j / WIND_STREAK_SEGMENTS) * widen;
+        const x = streak[point * 2], y = h - streak[point * 2 + 1];
+        const p = (nv * vertices + j * 2) * 3;
+        pos[p] = x + nx * half; pos[p + 1] = y + ny * half; pos[p + 2] = 0;
+        pos[p + 3] = x - nx * half; pos[p + 4] = y - ny * half; pos[p + 5] = 0;
+      }
       const t = Math.min(1, particles.speed[i] / 35);
       const humidColor = humidity ? this.humidityLin[humidityBucket(particles.humidity[i])] : null;
       const mix = 0.6 * rainF;
@@ -345,20 +372,21 @@ export class ThreeBase implements BaseRenderer {
       let r = r0 + (rr - r0) * mix;
       let g = g0 + (rg - g0) * mix;
       let b = b0 + (rb - b0) * mix;
-      if (bliz < 0.5) {
-        const sm = 0.7 * particles.snowFactor(i);
-        r += (sr - r) * sm; g += (sg - g) * sm; b += (sb - b) * sm;
-      }
+      const sm = 0.7 * particles.snowFactor(i);
+      r += (sr - r) * sm; g += (sg - g) * sm; b += (sb - b) * sm;
       if (bliz > 0) { const white = 0.85 * bliz; r += (1 - r) * white; g += (1 - g) * white; b += (1 - b) * white; }
       const a = Math.min(1, particles.fade(i) * particleAlpha * (humidity ? 0.85 : 0.55 + 0.4 * t) * limb * (1 - 0.3 * bliz));
-      const c = nv * 16;
-      col[c] = r; col[c + 1] = g; col[c + 2] = b; col[c + 3] = 0;
-      col[c + 4] = r; col[c + 5] = g; col[c + 6] = b; col[c + 7] = 0;
-      col[c + 8] = r; col[c + 9] = g; col[c + 10] = b; col[c + 11] = a;
-      col[c + 12] = r; col[c + 13] = g; col[c + 14] = b; col[c + 15] = a;
+      for (let j = 0; j <= WIND_STREAK_SEGMENTS; j++) {
+        const alpha = a * (1 - Math.min(j, count - 1) / (count - 1));
+        const c = (nv * vertices + j * 2) * 4;
+        for (let side = 0; side < 2; side++) {
+          const k = c + side * 4;
+          col[k] = r; col[k + 1] = g; col[k + 2] = b; col[k + 3] = alpha;
+        }
+      }
       nv++;
     }
-    geo.setDrawRange(0, nv * 6);
+    geo.setDrawRange(0, nv * WIND_STREAK_SEGMENTS * 6);
     (geo.getAttribute('position') as BufferAttribute).needsUpdate = true;
     (geo.getAttribute('color') as BufferAttribute).needsUpdate = true;
   }
@@ -370,6 +398,8 @@ export class ThreeBase implements BaseRenderer {
   dispose(): void {
     this.disposed = true;
     this.texture?.dispose();
+    this.seaTexture?.dispose();
+    this.landTexture?.dispose();
     this.particleGeo?.dispose();
     this.particleMaterial?.dispose();
     this.fieldMaterial.dispose();
@@ -387,6 +417,7 @@ export class ThreeBase implements BaseRenderer {
       for (const geometry of lakeGlobeGeometries()) geometry.dispose();
       g.fieldMaterial.dispose();
       for (const m of g.materials) m.dispose();
+      for (const m of g.surfaces) m.dispose();
       g.atmosphere.geometry.dispose();
       (g.atmosphere.material as ShaderMaterial).dispose();
     }

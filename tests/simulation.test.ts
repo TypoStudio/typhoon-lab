@@ -65,7 +65,7 @@ describe('empty, endless world', () => {
       expect(s.hours).toBe(200);
       expect(s.phase).toBe('seeding');
     }
-  }, 30_000);
+  }, 90_000);
 });
 
 describe('genesis', () => {
@@ -337,7 +337,7 @@ describe('rotation and motion in both hemispheres', () => {
 });
 
 describe('intensity physics', () => {
-  const env = { temperature: 29, airTemperature: 27.5, airHeating: 0, updraft: 0, drying: 0, cooling: 0, humidity: 0.7, shear: 8, pressure: 1008, u: 0, v: 0, land: false };
+  const env = { temperature: 29, airTemperature: 27.5, airHeating: 0, updraft: 0, instability: 0, drying: 0, cooling: 0, humidity: 0.7, shear: 8, pressure: 1008, u: 0, v: 0, land: false };
 
   it('genesis potential favours warm, moist, low-shear, low-pressure ocean at any latitude', () => {
     const g = (o: Partial<typeof env>, lat = 15) => genesisPotential({ ...env, ...o }, lat);

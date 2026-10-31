@@ -4,7 +4,7 @@ export interface ScaleTick { label: string; pos: number }
 
 /** Reads a tick label such as "0", "40+", "30k" or "15M" as a number; NaN if it is not one. */
 export function tickValue(label: string): number {
-  const match = /^(\d+(?:\.\d+)?)([kM]?)\+?$/.exec(label);
+  const match = /^(-?\d+(?:\.\d+)?)([kM]?)\+?$/.exec(label);
   return match ? Number(match[1]) * (match[2] === 'k' ? 1e3 : match[2] === 'M' ? 1e6 : 1) : NaN;
 }
 

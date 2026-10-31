@@ -1,3 +1,4 @@
+import { setSpeed } from './speed';
 import { test, expect } from '@playwright/test';
 
 test('independent young storms later merge, keep selection, and explain the event in both languages', async ({ page }) => {
@@ -26,7 +27,7 @@ test('independent young storms later merge, keep selection, and explain the even
   expect(event).toBeTruthy();
   await page.locator(`[data-storm-id="${event.absorbedId}"]`).click();
   await expect(page.getByTestId('storm-detail')).toBeVisible();
-  await page.getByTestId('speed-4').click();
+  await setSpeed(page, 14400);
   await page.getByTestId('play-toggle').click();
   await expect(page.getByTestId('storm-row')).toHaveCount(1, { timeout: 15_000 });
   await page.getByTestId('play-toggle').click();
@@ -46,7 +47,7 @@ test('independent young storms later merge, keep selection, and explain the even
     const path = '/src/simulation/engine.ts';
     const { replayGame } = await import(path);
     const state = (window as any).__typhoonLab.state;
-    const result = replayGame(state.seed, state.actions, state.tick);
+    const result = replayGame(state.seed, state.actions, state.tick, state.initialStartDayOfYear, state.traffic.dispatches);
     return result.ok && JSON.stringify(result.state) === JSON.stringify(state);
   })).toBe(true);
   await page.getByTestId('tab-storms').click();

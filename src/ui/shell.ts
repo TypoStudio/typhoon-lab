@@ -1,5 +1,8 @@
 import { LOCALES } from '../i18n';
-import { CLIMATE_LIMITS, TOOLS, formationRecipe } from '../simulation/engine';
+import { version as appVersion } from '../../package.json';
+import { CLIMATE_LIMITS, TOOLS, blizzardRecipe, formationRecipe, tornadoRecipe, weatherHazardRecipe } from '../simulation/engine';
+import { WEATHER_HAZARDS, WEATHER_HAZARD_KINDS } from '../data/weather-hazards';
+import type { GameState } from '../types';
 import type { ClimateKey, MapOverlays, ToolType } from '../types';
 import { SEASONS } from './calendar';
 import { RANKING_METRICS } from './rankings';
@@ -8,30 +11,53 @@ import { RANKING_METRICS } from './rankings';
 export const CYCLONE_PATH = 'M8.84 5.23C14.60 2.55 19.27 5.24 23.00 7.33Q19.64 6.61 16.28 5.88A7.47 7.47 0 0 1 15.16 18.77C9.40 21.45 4.73 18.76 1.00 16.67Q4.36 17.39 7.72 18.12A7.47 7.47 0 0 1 8.84 5.23ZM15.06 12.00a3.06 3.06 0 1 0 -6.12 0a3.06 3.06 0 1 0 6.12 0Z';
 
 const TOOL_ICON: Record<ToolType, string> = {
-  cool: '<path d="M3 18c2-2 4 2 6 0s4 2 6 0 4 2 6 0M12 2v11M8 4l8 7M16 4l-8 7M9 3l3 2 3-2M9 12l3-2 3 2"/>',
+  cool: '<path d="M2 19c2-2 4 2 6 0s4 2 6 0 4 2 6 0 3 1 4 0M10 14V5a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0ZM12 14v4M17 6h4"/>',
   dry: '<path d="M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11M3 21 21 3"/>',
   'cold-air': '<path d="M10 14V5a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0Z M12 14v4M17 6h5"/>',
   downdraft: '<path d="M5 3v12M2 12l3 3 3-3M12 5v16M9 18l3 3 3-3M19 3v12M16 12l3 3 3-3"/>',
-  'warm-air': '<path d="M10 14V5a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0Z"/><path d="M12 9v9M17 5h3M17 9h2"/>',
+  'warm-air': '<path d="M10 14V5a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0Z"/><path d="M12 9v9M17 7h5M19.5 4.5v5"/>',
   updraft: '<path d="M5 21V9M2 12l3-3 3 3M12 19V3M9 6l3-3 3 3M19 21V9M16 12l3-3 3 3"/>',
-  warm: '<path d="M3 15c2-2 4 2 6 0s4 2 6 0 4 2 6 0"/><path d="M3 20c2-2 4 2 6 0s4 2 6 0 4 2 6 0"/><path d="M12 11V3M8.5 6.5 12 3l3.5 3.5"/>',
+  warm: '<path d="M2 19c2-2 4 2 6 0s4 2 6 0 4 2 6 0 3 1 4 0M10 14V5a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0ZM12 9v9M17 6h5M19.5 3.5v5"/>',
   moisture: '<path d="M12 3c3.6 4.6 6 7.6 6 11a6 6 0 0 1-12 0c0-3.4 2.4-6.4 6-11z"/><path d="M9.5 14.5a2.6 2.6 0 0 0 2 2.2"/>',
   low: '<circle cx="12" cy="12" r="9"/><path d="M10 7v10h5"/>',
   high: '<circle cx="12" cy="12" r="9"/><path d="M9.5 7v10M14.5 7v10M9.5 12h5"/>',
   'low-shear': '<path d="M3 7h18M3 12h18M3 17h18" opacity=".55"/><path d="M9 4l-3 3 3 3M15 14l3 3-3 3"/>',
   'high-shear': '<path d="M3 7h14M3 17h14M7 12h14"/><path d="M14 4l3 3-3 3M10 14l-3 3 3 3M18 9l3 3-3 3"/>',
+  'unstable-air': '<path d="M4 20h16M7 17c-2-3 2-4 0-7s2-4 0-7M12 17c-2-3 2-4 0-7s2-4 0-7M17 17c-2-3 2-4 0-7s2-4 0-7"/><path d="m9 5 3-3 3 3"/>',
+  'stable-air': '<path d="M3 7h18M3 12h18M3 17h18M9 21h6"/>',
 };
 
-/** Formation palette entries: ask what a phenomenon needs at a spot. More phenomena (blizzard, tornado …) get a row here. */
+/** Each button cycles between two conditions; dragging an untouched button uses its first condition. */
+export const CONDITION_GROUPS: readonly (readonly [ToolType, ToolType])[] = [
+  ['warm', 'cool'], ['moisture', 'dry'], ['low', 'high'], ['low-shear', 'high-shear'],
+  ['warm-air', 'cold-air'], ['updraft', 'downdraft'], ['unstable-air', 'stable-air'],
+];
+
+/** Formation probes explain and place the conditions for each weather event. */
 export const FORMATION_TOOLS = [
   {
-    id: 'genesis-typhoon', name: 'Typhoon formation', tip: 'Pick a sea spot to see what it needs to form a typhoon and place the recipe.',
+    id: 'genesis-typhoon', kind: 'typhoon', preview: 'low', name: 'Typhoon formation', tip: 'Pick a sea spot to see what it needs to form a typhoon and place the recipe.',
     icon: `<path d="${CYCLONE_PATH}" transform="translate(0 4.5) scale(.8)" fill="currentColor" fill-rule="evenodd" stroke="none"/><path d="M19 2.5v6M16 5.5h6"/>`,
     recipe: formationRecipe,
   },
+  {
+    id: 'genesis-blizzard', kind: 'blizzard', preview: 'cold-air', name: 'Blizzard formation', tip: 'Pick a cold spot to see what it needs for snow and gale-force wind.',
+    icon: '<path d="M12 2v20M3.3 7l17.4 10M3.3 17 20.7 7M8 20h8"/>', recipe: blizzardRecipe,
+  },
+  {
+    id: 'genesis-tornado', kind: 'tornado', preview: 'unstable-air', name: 'Tornado formation', tip: 'Pick a spot to build moist, unstable rotating thunderstorms.',
+    icon: '<path d="M2 4h20M4 8h16M6 12h12M8 16h8M10 20h4"/>', recipe: tornadoRecipe,
+  },
+  ...WEATHER_HAZARD_KINDS.map(kind => ({
+    id: `genesis-${kind}` as const, kind, preview: WEATHER_HAZARDS[kind].anchor,
+    name: `${WEATHER_HAZARDS[kind].name} formation`,
+    tip: 'Pick a spot to prepare the conditions for this weather phenomenon.',
+    icon: `<path d="${WEATHER_HAZARDS[kind].iconPath}"/>`,
+    recipe: (state: GameState, lon: number, lat: number) => weatherHazardRecipe(state, kind, lon, lat),
+  })),
 ] as const;
-/** Keyboard shortcut per formation tool, in list order (Q is Typhoon formation). */
-export const FORMATION_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'] as const;
+/** Keyboard shortcut per formation tool, in list order (A is Typhoon formation). */
+export const FORMATION_KEYS = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'z'] as const;
 export type FormationToolId = (typeof FORMATION_TOOLS)[number]['id'];
 
 export const PALETTE_TABS = [
@@ -47,8 +73,10 @@ export const MAP_OVERLAY_OPTIONS: { id: keyof MapOverlays; label: string; tip: s
   { id: 'humidity', label: 'Humidity', tip: 'Colours the wind streaks by moisture. Brighter is wetter.' },
   { id: 'rain', label: 'Rain', tip: 'Shades the areas where rain is falling.' },
   { id: 'pressure', label: 'Pressure', tip: 'Draws isobars, lines of equal sea-level pressure.' },
-  { id: 'temperature', label: 'Sea temp', tip: 'Tints the ocean by sea-surface temperature.' },
+  { id: 'temperature', label: 'Temperature', tip: 'Colours the ocean by water temperature and land by air temperature.' },
   { id: 'population', label: 'Population', tip: 'Shows how many people live in each area.' },
+  { id: 'ships', label: 'Ships', tip: 'Ships avoid land and storms. Prolonged strong winds can cause a sinking.' },
+  { id: 'planes', label: 'Planes', tip: 'Flights detour around storms or land at a nearby alternate airport. Prolonged strong winds can cause a crash.' },
 ];
 
 /** Label layers (stored in the renderer) and the simulation switch that share the overlay icon row. */
@@ -68,6 +96,8 @@ const MAP_ICON = {
   pressure: '<circle cx="12" cy="12" r="9"/><path d="M6 13a6 6 0 0 1 12 0M12 13l4-5M8 18h8"/><circle cx="12" cy="13" r="1"/>',
   temperature: '<path d="M5 13V4a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0ZM7 7v9M14 7h5M14 11h3M13 18c2-2 4 2 6 0s2 0 3 0M14 22c2-2 4 2 6 0"/>',
   population: '<circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6M17 13a5 5 0 0 1 4 5v3"/>',
+  ships: '<path d="M4 12 12 9l8 3-2 7H6ZM7 10V5h10v5M10 5V2h4v3M2 21c2-2 3 2 5 0s3 2 5 0 3 2 5 0 3 2 5 0M12 9v9"/>',
+  planes: '<path d="m12 2 2 8 8 5v2l-8-2v5l3 2H7l3-2v-5l-8 2v-2l8-5Z"/>',
   recordedPaths: '<path d="M3 19c3-9 7 1 10-6s5-3 7-8" stroke-dasharray="2.4 3.2"/><circle cx="20.5" cy="4.5" r="1.6"/>',
   cities: '<path d="M12 21.5s-6.5-5.8-6.5-11.2a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11.2-6.5 11.2Z"/><circle cx="12" cy="10.3" r="2.4"/>',
   isobars: '<path d="M2 6.5c4-3 7 2.5 11 0s6-1 9-1"/><path d="M2 19c4-3 7 2.5 11 0s6-1 9-1"/><text x="12" y="15" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" font-weight="700" fill="currentColor" stroke="none">1008</text>',
@@ -91,24 +121,18 @@ export type Terrain = keyof typeof TERRAIN_ICON;
 export const terrainIconSvg = (id: Terrain) =>
   `<svg class="terrain-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${TERRAIN_ICON[id]}</svg>`;
 
-export const SPEEDS = [1, 4, 12] as const;
-const SPEED_TIPS: Record<(typeof SPEEDS)[number], { title: string; tip: string }> = {
-  1: { title: 'Normal speed', tip: 'Run the world at its normal pace.' },
-  4: { title: 'Fast speed', tip: 'Run the world four times faster.' },
-  12: { title: 'Fastest speed', tip: 'Run the world twelve times faster.' },
-};
-/** Keyboard shortcut per palette position: 1–9 and 0, then minus and equals for the 11th and 12th tool. */
-export const TOOL_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '='] as const;
+/** Keyboard shortcut per paired condition button. Repeating a key switches its two conditions. */
+export const TOOL_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u'] as const;
 
-export const CLIMATE_ROWS: { key: ClimateKey; ref: string; label: string }[] = [
-  { key: 'warming', ref: 'climateWarming', label: 'Warming' },
-  { key: 'enso', ref: 'climateEnso', label: 'La Niña / El Niño' },
-  { key: 'polar', ref: 'climatePolar', label: 'Polar temperature' },
+export const CLIMATE_ROWS: { key: ClimateKey; ref: string; label: string; ticks: number[] }[] = [
+  { key: 'warming', ref: 'climateWarming', label: 'Warming', ticks: [-2, -1, 0, 1, 2, 3, 4] },
+  { key: 'enso', ref: 'climateEnso', label: 'La Niña / El Niño', ticks: [-2, -1, 0, 1, 2] },
+  { key: 'polar', ref: 'climatePolar', label: 'Polar temperature', ticks: [-10, -5, 0, 5, 10] },
 ];
 
 export const TABS = [
   { id: 'settings', label: 'Settings' },
-  { id: 'storms', label: 'Storms' },
+  { id: 'storms', label: 'Disasters' },
   { id: 'environment', label: 'World' },
   { id: 'news', label: 'News' },
   { id: 'rank', label: 'Ranking' },
@@ -118,6 +142,7 @@ export const TABS = [
 export const HELP_TABS = [
   { id: 'basics', label: 'Basics' },
   { id: 'conditions', label: 'Conditions' },
+  { id: 'disasters', label: 'Disaster types' },
   { id: 'climate', label: 'Climate' },
   { id: 'historic', label: 'Past typhoons' },
   { id: 'data', label: 'Data' },
@@ -132,13 +157,17 @@ const metric = (name: string, label: string) =>
  * that wrapper. Dynamic text is filled in by app.ts through data-ref / data-metric hooks.
  */
 export function shellHtml(): string {
-  const tools = TOOLS.map((t, i) => `
-    <button type="button" class="tool" data-tool="${t.type}" data-testid="tool-${t.type}" aria-pressed="false" aria-keyshortcuts="${TOOL_KEYS[i]}"
+  const tools = CONDITION_GROUPS.map(([first, second], i) => {
+    const t = TOOLS.find(tool => tool.type === first)!;
+    return `
+    <button type="button" class="tool" data-tool="${first}" data-variant="${first}" data-pair="${second}" data-alternate="${second}" data-testid="tool-${first}" style="--tool-color: var(--fx-${first}); --tool-alt-color: var(--fx-${second})" aria-pressed="false" aria-keyshortcuts="${TOOL_KEYS[i].toUpperCase()}"
       aria-label="${t.name}: drag onto the map, or press to arm it" data-tip-title="${t.name}" data-tip="${t.description.replace(/"/g, '&quot;')}">
-      <span class="tool__key" aria-hidden="true">${TOOL_KEYS[i]}</span>
-      ${toolIconSvg(t.type)}
+      <span class="tool__key" aria-hidden="true">${TOOL_KEYS[i].toUpperCase()}</span>
+      ${toolIconSvg(first)}
+      ${toolIconSvg(second, 'tool__icon tool__icon--secondary')}
       <span class="tool__name">${t.name}</span>
-    </button>`).join('');
+    </button>`;
+  }).join('');
   const formationTools = FORMATION_TOOLS.map((f, i) => `
     <button type="button" class="tool" data-tool="${f.id}" data-testid="tool-${f.id}" aria-pressed="false" aria-keyshortcuts="${FORMATION_KEYS[i].toUpperCase()}"
       aria-label="${f.name}: drag onto the map, or press to arm it" data-tip-title="${f.name}" data-tip="${f.tip}">
@@ -149,7 +178,6 @@ export function shellHtml(): string {
   const paletteTabs = PALETTE_TABS.map((t, i) => `
     <button type="button" role="tab" class="palette__tab" id="palette-tab-${t.id}" data-palette-tab="${t.id}" data-testid="palette-tab-${t.id}"
       aria-selected="${i === 0}" aria-controls="palette-panel-${t.id}" tabindex="${i === 0 ? 0 : -1}">${t.label}</button>`).join('');
-  const toolOptions = TOOLS.map(t => `<option value="${t.type}">${t.name}</option>`).join('');
   const overlays = MAP_OVERLAY_OPTIONS.map(l => `
     <button type="button" class="overlay-toggle" data-overlay="${l.id}" data-testid="layer-${l.id}"
       aria-pressed="true" aria-label="${l.label}" data-tip-title="${l.label}" data-tip="${l.tip}">${mapIconSvg(l.id)}</button>`).join('')
@@ -163,8 +191,23 @@ export function shellHtml(): string {
   const seasonButtons = SEASONS.map(l => `
     <button type="button" role="radio" class="overlay-toggle season-toggle" data-season="${l.id}" data-testid="season-${l.id}"
       aria-checked="false" aria-label="${l.label}" title="${l.label}">${mapIconSvg(l.id)}</button>`).join('');
-  const speeds = SPEEDS.map((s, i) => `
-    <button type="button" role="radio" class="speed__opt" data-speed="${s}" data-testid="speed-${s}" aria-checked="${i === 0}" tabindex="${i === 0 ? 0 : -1}" data-tip-title="${SPEED_TIPS[s].title}" data-tip="${SPEED_TIPS[s].tip}">${s}×</button>`).join('');
+  const climateRows = CLIMATE_ROWS.map(r => {
+    const [min, max] = CLIMATE_LIMITS[r.key];
+    const id = `climate-${r.key}`;
+    const ticks = r.ticks.map(value => `<span style="left:${(value - min) / (max - min) * 100}%" data-edge="${value === min ? 'start' : value === max ? 'end' : 'mid'}">${value < 0 ? '−' : value > 0 ? '+' : ''}${Math.abs(value)}</span>`).join('');
+    return `<div class="setting setting--range">
+      <div class="setting__range-head"><label class="setting__label" for="${id}" id="${id}-label">${r.label}</label><output class="setting__value" for="${id}" data-ref="${r.ref}Value" data-testid="${id}-value">0</output></div>
+      <div class="setting__range-control"><input id="${id}" aria-labelledby="${id}-label" type="range" min="${min}" max="${max}" step="0.1" value="0" data-ref="${r.ref}" data-testid="${id}"><span class="legend__ticks setting__ticks" aria-hidden="true">${ticks}</span></div>
+    </div>`;
+  }).join('');
+  const speeds = `
+    <button type="button" class="speed__opt" data-speed-action="prev" data-testid="speed-prev" aria-label="Slower" data-tip-title="Slower" data-tip="Select the previous speed.">
+      <svg class="speed__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m11 6-6 6 6 6M19 6l-6 6 6 6"/></svg>
+    </button>
+    <output class="speed__value" data-ref="speedValue" data-testid="speed-value" aria-live="polite">x1</output>
+    <button type="button" class="speed__opt" data-speed-action="next" data-testid="speed-next" aria-label="Faster" data-tip-title="Faster" data-tip="Select the next speed.">
+      <svg class="speed__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 6 6 6-6 6M13 6l6 6-6 6"/></svg>
+    </button>`;
   const tabs = TABS.map(t => `
     <button type="button" role="tab" class="report-tab" id="tab-${t.id}" data-tab="${t.id}" data-testid="tab-${t.id}"
       aria-selected="${t.id === 'storms'}" aria-controls="panel-${t.id}" tabindex="${t.id === 'storms' ? 0 : -1}">${t.label}</button>`).join('');
@@ -182,7 +225,7 @@ export function shellHtml(): string {
       tabindex="0" role="group" aria-roledescription="map" aria-label="World weather map" aria-describedby="map-help">
       <div class="stage__veil" data-ref="veil" data-testid="map-veil"><p data-ref="veilText">Starting the world…</p></div>
     </main>
-    <p id="map-help" class="sr-only">Map controls. With a weather tool armed, arrow keys move the placement target one degree, Shift five degrees, Alt a quarter degree, and Enter places it. Without a tool, arrow keys pan the map. Number keys one to nine and zero, then minus and equals, select a condition. Letter keys Q, W, E and R select a formation tool. Shift plus and Shift minus zoom. Space plays or pauses, Escape disarms.</p>
+    <p id="map-help" class="sr-only">Map controls. With a weather tool armed, arrow keys move the placement target one degree, Shift five degrees, Alt a quarter degree, and Enter places it. Without a tool, arrow keys pan the map. Keys Q to U cycle paired conditions. Keys A, S and D select a formation tool. Number keys 1–6 set the speed steps. Shift plus and Shift minus zoom. Space plays or pauses, Escape disarms.</p>
 
     <header class="brandbar">
       <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor" fill-rule="evenodd"><path d="${CYCLONE_PATH}"/></svg>
@@ -199,7 +242,7 @@ export function shellHtml(): string {
 
     <button type="button" class="btn btn--float sidebar-toggle" data-ref="sidebarToggle" data-testid="sidebar-toggle" aria-expanded="false" aria-controls="sidebar">
       <svg class="btn__icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
-      <span data-ref="sidebarToggleLabel">Storms</span><span class="sidebar-toggle__count" data-ref="stormCount">0</span>
+      <span data-ref="sidebarToggleLabel">Disasters</span><span class="sidebar-toggle__count" data-ref="stormCount">0</span>
     </button>
 
     <div class="map-status" data-ref="mapStatus" data-legend="closed">
@@ -220,9 +263,9 @@ export function shellHtml(): string {
 
     <div class="clockbar" role="group" aria-label="Time controls">
       <button type="button" class="btn btn--float btn--play" data-ref="play" data-testid="play-toggle" aria-label="Pause" data-tip-title="Pause" data-tip="Stop or resume time. Shortcut: Space.">Pause</button>
-      <div class="speed" role="radiogroup" aria-label="Simulation speed" data-ref="speedGroup">${speeds}</div>
-      <button type="button" class="btn btn--float" data-ref="reset" data-testid="reset" aria-label="Reset the world" data-tip-title="Reset the world" data-tip="Start over with an empty world"><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/></svg><span class="btn__label">Reset</span></button>
-      <p class="clock__text" data-ref="clockText" data-testid="clock" data-short="D1 00:00">Day 1 · 00:00</p>
+      <div class="speed" role="group" aria-label="Simulation speed" data-ref="speedGroup">${speeds}</div>
+      <button type="button" class="btn btn--float" data-ref="speedReset" data-testid="speed-reset" aria-label="Reset speed" data-tip-title="Reset speed" data-tip="Return only the speed to x1."><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/></svg><span class="btn__label">Reset speed</span></button>
+      <p class="clock__text" data-ref="clockText" data-testid="clock" data-short="D1 00:00">Day 1 · 00:00:00</p>
     </div>
 
     <div class="notes">
@@ -241,7 +284,7 @@ export function shellHtml(): string {
     </nav>
     </div>
 
-    <aside class="sidebar" id="sidebar" data-ref="sidebar" data-testid="sidebar" aria-label="Storms and world" hidden>
+    <aside class="sidebar" id="sidebar" data-ref="sidebar" data-testid="sidebar" aria-label="Disasters and world" hidden>
       <div class="sidebar__head"><select data-ref="language" data-testid="language-select" aria-label="Language">${LOCALES.map(l => `<option value="${l.code}" lang="${l.htmlLang}">${l.label}</option>`).join('')}</select></div>
       <div class="report-tabs" role="tablist" aria-label="Panel sections" data-ref="reportTabs">${tabs}</div>
 
@@ -256,9 +299,9 @@ export function shellHtml(): string {
           </div>
           <div class="setting"><span class="setting__label">Season</span><div class="season-row" role="radiogroup" aria-label="Season" data-ref="seasonRow">${seasonButtons}</div></div>
           <p class="fine">Changing the season shifts the calendar; the world keeps running.</p>
-          ${CLIMATE_ROWS.map(r => `<label class="setting setting--range"><span class="setting__label">${r.label}</span><input type="range" min="${CLIMATE_LIMITS[r.key][0]}" max="${CLIMATE_LIMITS[r.key][1]}" step="0.1" value="0" data-ref="${r.ref}" data-testid="climate-${r.key}"><output class="setting__value" data-ref="${r.ref}Value" data-testid="climate-${r.key}-value">0</output></label>`).join('')}
+          ${climateRows}
         </div>
-        <div class="setting"><span class="setting__label">Map overlays</span><div class="map-overlays" role="group" aria-label="Map overlays" data-ref="mapOverlays">${overlays}</div></div>
+        <div class="setting setting--overlays"><span class="setting__label">Map overlays</span><div class="map-overlays" role="group" aria-label="Map overlays" data-ref="mapOverlays">${overlays}</div></div>
       </div>
       </div>
 
@@ -267,14 +310,14 @@ export function shellHtml(): string {
           <h2 class="panel-title">Damage report</h2>
           <p class="fine">City losses are cumulative estimates.</p>
           <dl class="metrics">
-            ${metric('damageDissipated', 'Storms dissipated')}${metric('damageTime', 'Average lifetime')}
+            ${metric('damageDissipated', 'Ended disasters')}${metric('damageTime', 'Average lifetime')}
             ${metric('damageDisplaced', 'Displaced people')}${metric('damageMissing', 'Missing (estimated)')}
             ${metric('damageDeaths', 'Deaths (estimated)')}
-            ${metric('damageFlooded', 'Flooded homes')}${metric('damageLoss', 'Estimated loss')}
+            ${metric('damageFlooded', 'Damaged homes')}${metric('damageLoss', 'Estimated loss')}
           </dl>
         </section>
         <section class="storm-section storm-section--active" aria-labelledby="storms-active-title">
-          <h2 class="panel-title storm-section__title" id="storms-active-title"><span class="live-dot" aria-hidden="true"></span><span data-ref="stormActiveTitle" data-testid="storm-active-title">Active storms · 0</span></h2>
+          <h2 class="panel-title storm-section__title" id="storms-active-title"><span class="live-dot" aria-hidden="true"></span><span data-ref="stormActiveTitle" data-testid="storm-active-title">Active disasters</span></h2>
           <p class="fine" data-ref="stormSummary">No storms yet.</p>
           <p class="fine" data-testid="storm-wind-note">Movement speed measures travel, not wind. Gale radius estimates the area with winds of at least 17.2 m/s.</p>
           <ul class="storm-list storm-list--active" data-ref="stormList" data-testid="storm-list"></ul>
@@ -303,11 +346,27 @@ export function shellHtml(): string {
           </figure>
           <button type="button" class="btn" data-ref="stormCenter" data-testid="storm-center">Centre map on storm</button>
         </div>
+        <div class="storm-detail" data-ref="disasterDetail" data-testid="disaster-detail" hidden>
+          <h2 class="panel-title" data-ref="disasterTitle">Disaster</h2>
+          <dl class="metrics">
+            ${metric('disasterKind', 'Disaster type')}${metric('disasterStatus', 'Status')}
+            ${metric('disasterIntensity', 'Strength')}${metric('disasterPosition', 'Position')}
+            ${metric('disasterRadius', 'Affected radius')}${metric('disasterAge', 'Age')}
+            ${metric('disasterMovement', 'Movement speed')}${metric('disasterPressure', 'Pressure')}
+            ${metric('disasterWind', 'Max wind')}${metric('disasterPeak', 'Peak wind')}
+            ${metric('disasterTemperature', 'Air temperature')}${metric('disasterHumidity', 'Humidity')}
+            ${metric('disasterRain', 'Rainfall')}${metric('disasterSnow', 'Snow depth')}
+            ${metric('disasterLoss', 'Estimated loss')}${metric('disasterHomes', 'Damaged homes')}
+          </dl>
+          <h3 class="panel-title">Observations</h3>
+          <ol class="storm-stages" data-ref="disasterHistory" data-testid="disaster-history"></ol>
+          <button type="button" class="btn" data-ref="disasterCenter" data-testid="disaster-center">Centre map on disaster</button>
+        </div>
         <section class="storm-section storm-section--ended" aria-labelledby="storms-ended-title">
-          <h2 class="panel-title storm-section__title" id="storms-ended-title"><span data-ref="stormEndedTitle" data-testid="storm-ended-title">Ended storms · 0</span></h2>
-          <p class="fine">Select a record to show its full track and stage changes on the map. History belongs to this world; export a replay to keep it before resetting.</p>
+          <h2 class="panel-title storm-section__title" id="storms-ended-title"><span data-ref="stormEndedTitle" data-testid="storm-ended-title">Ended disasters</span></h2>
+          <p class="fine">Select a disaster to view its final conditions and damage. Export a replay to keep this world's history before resetting.</p>
           <ul class="storm-list storm-list--ended" data-ref="stormArchive" data-testid="storm-history"></ul>
-          <p class="empty" data-ref="stormArchiveEmpty">No ended storms yet.</p>
+          <p class="empty" data-ref="stormArchiveEmpty">No ended disasters yet.</p>
           <button type="button" class="link-btn" data-ref="stormArchiveMore" data-testid="storm-history-more" hidden>Show all (0)</button>
         </section>
         <h2 class="panel-title">Forming patches</h2>
@@ -316,23 +375,13 @@ export function shellHtml(): string {
       </div>
 
       <div class="report-panel" role="tabpanel" id="panel-environment" data-ref="panel-environment" aria-labelledby="tab-environment" data-panel="environment" tabindex="0" hidden>
-        <h2 class="panel-title">Place by coordinates</h2>
-        <p class="fine">Same as dragging a tool onto the map, with exact numbers.</p>
-        <div class="placement__form">
-          <label class="field"><span>Condition</span><select data-ref="placeTool" data-testid="place-tool">${toolOptions}</select></label>
-          <div class="coords">
-            <label class="field"><span>Longitude °E</span><input type="number" inputmode="decimal" step="0.1" min="-180" max="180" value="140" data-ref="placeLon" data-testid="place-lon"></label>
-            <label class="field"><span>Latitude °N</span><input type="number" inputmode="decimal" step="0.1" min="-90" max="90" value="16" data-ref="placeLat" data-testid="place-lat"></label>
-          </div>
-          <button type="button" class="btn btn--primary" data-ref="placeConfirm" data-testid="place-confirm">Place condition</button>
-        </div>
         <h2 class="panel-title">Active conditions</h2>
         <ul class="effect-list" data-ref="effectList" data-testid="effect-list"></ul>
         <p class="empty" data-ref="effectEmpty">Nothing placed. Conditions fade after a while.</p>
         <h2 class="panel-title">World totals</h2>
         <dl class="metrics metrics--impact" data-testid="impact">
           ${metric('score', 'Impact score')}
-          ${metric('exposed', 'People in gales')}
+          ${metric('exposed', 'People exposed to disasters')}
           ${metric('peak', 'Peak wind')}
         </dl>
         <p class="fine">Impact measures wind over populated areas.</p>
@@ -362,21 +411,21 @@ export function shellHtml(): string {
           <input id="lb-nickname" class="lb-nickname__input" type="text" maxlength="20" autocomplete="off" spellcheck="false" data-ref="lbNickname" data-testid="lb-nickname">
           <button type="submit" class="btn" data-testid="lb-nickname-save">Save</button>
         </form>
-        <p class="fine" data-ref="lbNicknameNote">Your nickname is public. Only a random anonymous ID, this nickname and your storm results are sent; nicknames are not filtered.</p>
+        <p class="fine" data-ref="lbNicknameNote">Your nickname is public. Only a random anonymous ID, this nickname and your disaster results are sent; nicknames are not filtered.</p>
         <p class="fine lb-me" data-ref="lbMe" data-testid="lb-me"></p>
         <button type="button" class="btn btn--danger lb-delete" data-ref="lbDelete" data-testid="lb-delete">Delete my records</button>
         <p class="empty" data-ref="lbStatus" data-testid="lb-status" role="status"></p>
         <table class="lb-table" data-ref="lbTable" data-testid="lb-table" hidden>
-          <thead><tr><th scope="col">Rank</th><th scope="col">Nickname</th><th scope="col">Storms</th><th scope="col">Max grade</th><th scope="col">Loss</th></tr></thead>
+          <thead><tr><th scope="col">Rank</th><th scope="col">Nickname</th><th scope="col">Disasters</th><th scope="col">Max grade</th><th scope="col">Loss</th></tr></thead>
           <tbody data-ref="lbBody"></tbody>
         </table>
         <h2 class="panel-title">This world</h2>
-        <p class="fine">Ended storms from every world on this device. Active storms are listed until they end.</p>
+        <p class="fine">Disasters from every world on this device. Active disasters update until they end.</p>
         <div class="rank-metrics" role="radiogroup" aria-label="Ranking metric" data-ref="rankMetrics">${RANKING_METRICS.map((m, i) => `
           <button type="button" role="radio" class="rank-metric" data-rank-metric="${m.id}" data-testid="rank-metric-${m.id}" aria-checked="${i === 0}" tabindex="${i === 0 ? 0 : -1}">${m.label}</button>`).join('')}
         </div>
         <ol class="storm-rank" data-ref="stormRank" data-testid="storm-rank"></ol>
-        <p class="empty" data-ref="stormRankEmpty">No ranked storms yet.</p>
+        <p class="empty" data-ref="stormRankEmpty">No ranked disasters yet.</p>
         <button type="button" class="btn rank-clear" data-ref="rankClear" data-testid="rank-clear">Clear ranking</button>
         <p class="fine">Map grades: 0 Depression, 1 Tropical Storm, 2 Severe Tropical Storm, 3 Typhoon / Hurricane / Cyclone, 4 Very Strong, 5 Violent, then one more grade every 10 m/s above that.</p>
       </div>
@@ -419,12 +468,21 @@ export function shellHtml(): string {
     </dialog>
 
     <dialog class="dialog dialog--confirm" data-ref="lbDeleteDialog" data-testid="lb-delete-dialog" aria-labelledby="lb-delete-text">
-      <p id="lb-delete-text" class="dialog__text">This removes your nickname and all your uploaded storm results from the world leaderboard. Your local game is not affected. Continue?</p>
+      <p id="lb-delete-text" class="dialog__text">This removes your nickname and all your uploaded disaster results from the world leaderboard. Your local game is not affected. Continue?</p>
       <div class="dialog__actions">
         <button type="button" class="btn" data-ref="lbDeleteCancel" data-testid="lb-delete-cancel">Cancel</button>
         <button type="button" class="btn btn--danger" data-ref="lbDeleteConfirm" data-testid="lb-delete-confirm">Delete</button>
       </div>
     </dialog>
+
+    <section class="traffic-popup" role="dialog" aria-labelledby="traffic-title" data-ref="trafficPopup" data-testid="traffic-popup" hidden>
+      <header class="traffic-popup__head"><div><span data-ref="trafficKind"></span><strong id="traffic-title" data-ref="trafficTitle"></strong></div>
+        <button type="button" class="icon-btn traffic-popup__close" data-ref="trafficClose" data-testid="traffic-close" aria-label="Close">×</button></header>
+      <div class="traffic-popup__route"><div><small>From</small><strong data-ref="trafficFrom"></strong></div><span aria-hidden="true">→</span><div><small>To</small><strong data-ref="trafficTo"></strong></div></div>
+      <dl class="traffic-popup__facts"><div><dt>Current speed</dt><dd data-ref="trafficSpeed"></dd></div>
+        <div><dt>Departed</dt><dd data-ref="trafficDeparture"></dd></div>
+        <div><dt>Estimated arrival</dt><dd data-ref="trafficArrival"></dd></div></dl>
+    </section>
 
     <section class="popover" role="dialog" aria-labelledby="spot-title" data-ref="spotPopover" data-testid="spot-popover" hidden>
       <header class="popover__head">
@@ -435,6 +493,7 @@ export function shellHtml(): string {
         <div><dt>Sea temp</dt><dd data-ref="spotSst"></dd></div>
         <div><dt>Air</dt><dd data-ref="spotAir"></dd></div>
         <div><dt>Humidity</dt><dd data-ref="spotHumidity"></dd></div>
+        <div><dt>Atmospheric instability</dt><dd data-ref="spotInstability"></dd></div>
         <div><dt>Shear</dt><dd data-ref="spotShear"></dd></div>
         <div><dt>Pressure</dt><dd data-ref="spotPressure"></dd></div>
       </dl>
@@ -452,5 +511,11 @@ export function shellHtml(): string {
   </div>`;
 }
 
-/** Copyright line with the privacy-policy and tip links; app.ts opens it in a popup (`a[data-privacy-link]`) and keeps the href for new-tab use. */
-export const footerHtml = (): string => `<footer class="sidebar__foot"><span>© 2026 TypoStudio</span><span aria-hidden="true">·</span><a href="/privacy.html" data-privacy-link>Privacy policy</a><span aria-hidden="true">·</span><a href="https://buymeacoffee.com/typ0s2d10" target="_blank" rel="noopener">Buy me a coffee</a></footer>`;
+const inquiryUrl = `https://mail.google.com/mail/?${new URLSearchParams({
+  view: 'cm', fs: '1', to: 'typ0s2d10@gmail.com',
+  su: `Typhoon Lab v${appVersion} — Inquiry`,
+  body: `Typhoon Lab\nVersion: ${appVersion}\n\n`,
+})}`.replaceAll('&', '&amp;');
+
+/** Shared copyright links for the sidebar and help dialog. */
+export const footerHtml = (): string => `<footer class="sidebar__foot"><span>© 2026 TypoStudio</span><span aria-hidden="true">·</span><a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener license">CC BY-NC-SA 4.0</a><span aria-hidden="true">·</span><a href="${inquiryUrl}" target="_blank" rel="noopener noreferrer" data-inquiry-link>Contact support</a><span aria-hidden="true">·</span><a href="/privacy.html" data-privacy-link>Privacy policy</a><span aria-hidden="true">·</span><a href="https://buymeacoffee.com/typ0s2d10" target="_blank" rel="noopener">Buy me a coffee</a></footer>`;

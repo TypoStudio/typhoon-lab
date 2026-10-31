@@ -72,6 +72,17 @@ describe('result building', () => {
 });
 
 describe('submit', () => {
+  it('counts distinct disaster results without colliding with typhoons or other disasters', async () => {
+    online();
+    const heat = result({ stormId: 0, disasterId: 'weather-1', name: 'Heatwave', stage: 'Heatwave', grade: 0 });
+    const snow = result({ stormId: 0, disasterId: 'blizzard-1', name: 'Blizzard', stage: 'Blizzard', grade: 0 });
+    await submit(heat); await submit(snow); await submit(result()); await submit(heat);
+    expect(docs.has('results/abcd1234_7_weather-1')).toBe(true);
+    expect(docs.has('results/abcd1234_7_blizzard-1')).toBe(true);
+    expect(docs.has('results/abcd1234_7_1')).toBe(true);
+    expect(docs.get('players/abcd1234')).toMatchObject({ storms: 3, totalLossUsd: 15_000_000, maxGrade: 4 });
+    expect(docs.get('results/abcd1234_7_weather-1')).toMatchObject({ stage: 'Heatwave', grade: 0 });
+  });
   it('writes the result and player totals once, however often it is submitted', async () => {
     online();
     await submit(result());

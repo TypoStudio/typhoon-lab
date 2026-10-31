@@ -4,7 +4,7 @@ async function importReplay(page: Page, replay: object) {
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
   await page.getByTestId('tab-replay').click();
   await page.getByTestId('import-replay-input').setInputFiles({ name: 'history.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(replay)) });
-  await expect(page.getByTestId('replay-message')).toContainText(String((replay as any).untilTick));
+  await expect(page.getByTestId('replay-message')).toContainText(String((replay as any).untilTick), { timeout: 60_000 });
   await page.getByTestId('tab-storms').click();
 }
 async function observeLabels(page: Page) {
@@ -47,8 +47,8 @@ test('ended records show complete routes and weakening stages, survive replay, a
   await expect(row).toHaveCount(1);
   await expect(row).toContainText('Dissipated');
   // Active and ended storms are separate, counted sections; ended rows carry an outcome chip and no accent bar or cyclone icon.
-  await expect(page.getByTestId('storm-active-title')).toHaveText('Active storms · 0');
-  await expect(page.getByTestId('storm-ended-title')).toHaveText('Ended storms · 1');
+  await expect(page.getByTestId('storm-active-title')).toHaveText('Active disasters · 0');
+  await expect(page.getByTestId('storm-ended-title')).toHaveText('Ended disasters · 1');
   await expect(row.locator('.storm-row__chip')).toHaveText('Dissipated');
   await expect(row.locator('.storm-row__chip')).toBeVisible();
   await expect(row.locator('.storm-row__icon')).toBeHidden();
@@ -82,8 +82,8 @@ test('ended records show complete routes and weakening stages, survive replay, a
     });
   })).toBe(true);
   await page.getByTestId('language-select').selectOption('ko');
-  await expect(page.getByTestId('storm-active-title')).toHaveText('활동 중인 태풍 · 0');
-  await expect(page.getByTestId('storm-ended-title')).toHaveText('소멸한 태풍 · 1');
+  await expect(page.getByTestId('storm-active-title')).toHaveText('진행 중인 재난 · 0');
+  await expect(page.getByTestId('storm-ended-title')).toHaveText('종료된 재난 · 1');
   await expect(page.getByTestId('storm-stages')).toContainText('등급');
   await expect(detail.locator('[data-metric="outcome"]')).toHaveText('소멸');
   await expect.poll(() => page.evaluate(() => (window as any).__mapLabels.includes('소멸'))).toBe(true);
@@ -93,7 +93,8 @@ test('ended records show complete routes and weakening stages, survive replay, a
   await page.getByTestId('play-toggle').click();
   await expect(row).toHaveAttribute('aria-pressed', 'true');
   expect(await page.evaluate(() => (window as any).__typhoonLab.state.stormArchive[0])).toEqual(fixture.record);
-  await page.getByTestId('reset').click();
+  await page.reload();
+  await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   await expect(row).toHaveCount(0);
   await importReplay(page, fixture.replay);
   expect(await page.evaluate(() => (window as any).__typhoonLab.state.stormArchive[0])).toEqual(fixture.record);
@@ -131,6 +132,7 @@ test('live map labels show storm identifiers, grades, radius and movement speed'
 });
 
 test('more than eight ended storms collapse behind a Show all link', async ({ page }) => {
+  test.setTimeout(90_000);
   await page.goto('/?renderer=canvas&lang=en&seed=20261022&help=0&start=2026-08-01');
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   const replay = await page.evaluate(async () => {
@@ -148,7 +150,7 @@ test('more than eight ended storms collapse behind a Show all link', async ({ pa
   const rows = page.getByTestId('storm-history-row');
   const total = await rows.count();
   expect(total).toBeGreaterThan(8);
-  await expect(page.getByTestId('storm-ended-title')).toHaveText(`Ended storms · ${total}`);
+  await expect(page.getByTestId('storm-ended-title')).toHaveText(`Ended disasters · ${total}`);
   await expect(rows.filter({ visible: true })).toHaveCount(8);
   const more = page.getByTestId('storm-history-more');
   await expect(more).toHaveText(`Show all (${total})`);

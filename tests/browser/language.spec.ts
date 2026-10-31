@@ -8,7 +8,7 @@ test('Korean controls, help, errors and live language changes preserve the world
   await page.getByTestId('play-toggle').click();
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
   await expect(page.getByTestId('layer-wind')).toHaveAccessibleName('바람');
-  for (const [id, label] of [['humidity', '습도'], ['rain', '강수'], ['pressure', '기압'], ['temperature', '수온'], ['population', '인구']]) {
+  for (const [id, label] of [['humidity', '습도'], ['rain', '강수'], ['pressure', '기압'], ['temperature', '온도'], ['population', '인구']]) {
     await expect(page.getByTestId(`layer-${id}`)).toHaveAccessibleName(label);
     // data-tip-title holds the English key; the opened tooltip is what the player reads.
     await page.getByTestId(`layer-${id}`).hover();
@@ -21,23 +21,23 @@ test('Korean controls, help, errors and live language changes preserve the world
   await expect(page.getByTestId('historic-load')).toHaveText('불러오기');
   await expect(page.getByTestId('climate-reset')).toHaveText('초기화');
   await expect(page.getByTestId('climate-reset')).toHaveAttribute('data-tip', 'Set ocean warming, ENSO and polar temperature back to 0');
-  await expect(page.getByTestId('storm-active-title')).toHaveText('활동 중인 태풍 · 0');
-  await expect(page.getByTestId('storm-ended-title')).toHaveText('소멸한 태풍 · 0');
+  await expect(page.getByTestId('storm-active-title')).toHaveText('진행 중인 재난 · 0');
+  await expect(page.getByTestId('storm-ended-title')).toHaveText('종료된 재난 · 0');
   await expect(page.getByTestId('genesis-toggle')).toHaveAccessibleName('태풍 자연 발생');
   await expect(page.getByTestId('sidebar')).toContainText('과거 태풍');
   await expect(page.getByTestId('recorded-path-toggle')).toHaveAccessibleName('기록 경로');
   await page.getByTestId('tab-environment').click();
-  await page.getByTestId('place-confirm').click();
-  await expect(page.getByTestId('status')).toContainText('배치했습니다');
+  await expect(page.getByTestId('place-confirm')).toHaveCount(0);
+  await expect(page.locator('#panel-environment')).toContainText('재난 노출 인구');
   const snapshot = await page.evaluate(() => {
     const { grid, ...rest } = (window as any).__typhoonLab.state;
     return rest;
   });
   await page.getByTestId('language-select').selectOption('en');
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
-  await expect(page.getByTestId('status')).toContainText('placed at');
+  await expect(page.locator('#panel-environment')).toContainText('People exposed to disasters');
   await expect(page.getByTestId('layer-wind')).toHaveAccessibleName('Wind');
-  for (const [id, label] of [['humidity', 'Humidity'], ['rain', 'Rain'], ['pressure', 'Pressure'], ['temperature', 'Sea temp'], ['population', 'Population']]) {
+  for (const [id, label] of [['humidity', 'Humidity'], ['rain', 'Rain'], ['pressure', 'Pressure'], ['temperature', 'Temperature'], ['population', 'Population']]) {
     await expect(page.getByTestId(`layer-${id}`)).toHaveAccessibleName(label);
     // data-tip-title holds the English key; the opened tooltip is what the player reads.
     await page.getByTestId(`layer-${id}`).hover();
@@ -45,14 +45,14 @@ test('Korean controls, help, errors and live language changes preserve the world
     await expect(page.locator('#tip .tip__title')).toHaveText(label);
   }
   await page.getByTestId('language-select').selectOption('ko');
-  await expect(page.getByTestId('status')).toContainText('배치했습니다');
+  await expect(page.locator('#panel-environment')).toContainText('재난 노출 인구');
   expect(await page.evaluate(() => {
     const { grid, ...rest } = (window as any).__typhoonLab.state;
     return rest;
   })).toEqual(snapshot);
   await page.getByTestId('help-open').click();
   await expect(page.getByTestId('help-dialog')).toContainText('키보드로 조작');
-  await expect(page.getByTestId('help-dialog')).toContainText('숫자 1–9, 0, -, =은 조건 선택');
+  await expect(page.getByTestId('help-dialog')).toContainText('Q–U 키도 같습니다');
   await expect(page.getByTestId('help-dialog')).toContainText('단축키는 입력란에 글자를 입력하는 중이거나');
   await expect(page.getByTestId('help-close')).toHaveText('확인');
   await page.getByTestId('help-close').click();
@@ -101,7 +101,7 @@ test('Korean browser default and controls fit a 320px screen', async ({ browser 
     await page.getByTestId('sidebar-toggle').click();
     await expect(page.getByTestId('language-select')).toBeVisible();
     await page.getByTestId('language-select').selectOption('en');
-    await expect(page.getByTestId('tab-storms')).toHaveText('Storms');
+    await expect(page.getByTestId('tab-storms')).toHaveText('Disasters');
     await page.getByTestId('language-select').selectOption('ko');
     if (process.env.TYPHOON_SCREENSHOTS === '1') await page.screenshot({ path: 'test-results/korean-320.png' });
   } finally { await context.close(); }

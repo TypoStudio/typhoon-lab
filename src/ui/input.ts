@@ -3,14 +3,19 @@ import type { MapCamera } from '../render/camera';
 export interface MapInputHandlers {
   /** A click or tap that was not a drag. Coordinates are CSS px inside the element. */
   onTap(px: number, py: number): void;
-  /** Mouse hover position, or null when the pointer leaves. */
+  /** Mouse hover or the point pressed by touch/pen; null when the mouse leaves. */
   onHover(px: number | null, py: number | null): void;
   /** True while the camera is being moved by pan, pinch or wheel; false when the gesture ends. */
   onInteract(active: boolean): void;
+  /** Pointer held still: return true if handled, so release will not also select or place a tool. */
+  onHold?(px: number, py: number): boolean;
+  /** A handled hold ended, moved, gained a second pointer or was interrupted. */
+  onHoldEnd?(): void;
 }
 
 const DRAG_SLOP = 6;
 const WHEEL_IDLE_MS = 180;
+const HOLD_MS = 450;
 
 /**
  * Pointer input for the map: drag to pan, wheel / pinch to zoom, tap to select. Taps and drags are
@@ -23,6 +28,18 @@ export function attachMapInput(el: HTMLElement, getView: () => MapCamera, handle
   let pinch = 0;
   let active = false;
   let wheelTimer = 0;
+  let holdTimer = 0;
+  let holding = false;
+  let holdConsumed = false;
+
+  const cancelHold = () => {
+    window.clearTimeout(holdTimer);
+    holdTimer = 0;
+    if (holding) {
+      holding = false;
+      handlers.onHoldEnd?.();
+    }
+  };
 
   const setActive = (on: boolean) => {
     if (on === active) return;
@@ -40,7 +57,17 @@ export function attachMapInput(el: HTMLElement, getView: () => MapCamera, handle
     const p = local(ev);
     pointers.set(ev.pointerId, p);
     try { el.setPointerCapture(ev.pointerId); } catch { /* capture can fail for synthetic events */ }
-    if (pointers.size === 1) { start = p; moved = false; }
+    if (pointers.size === 1) {
+      start = p; moved = false; holdConsumed = false;
+      handlers.onHover(p.x, p.y);
+      if (handlers.onHold) {
+        holdTimer = window.setTimeout(() => {
+          holdTimer = 0;
+          holding = handlers.onHold!(start.x, start.y);
+          holdConsumed = holding;
+        }, HOLD_MS);
+      }
+    } else cancelHold();
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       pinch = Math.hypot(a.x - b.x, a.y - b.y);
@@ -58,6 +85,7 @@ export function attachMapInput(el: HTMLElement, getView: () => MapCamera, handle
     }
     if (pointers.size === 1) {
       if (!moved && Math.hypot(p.x - start.x, p.y - start.y) > DRAG_SLOP) {
+        cancelHold();
         moved = true;
         setActive(true);
         getView().dragPx(start.x, start.y, p.x, p.y);
@@ -83,8 +111,9 @@ export function attachMapInput(el: HTMLElement, getView: () => MapCamera, handle
     const wasOnly = pointers.size === 1;
     const had = pointers.delete(ev.pointerId);
     if (!had) return;
+    cancelHold();
     try { el.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
-    if (wasOnly && !moved && ev.type === 'pointerup') {
+    if (wasOnly && !moved && !holdConsumed && ev.type === 'pointerup') {
       const p = local(ev);
       handlers.onTap(p.x, p.y);
     }
@@ -94,6 +123,19 @@ export function attachMapInput(el: HTMLElement, getView: () => MapCamera, handle
   };
 
   const leave = (ev: PointerEvent) => { if (ev.pointerType === 'mouse') handlers.onHover(null, null); };
+
+  const cancel = () => {
+    cancelHold();
+    const ids = [...pointers.keys()];
+    pointers.clear();
+    for (const id of ids) {
+      try { el.releasePointerCapture(id); } catch { /* already released */ }
+    }
+    pinch = 0;
+    setActive(wheelTimer !== 0);
+  };
+  const visibility = () => { if (document.hidden) cancel(); };
+  const contextMenu = (ev: Event) => { if (holdTimer || holding) ev.preventDefault(); };
 
   const wheel = (ev: WheelEvent) => {
     ev.preventDefault();
@@ -108,17 +150,27 @@ export function attachMapInput(el: HTMLElement, getView: () => MapCamera, handle
 
   el.addEventListener('pointerdown', down);
   el.addEventListener('pointermove', move);
-  el.addEventListener('pointerup', up);
-  el.addEventListener('pointercancel', up);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
+  el.addEventListener('lostpointercapture', up);
   el.addEventListener('pointerleave', leave);
+  el.addEventListener('contextmenu', contextMenu);
   el.addEventListener('wheel', wheel, { passive: false });
+  window.addEventListener('blur', cancel);
+  document.addEventListener('visibilitychange', visibility);
   return () => {
     window.clearTimeout(wheelTimer);
+    wheelTimer = 0;
+    cancel();
     el.removeEventListener('pointerdown', down);
     el.removeEventListener('pointermove', move);
-    el.removeEventListener('pointerup', up);
-    el.removeEventListener('pointercancel', up);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    el.removeEventListener('lostpointercapture', up);
     el.removeEventListener('pointerleave', leave);
+    el.removeEventListener('contextmenu', contextMenu);
     el.removeEventListener('wheel', wheel);
+    window.removeEventListener('blur', cancel);
+    document.removeEventListener('visibilitychange', visibility);
   };
 }

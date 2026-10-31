@@ -53,6 +53,24 @@ test('drop removes the floating icon and the placed condition moves with the map
   await noDrag(page);
 });
 
+test('a plain sea-temperature drag is warm; clicking twice selects cool for the next drag', async ({ page }) => {
+  await ready(page);
+  await beginDrag(page, 'warm');
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.effects.length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).__typhoonLab.state.effects[0].type)).toBe('warm');
+
+  const button = page.getByTestId('tool-warm');
+  await button.click();
+  await expect(button).toHaveAttribute('data-variant', 'warm');
+  await button.click();
+  await expect(button).toHaveAttribute('data-variant', 'cool');
+  await beginDrag(page, 'warm');
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.effects.length)).toBe(2);
+  expect(await page.evaluate(() => (window as any).__typhoonLab.state.effects[1].type)).toBe('cool');
+});
+
 test('interrupted drags clean up and cannot leave multiple floating icons', async ({ page }) => {
   test.setTimeout(60_000);
   await ready(page);
@@ -74,7 +92,7 @@ test('interrupted drags clean up and cannot leave multiple floating icons', asyn
     expect(await page.evaluate(() => (window as any).__typhoonLab.state.effects.length)).toBe(0);
   }
   // Releasing outside the captured element must still finish exactly one drop.
-  const [clientX, clientY] = await beginDrag(page, 'high');
+  const [clientX, clientY] = await beginDrag(page, 'low');
   await page.evaluate(({ clientX, clientY }) => window.dispatchEvent(new PointerEvent('pointerup', {
     pointerId: (window as any).__palettePointer, pointerType: 'mouse', clientX, clientY,
   })), { clientX, clientY });
@@ -114,7 +132,7 @@ test('rapid repeated drops place each tool once without arming buttons or moving
     return { cx: v.cx, cy: v.cy, scale: v.scale };
   });
   const destination = await page.evaluate(() => (window as any).__typhoonLab.mapView.lonLatToPx(140, 16));
-  const tools = ['warm', 'moisture', 'low', 'high'];
+  const tools = ['warm', 'moisture', 'low', 'low-shear'];
   for (let n = 0; n < 16; n++) {
     const button = page.getByTestId(`tool-${tools[n % 4]}`);
     const r = (await button.boundingBox())!;
@@ -162,6 +180,8 @@ test('secondary pointers cannot steal a drag and a delayed click cannot arm anot
   await page.getByTestId('tool-low').click();
   await expect(page.getByTestId('tool-low')).toHaveAttribute('aria-pressed', 'true');
   await page.getByTestId('tool-low').press('Enter');
+  await expect(page.getByTestId('tool-low')).toHaveAttribute('data-variant', 'high');
+  await page.keyboard.press('Escape');
   await expect(page.getByTestId('tool-low')).toHaveAttribute('aria-pressed', 'false');
 });
 
@@ -206,40 +226,39 @@ test('condition range follows armed hover and reveals placed effects only near t
   await expect.poll(async () => (await ranges()).length).toBe(0);
 });
 
-test('all twelve conditions are in one palette and keys 1-9, 0, - and = arm them in order', async ({ page }) => {
+test('seven paired buttons cycle warm/cool and the other opposites by key', async ({ page }) => {
   await ready(page);
-  const tools = ['warm', 'moisture', 'low', 'low-shear', 'warm-air', 'updraft', 'cool', 'dry', 'high', 'cold-air', 'downdraft', 'high-shear'];
-  await expect(page.locator('[data-palette-panel="conditions"] [data-tool]')).toHaveCount(12);
+  const pairs = [['warm', 'cool'], ['moisture', 'dry'], ['low', 'high'], ['low-shear', 'high-shear'], ['warm-air', 'cold-air'], ['updraft', 'downdraft'], ['unstable-air', 'stable-air']];
+  await expect(page.locator('[data-palette-panel="conditions"] [data-tool]')).toHaveCount(7);
   await expect(page.locator('[data-testid^="conditions-"]')).toHaveCount(0);
   await expect(page.getByTestId('weather-palette')).toContainText('Drag onto the map');
-  await expect(page.locator('#map-help')).toContainText('Number keys one to nine and zero, then minus and equals, select a condition');
-  for (const [index, tool] of tools.entries()) {
-    const key = '1234567890-='[index];
-    await expect(page.getByTestId(`tool-${tool}`)).toBeVisible();
-    await expect(page.getByTestId(`tool-${tool}`)).toHaveAttribute('aria-keyshortcuts', key);
+  await expect(page.locator('#map-help')).toContainText('Keys Q to U cycle paired conditions');
+  for (const [index, [first, second]] of pairs.entries()) {
+    const key = 'qwertyu'[index];
+    const button = page.getByTestId(`tool-${first}`);
+    await expect(button).toBeVisible();
+    await expect(button).toHaveAttribute('aria-keyshortcuts', key.toUpperCase());
     await page.keyboard.press(key);
-    await expect(page.getByTestId(`tool-${tool}`)).toHaveAttribute('aria-pressed', 'true');
-    for (const other of tools.filter(t => t !== tool)) await expect(page.getByTestId(`tool-${other}`)).toHaveAttribute('aria-pressed', 'false');
-    // The same key again puts the tool away.
+    await expect(button).toHaveAttribute('aria-pressed', 'true');
+    await expect(button).toHaveAttribute('data-variant', first);
     await page.keyboard.press(key);
-    await expect(page.getByTestId(`tool-${tool}`)).toHaveAttribute('aria-pressed', 'false');
+    await expect(button).toHaveAttribute('data-variant', second);
+    await page.keyboard.press('Escape');
+    await expect(button).toHaveAttribute('aria-pressed', 'false');
   }
 });
 
 test.describe('phone palette', () => {
   test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });
 
-  async function touch(page: Page, type: 'touchStart' | 'touchMove' | 'touchEnd', x = 0, y = 0) {
-    const cdp = await page.context().newCDPSession(page);
-    await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
-    await cdp.detach();
-  }
-
   test('a swipe along the row scrolls it; a vertical drag from a cell places the tool on the map', async ({ page }) => {
     test.setTimeout(60_000);
     await page.goto('/?renderer=canvas&help=0&start=2026-08-01&map=flat&seed=20261022');
     await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
     const row = page.locator('[data-palette-panel="conditions"]');
+    const cdp = await page.context().newCDPSession(page);
+    const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', x = 0, y = 0) =>
+      cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
     const effects = () => page.evaluate(() => (window as any).__typhoonLab.state.effects.length);
     // Cells are about 3.25rem wide in one row; the keys and testids are unchanged.
     const warm = (await page.getByTestId('tool-warm').boundingBox())!;
@@ -249,10 +268,10 @@ test.describe('phone palette', () => {
 
     // Sideways: the row scrolls and no ghost icon or effect appears.
     const before = await row.evaluate(el => el.scrollLeft);
-    await touch(page, 'touchStart', start.x + 120, start.y);
-    for (let i = 1; i <= 10; i++) { await touch(page, 'touchMove', start.x + 120 - i * 14, start.y); await page.waitForTimeout(20); }
+    await touch('touchStart', start.x + 120, start.y);
+    for (let i = 1; i <= 10; i++) { await touch('touchMove', start.x + 120 - i * 14, start.y); await page.waitForTimeout(20); }
     await expect(page.locator('.drag-ghost')).toHaveCount(0);
-    await touch(page, 'touchEnd');
+    await touch('touchEnd');
     await expect.poll(() => row.evaluate(el => el.scrollLeft)).toBeGreaterThan(before);
     expect(await effects()).toBe(0);
     await row.evaluate(el => { el.scrollLeft = 0; });
@@ -261,11 +280,12 @@ test.describe('phone palette', () => {
     const box = (await page.getByTestId('map-stage').boundingBox())!;
     const sea = await page.evaluate(() => (window as any).__typhoonLab.mapView.lonLatToPx(140, 16));
     const end = { x: box.x + sea[0], y: box.y + sea[1] + 44 };
-    await touch(page, 'touchStart', start.x, start.y);
-    for (let i = 1; i <= 12; i++) { await touch(page, 'touchMove', start.x + (end.x - start.x) * i / 12, start.y + (end.y - start.y) * i / 12); await page.waitForTimeout(20); }
+    await touch('touchStart', start.x, start.y);
+    for (let i = 1; i <= 12; i++) { await touch('touchMove', start.x + (end.x - start.x) * i / 12, start.y + (end.y - start.y) * i / 12); await page.waitForTimeout(20); }
     await expect(page.locator('.drag-ghost')).toHaveCount(1);
-    await touch(page, 'touchEnd');
+    await touch('touchEnd');
     await expect.poll(effects).toBe(1);
     expect(await page.evaluate(() => (window as any).__typhoonLab.state.effects[0].type)).toBe('warm');
+    await cdp.detach();
   });
 });

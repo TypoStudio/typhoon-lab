@@ -6,6 +6,97 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/__worker-test');
 });
 
+test('x1 advances in real time and x4 advances 600 model seconds per real second', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const worker = new Worker('/src/worker.ts', { type: 'module' });
+    const request = (message: object): Promise<any> => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Worker clock timed out')), 10_000);
+      const listener = (event: MessageEvent) => {
+        if (event.data.type !== 'state' && event.data.type !== 'error') return;
+        clearTimeout(timer);
+        worker.removeEventListener('message', listener);
+        if (event.data.type === 'error') reject(new Error(event.data.message));
+        else resolve(event.data);
+      };
+      worker.addEventListener('message', listener);
+      worker.postMessage(message);
+    });
+    try {
+      const initial = await request({ type: 'init', seed: 1 });
+      const firstWall = performance.now();
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      const one = await request({ type: 'play', playing: false });
+      const oneWall = performance.now() - firstWall;
+      await request({ type: 'speed', speed: 600 });
+      await request({ type: 'play', playing: true });
+      const secondWall = performance.now();
+      await new Promise(resolve => setTimeout(resolve, 1600));
+      const two = await request({ type: 'play', playing: false });
+      const twoWall = performance.now() - secondWall;
+      await request({ type: 'speed', speed: 28800 });
+      await request({ type: 'play', playing: true });
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const twelve = await request({ type: 'play', playing: false });
+      return { initial, one, two, twelve, oneWall, twoWall };
+    } finally { worker.terminate(); }
+  });
+  const oneSeconds = (result.one.clockHours - result.initial.clockHours) * 3600;
+  const twoSeconds = (result.two.clockHours - result.one.clockHours) * 3600;
+  expect(oneSeconds / result.oneWall * 1000).toBeGreaterThan(0.7);
+  expect(oneSeconds / result.oneWall * 1000).toBeLessThan(1.3);
+  expect(twoSeconds / result.twoWall * 1000).toBeGreaterThan(450);
+  expect(twoSeconds / result.twoWall * 1000).toBeLessThan(750);
+  expect(result.two.state.tick).toBeGreaterThan(result.one.state.tick);
+  expect((result.twelve.clockHours - result.two.clockHours) * 3600).toBeGreaterThan(10_000);
+});
+
+test('map gestures stop worker time, preserve speed, and respect an explicit pause', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const worker = new Worker('/src/worker.ts', { type: 'module' });
+    const next = (type = 'state'): Promise<any> => new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => { worker.removeEventListener('message', listener); reject(new Error(`Worker timed out: ${type}`)); }, 10_000);
+      const listener = (event: MessageEvent) => {
+        if (event.data.type === type || event.data.type === 'error') {
+          clearTimeout(timeout); worker.removeEventListener('message', listener);
+          if (event.data.type === 'error') reject(new Error(event.data.message));
+          else resolve(event.data);
+        }
+      };
+      worker.addEventListener('message', listener);
+    });
+    const request = (message: object, type = 'state') => { const pending = next(type); worker.postMessage(message); return pending; };
+    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    try {
+      await request({ type: 'init', seed: 42 });
+      await request({ type: 'speed', speed: 28800 });
+      const frozen = (await request({ type: 'interaction', active: true }, 'interaction')).state;
+      await delay(700);
+      const held = (await request({ type: 'speed', speed: 28800 })).state;
+      const release = (await request({ type: 'interaction', active: false }, 'interaction')).state;
+      const resumed = (await next()).state;
+      const paused = (await request({ type: 'interaction', active: true }, 'interaction')).state;
+      await request({ type: 'play', playing: false });
+      await request({ type: 'interaction', active: false }, 'interaction');
+      await delay(600);
+      const stillPaused = (await request({ type: 'speed', speed: 28800 })).state;
+      // Reset starts playing, but must still respect an ongoing camera gesture.
+      await request({ type: 'interaction', active: true }, 'interaction');
+      await request({ type: 'reset' });
+      await delay(600);
+      const resetHeld = (await request({ type: 'speed', speed: 28800 })).state;
+      await request({ type: 'interaction', active: false }, 'interaction');
+      const resetResumed = (await next()).state;
+      return { frozen, held, release, resumedTick: resumed.tick, paused, stillPaused, resetHeldTick: resetHeld.tick, resetResumedTick: resetResumed.tick };
+    } finally { worker.terminate(); }
+  });
+  expect(result.held).toEqual(result.frozen);
+  expect(result.release).toEqual(result.frozen);
+  expect(result.resumedTick).toBeGreaterThan(result.frozen.tick);
+  expect(result.stillPaused).toEqual(result.paused);
+  expect(result.resetHeldTick).toBe(0);
+  expect(result.resetResumedTick).toBeGreaterThan(0);
+});
+
 test('live worker starts empty, creates multiple growing storms, and replays a snapshot exactly', async ({ page }) => {
   const result = await page.evaluate(async () => {
     const worker = new Worker('/src/worker.ts', { type: 'module' });
@@ -20,6 +111,7 @@ test('live worker starts empty, creates multiple growing storms, and replays a s
     const request = (message: object, response = 'state') => { const promise = next(response); worker.postMessage(message); return promise; };
     try {
       const initial = (await request({ type: 'init' })).state;
+      await request({ type: 'speed', speed: 28800 });
       const running = (await next('state', data => data.state.tick > 0)).state;
       await request({ type: 'play', playing: false });
       const invalid = (await request({ type: 'place', tool: 'warm', lon: Number.NaN, lat: 16 }, 'placement')).result;
@@ -27,7 +119,7 @@ test('live worker starts empty, creates multiple growing storms, and replays a s
       for (const [lon, lat] of [[140, 16], [-55, 16]]) {
         for (const tool of ['warm', 'moisture', 'low']) valid.push((await request({ type: 'place', tool, lon, lat }, 'placement')).result);
       }
-      const placed = (await request({ type: 'speed', speed: 12 })).state;
+      const placed = (await request({ type: 'speed', speed: 28800 })).state;
       const forming = next('state', data => data.state.storms.length >= 2);
       worker.postMessage({ type: 'play', playing: true });
       const first = (await forming).state;
@@ -67,12 +159,14 @@ test('worker pauses explicitly, rejects malformed replay, and resets into a live
     const request = (message: object, response = 'state') => { const promise = next(response); worker.postMessage(message); return promise; };
     try {
       const initial = (await request({ type: 'init', seed: 42 })).state;
+      await request({ type: 'speed', speed: 28800 });
       await new Promise(resolve => setTimeout(resolve, 700));
       const paused = (await request({ type: 'play', playing: false })).state;
       await new Promise(resolve => setTimeout(resolve, 600));
-      const afterPause = (await request({ type: 'speed', speed: 12 })).state;
+      const afterPause = (await request({ type: 'speed', speed: 28800 })).state;
       const invalid = await request({ type: 'replay', seed: 42, untilTick: 10, actions: [{ tick: -1, type: 'low', lon: 130, lat: 20 }] }, 'error');
       const reset = (await request({ type: 'reset' })).state;
+      await request({ type: 'speed', speed: 28800 });
       const resumed = (await next('state')).state;
       return { initial, paused, afterPause, invalid, reset, resumed };
     } finally { worker.terminate(); }
@@ -100,7 +194,7 @@ test('an empty live world keeps running beyond the old round deadline', async ({
           }
         };
         worker.postMessage({ type: 'init' });
-        worker.postMessage({ type: 'speed', speed: 12 });
+        worker.postMessage({ type: 'speed', speed: 28800 });
       });
     } finally { worker.terminate(); }
   });
@@ -150,7 +244,7 @@ test('worker toggles natural formation, loads a past typhoon, replays both exact
       ];
       const on = await exchange({ type: 'genesis', on: true });
       const loaded = await exchange({ type: 'historic', typhoonId: 'maemi-2003' });
-      await request({ type: 'speed', speed: 12 });
+      await request({ type: 'speed', speed: 28800 });
       await request({ type: 'play', playing: true });
       await state(s => s.genesis.waves >= 2);
       const snapshot = await request({ type: 'play', playing: false });

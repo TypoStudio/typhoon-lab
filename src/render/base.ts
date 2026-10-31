@@ -8,6 +8,8 @@ export interface BaseRenderer {
   resize(width: number, height: number, dpr: number): void;
   /** RGBA image, cols × rows, row 0 = south. */
   setFieldImage(rgba: Uint8Array, cols: number, rows: number): void;
+  /** Opaque colours applied directly to sea and land, without another overlay mesh. */
+  setSurfaceImages(sea: Uint8Array, land: Uint8Array, cols: number, rows: number): void;
   draw(view: MapCamera, particles: ParticleSystem, particleAlpha: number, theme: Theme, humidity: boolean): void;
   isLost(): boolean;
   dispose(): void;

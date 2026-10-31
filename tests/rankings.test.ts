@@ -25,6 +25,19 @@ const fakeStorage = (initial: string | null = null) => {
 };
 
 describe('storm ranking', () => {
+  it('distinguishes traffic dispatches while ignoring dispatches after the storm ends', () => {
+    const dispatches = [{ tick: 4, assignments: [{ vehicleId: 'AIR-0', departureId: 'air-1:0' }] }];
+    expect(actionsHash(actions, 3, dispatches)).toBe(actionsHash(actions, 3));
+    expect(actionsHash(actions, 4, dispatches)).not.toBe(actionsHash(actions, 4));
+    const other = [{ tick: 4, assignments: [{ vehicleId: 'AIR-0', departureId: 'air-2:0' }] }];
+    expect(actionsHash(actions, 4, dispatches)).not.toBe(actionsHash(actions, 4, other));
+    const endTick = record().endedHour * TICKS_PER_HOUR;
+    const atEnd = [{ ...dispatches[0], tick: endTick }];
+    expect(entryFromStorm(7, record(), 120, actions, 'T', atEnd).key).toBe(entryFromStorm(7, record(), 120, actions, 'T').key);
+    expect(entryFromStorm(7, record(), 120, actions, 'T', [{ ...dispatches[0], tick: endTick - 1 }]).key)
+      .not.toBe(entryFromStorm(7, record(), 120, actions, 'T').key);
+  });
+
   it('derives per-storm figures from the storm damage score with the city rates', () => {
     const damage = estimateStormDamage(200_000);
     expect(damage).toEqual({ displaced: 12_400, missing: 4, deaths: 20, floodedHomes: 8_060, lossUsd: stormLossUsd(200_000) });

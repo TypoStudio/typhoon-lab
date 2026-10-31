@@ -37,6 +37,21 @@ export const JPY_PER_USD = 150;
 export const CNY_PER_USD = 7.2;
 export const TWD_PER_USD = 32;
 
+const MAP_CURRENCY_RATES = {
+  en: 1, ko: KRW_PER_USD, ja: JPY_PER_USD,
+  'zh-CN': CNY_PER_USD, 'zh-TW': TWD_PER_USD,
+} as const;
+const compactMoneyFormat = new Intl.NumberFormat('en-US', {
+  notation: 'compact', minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false,
+});
+
+/** Short map labels in the display currency without a currency symbol, e.g. 123.1K or 5.6B. */
+export function fmtMoneyCompact(usd: number): string {
+  const rate = MAP_CURRENCY_RATES[getLanguage()];
+  const amount = Math.round(usd * rate);
+  return amount >= 1000 ? compactMoneyFormat.format(amount) : String(amount);
+}
+
 /** Truncates (never rounds up) to one decimal place, e.g. 1.27 -> "1.2". */
 const oneDecimal = (n: number): string => (Math.floor(n * 10) / 10).toLocaleString('en-US', { minimumFractionDigits: 1 });
 
@@ -101,15 +116,25 @@ export function fmtClock(hours: number): string {
   return `Day ${day} · ${time}`;
 }
 
+/** Second-resolution display for the live world's model time. */
+export function fmtClockLive(hours: number): string {
+  const seconds = Math.max(0, Math.floor(hours * 3600 + 1e-6));
+  const day = Math.floor(seconds / 86_400) + 1;
+  const within = seconds % 86_400;
+  const hh = String(Math.floor(within / 3600)).padStart(2, '0');
+  const mm = String(Math.floor(within % 3600 / 60)).padStart(2, '0');
+  const ss = String(within % 60).padStart(2, '0');
+  return `Day ${day} · ${hh}:${mm}:${ss}`;
+}
+
 /** `Day 3 · 02:45 · Oct 26`: the clock with the world's calendar date. */
 export function fmtClockDate(hours: number, date: string): string {
   return `${fmtClock(hours)} · ${date}`;
 }
 
-/** The phone clock row's compact form, language-neutral: `D1 18:30`. */
+/** The phone clock row's compact form, language-neutral: `D1 18:30:45`. */
 export function fmtClockShort(hours: number): string {
-  const { day, time } = clockParts(hours);
-  return `D${day} ${time}`;
+  return fmtClockLive(hours).replace('Day ', 'D').replace(' · ', ' ');
 }
 
 /** Real UTC date-time of a loaded historic typhoon: `startIso` plus model hours. */

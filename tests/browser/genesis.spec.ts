@@ -1,7 +1,8 @@
+import { setSpeed } from './speed';
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
-const ALL_TOOLS = ['warm', 'moisture', 'low', 'low-shear', 'warm-air', 'updraft', 'cool', 'dry', 'high', 'cold-air', 'downdraft', 'high-shear'];
+const ALL_TOOLS = ['warm', 'moisture', 'low', 'low-shear', 'warm-air', 'updraft', 'unstable-air'];
 
 test('natural formation toggle starts waves, shows the wave line and stops when switched off', async ({ page }) => {
   test.setTimeout(90_000);
@@ -30,7 +31,7 @@ test('natural formation toggle starts waves, shows the wave line and stops when 
   await expect(page.getByTestId('news-list')).toContainText('Natural formation wave 1: conditions gathering');
   for (const tool of ALL_TOOLS) await expect(page.getByTestId(`tool-${tool}`)).toBeVisible();
 
-  await page.getByTestId('speed-12').click();
+  await setSpeed(page, 14400);
   await expect.poll(async () => (await stateOf()).genesis.waves, { timeout: 30_000 }).toBeGreaterThanOrEqual(2);
   await expect(page.getByTestId('news-list')).toContainText('Natural formation wave 2: conditions gathering');
 
@@ -44,7 +45,7 @@ test('natural formation toggle starts waves, shows the wave line and stops when 
   expect((await stateOf()).genesis.waves).toBe(off.genesis.waves);
 });
 
-test('natural formation survives replay export and import, and reset starts a calm world with a new seed', async ({ page }) => {
+test('natural formation survives replay export and import after loading a fresh world', async ({ page }) => {
   test.setTimeout(90_000);
   await page.goto('/?renderer=canvas&lang=en&help=0&start=2026-08-01');
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
@@ -55,7 +56,7 @@ test('natural formation survives replay export and import, and reset starts a ca
   });
   const first = await snapshot();
   await page.getByTestId('genesis-toggle').click();
-  await page.getByTestId('speed-12').click();
+  await setSpeed(page, 14400);
   await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.hours), { timeout: 30_000 }).toBeGreaterThanOrEqual(30);
   await page.getByTestId('play-toggle').click();
   await page.getByTestId('tab-replay').click();
@@ -70,12 +71,13 @@ test('natural formation survives replay export and import, and reset starts a ca
   const before = await snapshot();
   expect(before.genesis.enabled).toBe(true);
 
-  await page.getByTestId('reset').click();
+  await page.reload();
+  await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   await expect.poll(async () => (await snapshot()).seed).not.toBe(first.seed);
   expect((await snapshot()).genesis).toEqual({ enabled: false, waves: 0, nextSpawnTick: 0 });
   await expect(page.getByTestId('genesis-toggle')).toHaveAttribute('aria-checked', 'false');
-  await expect(page.getByTestId('speed-1')).toHaveAttribute('aria-checked', 'true');
-  await expect(page.getByTestId('reset')).toHaveAttribute('data-tip', 'Start over with an empty world');
+  await expect(page.getByTestId('speed-value')).toHaveText('x1');
+  await expect(page.getByTestId('speed-reset')).toHaveAttribute('data-tip', 'Return only the speed to x1.');
 
   await page.getByTestId('import-replay-input').setInputFiles({ name: 'genesis.json', mimeType: 'application/json', buffer: Buffer.from(file) });
   await expect(page.getByTestId('replay-message')).toContainText(String(replay.untilTick));
@@ -122,6 +124,7 @@ test('world controls fit narrow and desktop viewports without captures', async (
       expect(clock.y + clock.height).toBeLessThanOrEqual(palette.y);
     }
     await page.getByTestId('sidebar-toggle').click();
+    if (width < 768) await page.getByTestId('tab-settings').click();
     const sidebar = (await page.getByTestId('sidebar').boundingBox())!;
     expect(sidebar.x + sidebar.width).toBeLessThanOrEqual(width + 1);
     for (const id of ['genesis-toggle', 'historic-select', 'historic-load', 'recorded-path-toggle', 'climate-reset']) {

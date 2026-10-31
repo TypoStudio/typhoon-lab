@@ -1,6 +1,17 @@
 # Data sources
 
-This build bundles two kinds of data. Coastline geometry, city coordinates and city populations are real, from Natural Earth. The rural background population, the weather background and every damage figure are fictional.
+This file covers third-party data, which keeps its own terms. The project's own work is licensed under CC BY-NC-SA 4.0 (see [LICENSE](LICENSE)); open-source libraries are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Generated files in `src/data/generated/` that only reformat a source are covered by that source's terms; our selection, processing and additions are covered by `LICENSE`.
+
+Coastline geometry, city coordinates and city populations are real, from Natural Earth. New current-date worlds load NOAA GFS pressure, surface wind, ocean surface temperature and 2 m air temperature as their starting analysis. Humidity, shear, the fallback weather background, rural population and damage estimates remain game approximations, except where the historic datasets described below apply.
+
+## NOAA GFS (current starting weather)
+
+- Source: [NOAA/NCEP GFS](https://www.emc.ncep.noaa.gov/emc/pages/numerical_forecast_systems/gfs.php), distributed through NOAA's public `global-forecast-system` Google Cloud Storage mirror. GFS runs at 00/06/12/18 UTC; these are model analyses, not continuously updated observations.
+- Product: `gfs.YYYYMMDD/HH/atmos/gfs.tHHz.pgrb2.1p00.f000`. Seven analysis records are downloaded by HTTP byte range: `PRMSL:mean sea level`, `UGRD/VGRD:10 m above ground`, `TMP:surface`, `TMP:2 m above ground`, and `LAND/ICEC:surface`. Pressure is converted from Pa to hPa and temperatures from K to °C; winds remain eastward/northward m/s. GFS 1° grid points coincide with the game's odd-degree 2° cell centres, so they are sampled directly with latitude/storage order handled by the GRIB decoder. Ocean temperature uses the GFS ocean surface/skin temperature, not a standalone satellite SST product; source land cells are null and source sea-ice cells are represented at −1.8 °C. At coasts where the source mask and game land geometry disagree, missing ocean temperatures retain the game fallback.
+- Decoder: `@azohra/meteo.grib` 0.1.4 (MIT). Fixtures under `tests/fixtures/gfs/` are the seven original NOAA 2026-10-27 00 UTC records and their index, downloaded on 2026-10-27, for offline decoder/browser tests.
+- The browser worker tries up to four recent cycles with a shared ten-second network deadline. One validated analysis is kept in the browser Cache API. Analyses less than six hours old are reused; on network failure a saved analysis less than 48 hours old may be used and is labelled as saved. Otherwise the game uses its base climate and labels that fallback.
+- The analysis is copied once into a mutable game atmosphere and preserved separately for replays. Pressure, wind and air temperature advect; air exchanges heat with the ocean and an approximate seasonal radiative equilibrium. Pressure anomalies relax over a 72-hour game timescale toward heat-driven Hadley/Ferrel/polar pressure belts and local thermal anomalies, rather than a uniform 1010 hPa. Wind adjusts over 12 hours to pressure gradients and heat-driven trade winds/westerlies/polar circulation, with hemisphere-dependent Coriolis response. Solar season and the current simulated air/ocean temperatures drive this reduced circulation model. Ocean temperatures retain the imported field plus subsequent game season/climate/tool effects, rather than being advected by atmospheric wind. When pressure tools fade, their lost contribution transfers into the evolving atmosphere, so expiring a high never restores the initial downloaded low. The circulation follows the qualitative [NOAA explanation](https://www.noaa.gov/jetstream/global/global-atmospheric-circulations); its coefficients are game approximations, not forecast skill claims. No recurring real-world data overwrites the player's world.
+- No API key, geolocation or server is needed. The full global field is requested, so the request does not include a player's coordinates or game results. NOAA US-government data is public domain; NOAA GFS attribution and the cycle time are shown in the world panel.
 
 ## Natural Earth (real geometry, public domain)
 
@@ -29,6 +40,7 @@ Natural Earth 50m is generalized. Coastal points can fall a few kilometres from 
 | Source | Japan Meteorological Agency, RSMC Tokyo best track data: `https://www.jma.go.jp/jma/jma-eng/jma-center/rsmc-hp-pub-eg/Besttracks/bst_all.zip` |
 | Archive SHA-256 | `76b65a4210e0a9f69c6ce56b401ac572d4203c11edf1f30691a20a891353cef6` (pinned in `scripts/prepare-typhoons.mjs`) |
 | Licence | JMA Public Data License 1.0, compatible with CC BY 4.0; attribution required ([JMA copyright](https://www.jma.go.jp/jma/en/copyright.html)) |
+| Required statement | Source: Japan Meteorological Agency (JMA), RSMC Tokyo best track data. The data was edited and processed by TypoStudio (converted to the game's format and units, with wind estimated from pressure where missing); the Japan Meteorological Agency did not create the edited data. Shown in the game's Help > Data tab and this repository's README. |
 | Used | 14 storms, written to `src/data/generated/typhoons.json` by `node scripts/prepare-typhoons.mjs` (set `TYPHOON_BST_ZIP` to use a local copy). Wind (10-min mean, kt) is converted to m/s; it is blank before 1977 and for many weak rows, and the game estimates it from central pressure there. |
 
 KMA's machine-readable best track (data.go.kr dataset 15139453, 공공누리 제1유형) requires an API key, and the KMA yearly PDFs carry no licence mark, which is why this build ships the JMA file. Sarah (1959) has no wind records, so its wind is estimated from pressure.
@@ -115,7 +127,7 @@ To regenerate, run `node scripts/prepare-map.mjs`. Network access is required. T
 | Item | Where | Status |
 | --- | --- | --- |
 | Rural background population | `src/simulation/engine.ts` (`ruralDensity`) | Invented: about 1.2 M people per fully-land 2° cell, thinning toward the poles. City populations are real Natural Earth `POP_MAX` values, but how they spread over the grid (an 80 km Gaussian) is a game choice. |
-| Weather background, sea surface temperature, humidity, shear | Simulation (`src/simulation/`) | Designed for gameplay, not taken from any forecast or reanalysis. Loading a past typhoon can replace the background with the reanalysis described under "Historical environment". |
+| Weather evolution, humidity, shear and fallback climate | Simulation (`src/simulation/`) | Designed for gameplay. Current-date initial pressure, wind and temperatures use NOAA GFS as documented above; subsequent circulation is simulated. Loading a past typhoon can replace the background with the reanalysis described under "Historical environment". |
 | Natural formation waves / weakening tools | Fictional game scenario | Seeded western-Pacific typhoons, cool water, dry air, cold air and downdrafts are game mechanics. They do not model a real weather-modification method. Loss totals are the current city estimates, not a sum of news reports. |
 | Warm air / updraft | Fictional scalar conditions | Air heating and upward velocity use capped, ramped game effects; they support model genesis/growth. No observed atmospheric profile or resolved convection dataset is used. |
 | Thunderstorms and simulated clouds | Fictional game model | Convective cells and gusts derive from game conditions. Clouds on the combined map are limited to active cyclone footprints: intensity controls core/bands/eye structure, with local temperature, humidity, lift and pressure modulating density. Background weather and standalone thunderstorms produce no cloud imagery. Structure and hemisphere rotation follow the qualitative [NOAA description](https://www.noaa.gov/jetstream/tropical/tropical-cyclone-introduction/tropical-cyclone-structure); textures and numerical parameters are game approximations. No satellite imagery, cloud observation or observed thunderstorm dataset is used. |
@@ -130,7 +142,7 @@ The game started with 71 hand-picked cities (24 originals, then 47 added in the 
 
 ## Planned data not used in this build
 
-The design in `GAME_PLAN.md` names NOAA GFS, NOAA OISST, IBTrACS, GEBCO, GHS-POP, and GHS-UCDB. This build does not download, ingest, or derive from any of them. It does not claim to use them. Adding any of them would need its own preparation step, license entry, and version pin.
+The design in `GAME_PLAN.md` also names NOAA OISST, GEBCO, GHS-POP, and GHS-UCDB. This build does not download, ingest, or derive from those datasets. NOAA GFS is now used for current starting pressure and wind as described above. Adding the other datasets would need its own preparation step, license entry, and version pin.
 
 ## Limitations
 

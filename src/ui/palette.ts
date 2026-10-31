@@ -78,7 +78,8 @@ export function attachPalette<T extends string>(buttons: Map<T, HTMLButtonElemen
       if (!moved(ev, drag)) return;
       drag.dragging = true;
       drag.ghost = document.createElement('div');
-      drag.ghost.className = `drag-ghost drag-ghost--${drag.tool}`;
+      drag.ghost.className = `drag-ghost drag-ghost--${drag.button.dataset.variant ?? drag.tool}`;
+      drag.ghost.style.color = getComputedStyle(drag.button.querySelector('svg')!).color;
       drag.ghost.setAttribute('aria-hidden', 'true');
       drag.ghost.innerHTML = (drag.button.querySelector('svg')?.outerHTML ?? '').replace('tool__icon', 'drag-ghost__icon');
       document.body.append(drag.ghost);

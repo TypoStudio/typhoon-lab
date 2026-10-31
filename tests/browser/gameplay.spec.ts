@@ -1,3 +1,4 @@
+import { setSpeed } from './speed';
 import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
@@ -60,7 +61,7 @@ async function loadCycloneReplay(page: Page) {
 }
 
 async function expectOverlays(page: Page, enabled: string[]) {
-  await expect.poll(async () => (await page.getByTestId('map-stage').getAttribute('data-overlays') ?? '').split(/\s+/).filter(Boolean)).toEqual(enabled);
+  await expect.poll(async () => (await page.getByTestId('map-stage').getAttribute('data-overlays') ?? '').split(/\s+/).filter(Boolean)).toEqual([...enabled, 'ships', 'planes']);
   for (const id of ['wind', 'humidity', 'rain', 'pressure', 'temperature', 'population']) {
     await expect(page.getByTestId(`layer-${id}`)).toHaveAttribute('aria-pressed', String(enabled.includes(id)));
     if (id !== 'wind') await expect(page.getByTestId(`legend-${id}`)).toHaveCount(enabled.includes(id) ? 1 : 0);
@@ -101,8 +102,9 @@ test('free drag-and-drop conditions create multiple storms in a live empty world
   test.setTimeout(90_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await ready(page);
+  await ready(page, '/?renderer=canvas&map=flat');
   expect((await state(page)).storms).toHaveLength(0);
+  await setSpeed(page, 14400);
   await expect.poll(async () => (await state(page)).tick).toBeGreaterThan(0);
   await hideSidebar(page);
   await page.getByTestId('play-toggle').click();
@@ -111,6 +113,8 @@ test('free drag-and-drop conditions create multiple storms in a live empty world
   }
   await expect.poll(async () => (await state(page)).effects.length).toBe(6);
   expect((await state(page)).storms).toHaveLength(0);
+  await page.getByTestId('sidebar-toggle').click();
+  if (await page.getByTestId('tab-settings').isVisible()) await page.getByTestId('tab-settings').click();
   for (const overlay of ['pressure', 'temperature', 'population']) {
     const button = page.getByTestId(`layer-${overlay}`);
     await expect(button).toHaveAttribute('aria-pressed', 'true');
@@ -119,7 +123,8 @@ test('free drag-and-drop conditions create multiple storms in a live empty world
     await button.click();
     await expect(button).toHaveAttribute('aria-pressed', 'true');
   }
-  await page.getByTestId('speed-12').click();
+  await hideSidebar(page);
+  await setSpeed(page, 14400);
   await page.getByTestId('play-toggle').click();
   await expect.poll(async () => (await state(page)).storms.length, { timeout: 25_000 }).toBeGreaterThanOrEqual(2);
   const young = (await state(page)).storms;
@@ -127,34 +132,73 @@ test('free drag-and-drop conditions create multiple storms in a live empty world
   const grown = (await state(page)).storms;
   expect(grown.some((s: any) => young.some((y: any) => s.id === y.id && s.galeRadiusKm > y.galeRadiusKm))).toBe(true);
   if (process.env.TYPHOON_SCREENSHOTS === '1') await page.screenshot({ path: 'test-results/multiple-storms.png', fullPage: true });
-  await page.getByTestId('reset').click();
+  await page.reload();
+  await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   await expect.poll(async () => (await state(page)).storms.length).toBe(0);
   expect((await state(page)).effects).toHaveLength(0);
+  await setSpeed(page, 14400);
   await expect.poll(async () => (await state(page)).tick).toBeGreaterThan(0);
   expect(errors).toEqual([]);
 });
 
-test('panning freezes the rendered weather while the simulation clock keeps running', async ({ page }) => {
-  await ready(page);
-  await hideSidebar(page);
-  const map = page.getByTestId('map-stage');
-  await page.mouse.move(650, 430);
-  await page.mouse.down();
-  await page.mouse.move(690, 450, { steps: 5 });
-  await expect(map).toHaveAttribute('data-interacting', 'true');
-  const frozenTick = await map.getAttribute('data-rendered-tick');
-  const runningTick = (await state(page)).tick;
-  await expect.poll(async () => (await state(page)).tick).toBeGreaterThan(runningTick + 2);
-  expect(await map.getAttribute('data-rendered-tick')).toBe(frozenTick);
-  await page.mouse.move(730, 470, { steps: 5 });
-  expect(await map.getAttribute('data-rendered-tick')).toBe(frozenTick);
-  await page.mouse.up();
-  await expect(map).toHaveAttribute('data-interacting', 'false');
-  await expect.poll(async () => Number(await map.getAttribute('data-rendered-tick'))).toBeGreaterThan(Number(frozenTick));
-  expect((await state(page)).effects).toHaveLength(0);
-});
+for (const renderer of ['canvas', 'webgl'] as const) {
+  test(`${renderer}: panning pauses simulation and all animation, then resumes without a position jump`, async ({ page }) => {
+    test.setTimeout(90_000);
+    await ready(page, renderer === 'canvas' ? '/?renderer=canvas&map=flat' : '/?map=globe');
+    await expect(page.getByTestId('map-stage')).toHaveAttribute('data-renderer', renderer);
+    await loadCycloneReplay(page);
+    await hideSidebar(page);
+    await setSpeed(page, 14400);
+    await page.getByTestId('play-toggle').click();
+    // Observe animation input and geographic positions, without capturing pixels.
+    await page.evaluate(async () => {
+      const path = '/src/render/overlay.ts';
+      const url = performance.getEntriesByType('resource').map(entry => entry.name).find(url => new URL(url).pathname === path) ?? path;
+      const { OverlayPainter } = await import(url);
+      const draw = OverlayPainter.prototype.draw;
+      OverlayPainter.prototype.draw = function (...args: any[]) {
+        const probe = { now: args[5], clock: args[7], tick: args[1]?.tick,
+          storms: args[1]?.storms.map((s: any) => [s.lon, s.lat]),
+          traffic: args[8]?.map((v: any) => [v.id, v.lon, v.lat]) };
+        const w = window as any;
+        w.__mapAnimationProbe = probe;
+        if (w.__recordRelease && !w.__typhoonLab.interacting) {
+          w.__firstReleaseFrame = probe;
+          w.__recordRelease = false;
+        }
+        return draw.apply(this, args);
+      };
+    });
+    const map = page.getByTestId('map-stage');
+    await page.mouse.move(650, 430);
+    await page.mouse.down();
+    await page.mouse.move(690, 450, { steps: 5 });
+    await expect(map).toHaveAttribute('data-interacting', 'true');
+    // Allow the worker's pause acknowledgement to settle an already-running step.
+    await page.waitForTimeout(350);
+    const frozenTick = await map.getAttribute('data-rendered-tick');
+    const frozen = await page.evaluate(() => (window as any).__mapAnimationProbe);
+    expect(frozen.traffic.length).toBeGreaterThan(0);
+    expect(frozen.storms.length).toBeGreaterThan(0);
+    await page.waitForTimeout(1000);
+    expect((await state(page)).tick).toBe(Number(frozenTick));
+    expect(await map.getAttribute('data-rendered-tick')).toBe(frozenTick);
+    await page.mouse.move(730, 470, { steps: 5 });
+    expect(await page.evaluate(() => (window as any).__mapAnimationProbe)).toEqual(frozen);
+    await page.evaluate(() => { (window as any).__recordRelease = true; });
+    await page.mouse.up();
+    await expect(map).toHaveAttribute('data-interacting', 'false');
+    await expect.poll(() => page.evaluate(() => (window as any).__firstReleaseFrame?.tick)).toBe(Number(frozenTick));
+    const release = await page.evaluate(() => (window as any).__firstReleaseFrame);
+    expect(release.now - frozen.now).toBeLessThan(200);
+    expect(release.storms).toEqual(frozen.storms);
+    await expect.poll(async () => Number(await map.getAttribute('data-rendered-tick'))).toBeGreaterThan(Number(frozenTick));
+    await expect(page.getByTestId('speed-value')).toHaveText('x12');
+    await expect(page.getByTestId('play-toggle')).toHaveAttribute('data-state', 'playing');
+  });
+}
 
-test('snapshot export/import reproduces the moment and reset resumes live play', async ({ page }) => {
+test('snapshot export/import reproduces the moment and reload resumes live play', async ({ page }) => {
   await ready(page);
   await hideSidebar(page);
   await page.getByTestId('play-toggle').click();
@@ -175,7 +219,8 @@ test('snapshot export/import reproduces the moment and reset resumes live play',
   expect(replay).not.toHaveProperty('mode');
   expect(replay).not.toHaveProperty('typhoonId');
   // Change the world first so equality cannot pass before import has actually completed.
-  await page.getByTestId('reset').click();
+  await page.reload();
+  await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   await expect.poll(async () => (await state(page)).actions.length).toBe(0);
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
   await page.getByTestId('tab-replay').click();
@@ -183,8 +228,10 @@ test('snapshot export/import reproduces the moment and reset resumes live play',
   await expect.poll(async () => (await state(page)).actions.length).toBe(1);
   await expect.poll(async () => (await state(page)).tick).toBe(snapshot.tick);
   expect(await state(page)).toEqual(snapshot);
-  await page.getByTestId('reset').click();
+  await page.reload();
+  await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   await expect.poll(async () => (await state(page)).actions.length).toBe(0);
+  await setSpeed(page, 14400);
   await expect.poll(async () => (await state(page)).tick).toBeGreaterThan(0);
 });
 
@@ -232,7 +279,8 @@ test('Canvas fallback supports the worldwide map and free tool drops', async ({ 
   await expectOverlays(page, ['wind', 'humidity', 'rain', 'pressure', 'temperature', 'population']);
   await expect(page.getByTestId('legend')).toContainText('Moving streaks show wind.');
   expect(await state(page)).toEqual(snapshot);
-  await page.getByTestId('reset').click();
+  await page.reload();
+  await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   await expect.poll(async () => (await state(page)).storms.length).toBe(0);
   if (process.env.TYPHOON_SCREENSHOTS === '1') await page.screenshot({ path: 'test-results/canvas-world.png', fullPage: true });
 });
@@ -242,6 +290,7 @@ test('WebGL context loss recovers without resetting the world', async ({ page })
   page.on('pageerror', error => errors.push(error.message));
   await ready(page);
   test.skip(await page.getByTestId('map-stage').getAttribute('data-renderer') !== 'webgl', 'WebGL is unavailable.');
+  await setSpeed(page, 14400);
   const before = (await state(page)).tick;
   const supported = await page.evaluate(() => {
     const canvas = document.querySelector<HTMLCanvasElement>('.map-canvas--base')!;
@@ -360,7 +409,7 @@ test('shortcuts work with focus in the sidebar, except Space on a focused contro
   const playing = () => page.evaluate(() => (window as any).__typhoonLab.playing as boolean);
   const armed = (tool: string) => page.getByTestId(`tool-${tool}`).getAttribute('aria-pressed');
   await page.getByTestId('tab-environment').focus();
-  await page.keyboard.press('4');
+  await page.keyboard.press('r');
   expect(await armed('low-shear')).toBe('true');
   // Space on a focused tab presses that tab; it does not play or pause.
   await page.getByTestId('tab-storms').focus();
@@ -381,7 +430,7 @@ test('shortcuts work with focus in the sidebar, except Space on a focused contro
   expect(await armed('low-shear')).toBe('false');
   // Typing in a field keeps the shortcuts out of the way.
   await page.getByTestId('language-select').focus();
-  await page.keyboard.press('3');
+  await page.keyboard.press('e');
   expect(await armed('low')).toBe('false');
   // Arrow keys on a tablist still rove between tabs instead of panning.
   await page.getByTestId('tab-environment').focus();
@@ -400,7 +449,8 @@ test('World climate Reset is disabled at 0, returns every slider to 0 and clears
   const reset = page.getByTestId('climate-reset');
   await expect(reset).toBeDisabled();
   await expect(reset).toHaveText('Reset');
-  expect((await reset.boundingBox())!.height).toBeCloseTo(24, 0);
+  const rem = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
+  expect((await reset.boundingBox())!.height).toBeCloseTo(1.5 * rem, 0);
   await page.getByTestId('climate-warming').fill('2');
   await page.getByTestId('climate-polar').fill('-1.5');
   await expect(reset).toBeEnabled();
@@ -438,7 +488,7 @@ test('combined overlays independently toggle wind and preserve replay state acro
   await expectWindDraw(page, true);
   await expectHumidityDraw(page, true);
   await expect(page.getByTestId('layer-wind')).not.toHaveAttribute('role', 'tab');
-  await expect(page.locator('[data-overlay]')).toHaveCount(6);
+  await expect(page.locator('[data-overlay]')).toHaveCount(8);
   await expectOverlays(page, ['wind', 'humidity', 'rain', 'pressure', 'temperature', 'population']);
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
   const replay = await page.evaluate(async () => {
@@ -526,9 +576,10 @@ test('combined overlays independently toggle wind and preserve replay state acro
   expect(await state(page)).toEqual(cyclone);
   await page.getByTestId('layer-wind').click();
   await expectWindDraw(page, false);
-  await page.getByTestId('reset').click();
+  await page.reload();
+  await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   await expect.poll(async () => (await state(page)).storms.length).toBe(0);
-  await expectOverlays(page, ['humidity', 'rain', 'pressure', 'temperature', 'population']);
-  await expectWindDraw(page, false);
+  await expectOverlays(page, ['wind', 'humidity', 'rain', 'pressure', 'temperature', 'population']);
+  await expect(page.getByTestId('map-stage')).toHaveAttribute('data-wind', 'visible');
   expect(errors).toEqual([]);
 });

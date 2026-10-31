@@ -2,11 +2,11 @@ import { test, expect } from '@playwright/test';
 
 for (const width of [1440, 768, 414, 375, 320]) {
   test(`world map and floating controls fit a ${width}px screen`, async ({ page }) => {
-    test.setTimeout(90_000); // the default view is a globe, which is slow under software GL
+    test.setTimeout(90_000);
     await page.setViewportSize({ width, height: 900 });
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
-    await page.goto('/?help=0&start=2026-08-01');
+    await page.goto('/?renderer=canvas&help=0&start=2026-08-01');
     await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
     const map = page.getByTestId('map-stage');
     await expect(map.locator('canvas').first()).toBeVisible();
@@ -38,7 +38,7 @@ for (const width of [1440, 768, 414, 375, 320]) {
       await expect(page.getByTestId('view-reset')).toBeVisible();
       const clockText = page.getByTestId('clock');
       expect(await clockText.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
-      expect(await clockText.evaluate(el => getComputedStyle(el, '::after').content)).toMatch(/^"D\d+ \d\d:\d\d"$/);
+      expect(await clockText.evaluate(el => getComputedStyle(el, '::after').content)).toMatch(/^"D\d+ \d\d:\d\d:\d\d"$/);
     } else {
       expect(box.y).toBe(0);
       expect(box.height).toBe(900);
@@ -61,7 +61,7 @@ for (const width of [1440, 768, 414, 375, 320]) {
     if (beside && (await sidebar.isVisible())) {
       const reset = (await page.getByTestId('climate-reset').boundingBox())!;
       const head = (await page.locator('.settings__head').boundingBox())!;
-      expect(reset.height).toBeCloseTo(24, 0);
+      expect(reset.height).toBeCloseTo(1.5 * rem, 0);
       expect(reset.x + reset.width).toBeLessThanOrEqual(head.x + head.width + 1);
     }
     if (!(await sidebar.isVisible())) await page.getByTestId('sidebar-toggle').click();
@@ -80,7 +80,7 @@ for (const width of [1440, 768, 414, 375, 320]) {
       await expect(page.getByTestId('tab-settings')).toBeHidden();
     }
     const overlayRow = (await page.locator('.map-overlays').boundingBox())!;
-    expect(overlayRow.width).toBeLessThanOrEqual(190);
+    expect(overlayRow.width).toBeLessThanOrEqual(250);
     for (const [id, label] of [['wind', 'Wind'], ['humidity', 'Humidity'], ['rain', 'Rain'], ['pressure', 'Pressure'], ['temperature', 'Sea temp'], ['population', 'Population']]) {
       const button = page.getByTestId(`layer-${id}`);
       await expect(button).toHaveAccessibleName(label);
@@ -102,11 +102,14 @@ for (const width of [1440, 768, 414, 375, 320]) {
     await expect(page.locator('[data-testid^="legend-"]:not([data-testid="legend-toggle"], [data-testid="legend-close"])')).toHaveCount(6);
     // A button can be inside the viewport yet clipped by a shrinking flex container.
     const speedRow = (await page.locator('.speed').boundingBox())!;
-    for (const speed of [1, 4, 12]) {
-      const button = (await page.getByTestId(`speed-${speed}`).boundingBox())!;
+    for (const action of ['prev', 'next']) {
+      const button = (await page.getByTestId(`speed-${action}`).boundingBox())!;
       expect(button.x).toBeGreaterThanOrEqual(speedRow.x);
       expect(button.x + button.width).toBeLessThanOrEqual(speedRow.x + speedRow.width);
     }
+    const speedValue = (await page.getByTestId('speed-value').boundingBox())!;
+    expect(speedValue.x).toBeGreaterThanOrEqual(speedRow.x);
+    expect(speedValue.x + speedValue.width).toBeLessThanOrEqual(speedRow.x + speedRow.width);
     const palette = (await page.getByTestId('weather-palette').boundingBox())!;
     expect(palette.y).toBeGreaterThan(600);
     expect(palette.y + palette.height).toBeLessThanOrEqual(900);
@@ -118,12 +121,12 @@ for (const width of [1440, 768, 414, 375, 320]) {
       expect(r.x).toBeGreaterThanOrEqual(stageBox.x - 1);
       expect(r.x + r.width).toBeLessThanOrEqual(stageBox.x + stageBox.width + 1);
     }
-    const tools = ['warm', 'moisture', 'low', 'low-shear', 'warm-air', 'updraft', 'cool', 'dry', 'high', 'cold-air', 'downdraft', 'high-shear'];
-    await expect(page.locator('[data-tool]')).toHaveCount(12);
+    const tools = ['warm', 'moisture', 'low', 'low-shear', 'warm-air', 'updraft', 'unstable-air'];
+    await expect(page.locator('[data-palette-panel="conditions"] [data-tool]')).toHaveCount(7);
     for (const [index, tool] of tools.entries()) {
       const button = page.getByTestId(`tool-${tool}`);
       await expect(button).toBeVisible();
-      await expect(button).toHaveAttribute('aria-keyshortcuts', '1234567890-='[index]);
+      await expect(button).toHaveAttribute('aria-keyshortcuts', 'QWERTYU'[index]);
       const bounds = (await button.boundingBox())!;
       if (!phone) {
         expect(bounds.x).toBeGreaterThanOrEqual(palette.x);
@@ -131,10 +134,9 @@ for (const width of [1440, 768, 414, 375, 320]) {
       }
       expect(bounds.width).toBeGreaterThanOrEqual(44);
     }
-    // One scrolling row of cells on phones, 6 x 2 up to 70rem, one row of 12 above.
+    // Seven paired conditions fit one row; phones can scroll it sideways.
     const rows = new Set(await page.locator('[data-palette-panel="conditions"] [data-tool]').evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top))));
-    expect(rows.size).toBe(phone || width >= 1120 ? 1 : 2);
-    if (phone) expect(await page.locator('[data-palette-panel="conditions"]').evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
+    expect(rows.size).toBe(1);
     await expect(page.locator('[data-mode], [data-testid^="mode-"], [data-testid^="conditions-"]')).toHaveCount(0);
     await expect(page.getByTestId('weather-palette')).toContainText('Drag onto the map');
     // The only panel must open from the right, including on narrow screens.

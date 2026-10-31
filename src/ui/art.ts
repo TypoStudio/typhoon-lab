@@ -1,6 +1,8 @@
 import type { NewsItem } from '../types';
 import { cycloneSymbolPaths } from '../render/cyclone-symbol';
+import { PLANE_PATH } from '../render/transport-symbol';
 import { svgEl } from './dom';
+import { WEATHER_HAZARDS } from '../data/weather-hazards';
 
 type Kind = NewsItem['kind'];
 type Attrs = Record<string, string | number | null>;
@@ -99,7 +101,7 @@ function citySeverity(id: string): number {
  * Code-native news illustration for a breaking-news item. 96×64, token-coloured, decorative
  * (aria-hidden); the text next to it carries the information.
  */
-export function newsArt(item: Pick<NewsItem, 'kind' | 'id' | 'cityId'>): SVGSVGElement {
+export function newsArt(item: Pick<NewsItem, 'kind' | 'id' | 'cityId' | 'transport' | 'phenomenon'>): SVGSVGElement {
   const kind: Kind = item.kind;
   const seed = hashString(item.cityId ?? item.id);
   const uid = hashString(item.id).toString(36);
@@ -107,7 +109,23 @@ export function newsArt(item: Pick<NewsItem, 'kind' | 'id' | 'cityId'>): SVGSVGE
   const sky = `sky-${uid}`;
   const svg = svgEl('svg', { viewBox: '0 0 96 64', width: 96, height: 64, role: 'presentation', 'aria-hidden': 'true', class: `art art--${kind}`, focusable: 'false' });
   const backdrop = (stops: [string, number?][]) => svg.append(gradient(sky, stops), rect(0, 0, 96, 64, { fill: `url(#${sky})` }));
-  switch (kind) {
+  switch (item.phenomenon ? 'weather' : kind) {
+    case 'transport': {
+      backdrop([['paper-3'], ['sea']]);
+      svg.append(path('M20 22a9 9 0 0 1 3-17 13 13 0 0 1 24-1 9 9 0 0 1 18 6 8 8 0 0 1 6 12Z', { fill: C('muted'), opacity: 0.5 }));
+      if (item.transport?.kind === 'ships') {
+        svg.append(path('M24 34 48 29 72 34 64 48H32Z', { fill: C('accent'), stroke: C('ink'), 'stroke-width': 2 }),
+          rect(36, 22, 24, 10, { fill: C('paper-3') }),
+          path('M0 51q12-8 24 0t24 0t24 0t24 0M0 59q12-8 24 0t24 0t24 0t24 0', { stroke: C('wind'), 'stroke-width': 3 }));
+      } else {
+        svg.append(group({ transform: `translate(46 35) rotate(${item.transport?.event === 'crash' ? 125 : 65}) scale(2.2)` }, [
+          path(PLANE_PATH, { fill: C('accent'), stroke: C('ink'), 'stroke-width': 0.8, 'stroke-linejoin': 'round' }),
+          path('M0-6V4', { stroke: C('ink'), 'stroke-width': 0.7, 'stroke-linecap': 'round', opacity: 0.5 }),
+        ]));
+      }
+      if (item.transport?.lossUsd) svg.append(path('m79 5-8 14h8l-8 16', { stroke: C('danger'), 'stroke-width': 3 }));
+      break;
+    }
     case 'merger':
       backdrop([['paper-3'], ['sea']]);
       svg.append(graticule(), cycloneSymbol(27, 25, 14, 2, { rot: tilt }), cycloneSymbol(68, 38, 20, 2, { rot: -tilt }),
@@ -133,6 +151,14 @@ export function newsArt(item: Pick<NewsItem, 'kind' | 'id' | 'cityId'>): SVGSVGE
         group({ fill: C('paper') }, [rect(74, 38, 9, 18), rect(83, 45, 7, 11), rect(86, 51, 2, 5, { fill: C('accent') }), rect(77, 42, 2, 2, { fill: C('accent') }), rect(77, 48, 2, 2, { fill: C('accent') })]),
         cycloneSymbol(46, 31, 21, 2, { rot: tilt }));
       break;
+    case 'weather': {
+      backdrop([['paper-2'], ['paper-4']]);
+      svg.append(skyline(seed, 60, false, 0.5));
+      svg.append(group({ transform: 'translate(27 5) scale(1.8)' }, [
+        path(WEATHER_HAZARDS[item.phenomenon ?? 'gust'].iconPath, { stroke: C('warn'), 'stroke-width': 1.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
+      ]));
+      break;
+    }
     case 'city': {
       const sev = citySeverity(item.id);
       const top = 58 - sev * 5;
@@ -154,6 +180,14 @@ export function newsArt(item: Pick<NewsItem, 'kind' | 'id' | 'cityId'>): SVGSVGE
       svg.append(tree, path('M0 50Q30 44 56 50T96 47V64H0Z', { fill: C('ink'), opacity: 0.92 }), path('M0 58Q40 52 96 57V64H0Z', { fill: C('muted'), opacity: 0.5 }),
         path(streaks, { stroke: C('ink'), 'stroke-width': 1.5, 'stroke-linecap': 'round', opacity: 0.75 }),
         flake(60 + rnd(seed, 90) * 10, 14, 3), flake(78, 30 + rnd(seed, 91) * 8, 2.6), flake(44, 22, 2.2), flake(86, 10, 2));
+      break;
+    }
+    case 'tornado': {
+      backdrop([['paper-2'], ['rule']]);
+      svg.append(path('M0 54H96V64H0Z', { fill: C('land') }),
+        path('M18 4Q48 18 78 4M26 13Q49 26 70 13M33 23Q48 33 63 23M39 33Q49 40 57 33M44 43Q49 47 53 43L49 56',
+          { stroke: C('danger'), 'stroke-width': 3, 'stroke-linecap': 'round', fill: 'none' }),
+        path('M12 50l8-5M75 48l10-7M26 56l6-4', { stroke: C('ink'), 'stroke-width': 2, 'stroke-linecap': 'round' }));
       break;
     }
     case 'recovery':
