@@ -1,4 +1,4 @@
-import { isLand } from '../data/world';
+import { isLandCached } from '../data/world';
 import type { TrafficKind } from '../data/traffic';
 import { clamp, distanceKm, moveKm, wrapLon } from './geo';
 import type { GeoPoint, Storm } from '../types';
@@ -16,15 +16,23 @@ export function trafficDistance(a: GeoPoint, b: GeoPoint): number {
   const h = Math.sin(lat / 2) ** 2 + Math.cos(a.lat * RAD) * Math.cos(b.lat * RAD) * Math.sin(lon / 2) ** 2;
   return 2 * EARTH_KM * Math.asin(Math.sqrt(clamp(h, 0, 1)));
 }
-export function trafficPoint(a: GeoPoint, b: GeoPoint, t: number): GeoPoint {
-  const angle = trafficDistance(a, b) / EARTH_KM;
-  if (angle < 1e-9) return { lon: a.lon, lat: a.lat };
-  const sin = Math.sin(angle), u = Math.sin((1 - t) * angle) / sin, v = Math.sin(t * angle) / sin;
-  const x = u * Math.cos(a.lat * RAD) * Math.cos(a.lon * RAD) + v * Math.cos(b.lat * RAD) * Math.cos(b.lon * RAD);
-  const y = u * Math.cos(a.lat * RAD) * Math.sin(a.lon * RAD) + v * Math.cos(b.lat * RAD) * Math.sin(b.lon * RAD);
-  const z = u * Math.sin(a.lat * RAD) + v * Math.sin(b.lat * RAD);
-  return { lon: wrapLon(Math.atan2(y, x) / RAD), lat: Math.atan2(z, Math.hypot(x, y)) / RAD };
+/** Interpolator along the short arc a→b whose invariants are computed once (bit-identical to evaluating them per point). */
+function trafficSampler(a: GeoPoint, b: GeoPoint, distance: number): (t: number) => GeoPoint {
+  const angle = distance / EARTH_KM;
+  if (angle < 1e-9) return () => ({ lon: a.lon, lat: a.lat });
+  const sin = Math.sin(angle);
+  const ca = Math.cos(a.lat * RAD), cb = Math.cos(b.lat * RAD);
+  const caLon = Math.cos(a.lon * RAD), saLon = Math.sin(a.lon * RAD), cbLon = Math.cos(b.lon * RAD), sbLon = Math.sin(b.lon * RAD);
+  const saLat = Math.sin(a.lat * RAD), sbLat = Math.sin(b.lat * RAD);
+  return t => {
+    const u = Math.sin((1 - t) * angle) / sin, v = Math.sin(t * angle) / sin;
+    const x = u * ca * caLon + v * cb * cbLon;
+    const y = u * ca * saLon + v * cb * sbLon;
+    const z = u * saLat + v * sbLat;
+    return { lon: wrapLon(Math.atan2(y, x) / RAD), lat: Math.atan2(z, Math.hypot(x, y)) / RAD };
+  };
 }
+export const trafficPoint = (a: GeoPoint, b: GeoPoint, t: number): GeoPoint => trafficSampler(a, b, trafficDistance(a, b))(t);
 
 export function trafficHazards(storms: readonly Storm[], kind: TrafficKind): TrafficHazard[] {
   return storms.flatMap(s => {
@@ -54,11 +62,12 @@ export function trafficEscapeRoute(start: GeoPoint, kind: TrafficKind, hazards: 
 
 /** Every traversed segment is sampled, so a coastal shortcut cannot cut across an island. */
 export function trafficSegmentClear(a: GeoPoint, b: GeoPoint, kind: TrafficKind, hazards: readonly TrafficHazard[], escaping = false): boolean {
-  const count = Math.max(1, Math.ceil(trafficDistance(a, b) / (kind === 'ships' ? 4 : 30)));
+  const distance = trafficDistance(a, b), at = trafficSampler(a, b, distance);
+  const count = Math.max(1, Math.ceil(distance / (kind === 'ships' ? 4 : 30)));
   const initial = hazards.map(h => distanceKm(a.lon, a.lat, h.lon, h.lat));
   for (let i = 0; i <= count; i++) {
-    const p = trafficPoint(a, b, i / count);
-    if (kind === 'ships' && isLand(p.lon, p.lat)) return false;
+    const p = at(i / count);
+    if (kind === 'ships' && isLandCached(p.lon, p.lat)) return false;
     for (let k = 0; k < hazards.length; k++) {
       const h = hazards[k], d = distanceKm(p.lon, p.lat, h.lon, h.lat);
       if (d < h.radiusKm && !(escaping && initial[k] < h.radiusKm && d >= initial[k] - 0.01)) return false;
@@ -70,7 +79,7 @@ export function trafficSegmentClear(a: GeoPoint, b: GeoPoint, kind: TrafficKind,
 const nodePoint = (id: number): GeoPoint => ({ lon: (id % COLS) * STEP - 180, lat: SOUTH + Math.floor(id / COLS) * STEP });
 const nodeId = (x: number, y: number): number => y * COLS + ((x % COLS) + COLS) % COLS;
 function waterNode(id: number): boolean {
-  if (!oceanNodes[id]) { const p = nodePoint(id); oceanNodes[id] = isLand(p.lon, p.lat) ? -1 : 1; }
+  if (!oceanNodes[id]) { const p = nodePoint(id); oceanNodes[id] = isLandCached(p.lon, p.lat) ? -1 : 1; }
   return oceanNodes[id] > 0;
 }
 function waterEdge(a: number, b: number): boolean {

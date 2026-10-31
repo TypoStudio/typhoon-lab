@@ -93,3 +93,68 @@ export function inPolygon(lon: number, lat: number, polygon: LandPolygon): boole
   }
   return inside;
 }
+
+// Lazy land raster for hot paths (ship routing samples a segment every few km). Each 0.1 degree cell,
+// built on first use, keeps the exact ray-cast answer in a cheaper form: whether the eastward ray
+// crosses an odd number of edges that lie wholly east of the cell and span its latitude slab (a
+// constant for the cell), plus the few edges that touch the cell or start/end inside its slab. The
+// result is the same parity isLand computes, from a handful of edges instead of the whole band.
+const RASTER_CELL = 0.1;
+const RASTER_COLS = Math.round(360 / RASTER_CELL), RASTER_ROWS = Math.round(180 / RASTER_CELL);
+const RASTER_PAD = 1e-9;
+interface RasterCell { base: boolean; edges: Edge[] }
+const ALL_OCEAN: RasterCell = { base: false, edges: [] }, ALL_LAND: RasterCell = { base: true, edges: [] };
+const raster: (RasterCell | undefined)[] = new Array(RASTER_COLS * RASTER_ROWS);
+
+// Liang-Barsky: does the segment touch the rectangle?
+function edgeTouches([x1, y1, x2, y2]: Edge, xMin: number, yMin: number, xMax: number, yMax: number): boolean {
+  let t0 = 0, t1 = 1;
+  const dx = x2 - x1, dy = y2 - y1;
+  for (const [p, q] of [[-dx, x1 - xMin], [dx, xMax - x1], [-dy, y1 - yMin], [dy, yMax - y1]]) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    const r = q / p;
+    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
+  }
+  return true;
+}
+
+function buildCell(col: number, row: number): RasterCell {
+  const xMin = col * RASTER_CELL - 180 - RASTER_PAD, xMax = xMin + RASTER_CELL + 2 * RASTER_PAD;
+  const yMin = row * RASTER_CELL - 90 - RASTER_PAD, yMax = yMin + RASTER_CELL + 2 * RASTER_PAD;
+  const cell: RasterCell = { base: false, edges: [] };
+  let coastal = false;
+  // The padded slab may reach into a neighbouring band; an edge listed in both is taken in the first.
+  const first = bandOf(yMin);
+  for (let band = first; band <= bandOf(yMax); band++) {
+    for (const edge of EDGE_BANDS[band]) {
+      const [x1, y1, x2, y2] = edge, lo = Math.min(y1, y2), hi = Math.max(y1, y2);
+      if (band > first && bandOf(lo) < band) continue;
+      if (hi < yMin || lo > yMax) continue; // never crossed by a ray inside the slab
+      if (edgeTouches(edge, xMin, yMin, xMax, yMax)) { coastal = true; if (lo !== hi) cell.edges.push(edge); continue; }
+      if (lo === hi) continue; // a horizontal edge is never crossed by an eastward ray
+      const ym = (Math.max(lo, yMin) + Math.min(hi, yMax)) / 2;
+      if (x1 + ((ym - y1) * (x2 - x1)) / (y2 - y1) < xMin) continue; // wholly west: no ray from the cell reaches it
+      if (lo <= yMin && hi > yMax) cell.base = !cell.base; // wholly east and spanning: crossed by every ray
+      else cell.edges.push(edge);
+    }
+  }
+  if (!coastal) { // no edge enters the cell, so one answer holds throughout: take it at the centre
+    const cx = (xMin + xMax) / 2, cy = (yMin + yMax) / 2;
+    for (const edge of cell.edges) if (crosses(cx, cy, edge)) cell.base = !cell.base;
+    return cell.base ? ALL_LAND : ALL_OCEAN;
+  }
+  return cell;
+}
+
+/** Same result as isLand, from a lazily built per-cell edge subset. */
+export function isLandCached(lon: number, lat: number): boolean {
+  if (!(lat >= -90 && lat <= 90)) return false;
+  const x = wrapLon(lon);
+  const col = Math.min(RASTER_COLS - 1, Math.floor((x + 180) / RASTER_CELL));
+  const row = Math.min(RASTER_ROWS - 1, Math.floor((lat + 90) / RASTER_CELL));
+  const i = row * RASTER_COLS + col;
+  const cell = raster[i] ?? (raster[i] = buildCell(col, row));
+  let inside = cell.base;
+  for (const edge of cell.edges) if (crosses(x, lat, edge)) inside = !inside;
+  return inside;
+}

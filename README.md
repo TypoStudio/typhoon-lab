@@ -88,7 +88,7 @@ Except where noted, the source code, text, graphics and the data this project cr
 - **Third-party data keeps its own terms** (Natural Earth and NOAA are public domain; JMA data is under the JMA Public Data License 1.0). See [DATA_SOURCES.md](DATA_SOURCES.md). Nothing in the project license restricts what those sources allow.
 - **How to give credit:** `Typhoon Lab by TypoStudio, CC BY-NC-SA 4.0, https://typhoon.typostudio.dev`
 
-The full text is in [LICENSE](LICENSE).
+The full legal code is in [LICENSE](LICENSE); the scope and exclusions are in [COPYRIGHT.md](COPYRIGHT.md).
 
 ## Build from source
 
@@ -224,7 +224,7 @@ JMA 베스트트랙 자료는 TypoStudio가 편집·가공했으며, 편집된 �
 - **서드파티 데이터는 각자의 이용 조건을 따릅니다** (Natural Earth와 NOAA는 퍼블릭 도메인, JMA 자료는 JMA 공공 데이터 라이선스 1.0). [DATA_SOURCES.md](DATA_SOURCES.md)를 참고하세요. 이 프로젝트의 라이선스는 해당 출처가 허용하는 범위를 제한하지 않습니다.
 - **출처 표기 방법:** `Typhoon Lab by TypoStudio, CC BY-NC-SA 4.0, https://typhoon.typostudio.dev`
 
-전문은 [LICENSE](LICENSE)에 있습니다.
+라이선스 전문은 [LICENSE](LICENSE)에, 적용 범위와 예외는 [COPYRIGHT.md](COPYRIGHT.md)에 있습니다.
 
 ## 소스에서 빌드
 

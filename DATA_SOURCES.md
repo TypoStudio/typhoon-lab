@@ -1,6 +1,6 @@
 # Data sources
 
-This file covers third-party data, which keeps its own terms. The project's own work is licensed under CC BY-NC-SA 4.0 (see [LICENSE](LICENSE)); open-source libraries are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Generated files in `src/data/generated/` that only reformat a source are covered by that source's terms; our selection, processing and additions are covered by `LICENSE`.
+This file covers third-party data, which keeps its own terms. The project's own work is licensed under CC BY-NC-SA 4.0 (see [LICENSE](LICENSE)); open-source libraries are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Generated files in `src/data/generated/` that only reformat a source are covered by that source's terms; our selection, processing and additions are covered by `LICENSE` (scope in [COPYRIGHT.md](COPYRIGHT.md)).
 
 Coastline geometry, city coordinates and city populations are real, from Natural Earth. New current-date worlds load NOAA GFS pressure, surface wind, ocean surface temperature and 2 m air temperature as their starting analysis. Humidity, shear, the fallback weather background, rural population and damage estimates remain game approximations, except where the historic datasets described below apply.
 
