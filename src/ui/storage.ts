@@ -44,16 +44,38 @@ export function replayExportProblem(state: GameState): string | null {
   return null;
 }
 
+/** A compact, language-neutral key of one action (what the replay signature and ranking hash are built from). */
+export function actionKey(a: ActionRecord): unknown[] {
+  switch (a.type) {
+    case 'genesis': return [a.tick, a.type, a.on];
+    case 'historic': return [a.tick, a.type, a.typhoonId];
+    case 'climate': return [a.tick, a.type, a.key, a.value];
+    case 'season': return [a.tick, a.type, a.dayOfYear];
+    case 'climate-mode': return [a.tick, a.type, a.on];
+    case 'climate-advance': return [a.tick, a.type, a.days];
+    default: return [a.tick, a.type, a.lon, a.lat, ...(a.formation ? [a.formation] : [])];
+  }
+}
+
+/** A copy of one action holding only its own fields. */
+function cleanAction(a: ActionRecord): ActionRecord {
+  switch (a.type) {
+    case 'genesis': return { tick: a.tick, type: a.type, on: a.on };
+    case 'climate': return { tick: a.tick, type: a.type, key: a.key, value: a.value };
+    case 'season': return { tick: a.tick, type: a.type, dayOfYear: a.dayOfYear };
+    case 'historic': return { tick: a.tick, type: a.type, typhoonId: a.typhoonId };
+    case 'climate-mode': return { tick: a.tick, type: a.type, on: a.on };
+    case 'climate-advance': return { tick: a.tick, type: a.type, days: a.days };
+    default: return { tick: a.tick, type: a.type, lon: a.lon, lat: a.lat, ...(a.formation ? { formation: a.formation } : {}) };
+  }
+}
+
 /** Snapshot of the world as seed + placements up to the current tick. */
 export function buildReplay(state: GameState): ReplayFile {
   return {
     format: REPLAY_FORMAT, formatVersion: REPLAY_VERSION,
     scenarioId: state.scenarioId, version: state.version, seed: state.seed, untilTick: state.tick, startDayOfYear: state.initialStartDayOfYear,
-    actions: state.actions.map((a): ActionRecord => a.type === 'genesis' ? { tick: a.tick, type: a.type, on: a.on }
-      : a.type === 'climate' ? { tick: a.tick, type: a.type, key: a.key, value: a.value }
-      : a.type === 'season' ? { tick: a.tick, type: a.type, dayOfYear: a.dayOfYear }
-      : a.type === 'historic' ? { tick: a.tick, type: a.type, typhoonId: a.typhoonId }
-      : { tick: a.tick, type: a.type, lon: a.lon, lat: a.lat, ...(a.formation ? { formation: a.formation } : {}) }),
+    actions: state.actions.map(cleanAction),
     exportedAt: new Date().toISOString(),
     ...(state.initialWeather ? { initialWeather: structuredClone(state.initialWeather) } : {}),
     ...(state.traffic.dispatches.length ? { trafficDispatches: structuredClone(state.traffic.dispatches) } : {}),
@@ -70,8 +92,8 @@ export function parseReplay(text: string): { ok: true; replay: ReplayFile } | { 
   try { data = JSON.parse(text); } catch { return { ok: false, error: 'The file is not valid JSON.' }; }
   if (!isRecord(data)) return { ok: false, error: 'A replay must be a JSON object.' };
   if (data.format !== REPLAY_FORMAT) return { ok: false, error: 'This is not a Typhoon Lab replay file.' };
-  // Version 6 predates the climate layer: it replays identically unless the log activates one.
-  const legacy = data.formatVersion === REPLAY_VERSION - 1;
+  // Versions 6 and 7 replay identically unless the log builds a climate layer (the layer's physics changed after version 7).
+  const legacy = data.formatVersion === 6 || data.formatVersion === 7;
   if (data.formatVersion !== REPLAY_VERSION && !legacy) {
     return { ok: false, error: `Replay format version ${String(data.formatVersion).slice(0, 12)} is not supported; this build reads version ${REPLAY_VERSION} (older regional replays cannot be loaded).` };
   }
@@ -85,7 +107,7 @@ export function parseReplay(text: string): { ok: true; replay: ReplayFile } | { 
   const checked = validateActions(data.actions, data.untilTick);
   if (!checked.ok) return { ok: false, error: checked.reason };
   if (legacy && replayActivatesClimateLayer(checked.actions, data.initialWeather)) {
-    return { ok: false, error: `Replay format version ${REPLAY_VERSION - 1} used an ENSO slider, a warm or cool tool within 30 degrees of the equator, or a live starting analysis; this build simulates those with a dynamic climate model and would not reproduce it (it reads version ${REPLAY_VERSION}).` };
+    return { ok: false, error: `Replay format version ${String(data.formatVersion)} used an ENSO slider, a water, pressure, air or vertical-motion tool within 30 degrees of the equator, or a live starting analysis; this build simulates those with a newer dynamic climate model and would not reproduce it (it reads version ${REPLAY_VERSION}).` };
   }
   const traffic = validateTrafficDispatches(data.trafficDispatches === undefined ? [] : data.trafficDispatches, data.untilTick);
   if (!traffic.ok) return { ok: false, error: traffic.reason };

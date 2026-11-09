@@ -211,9 +211,14 @@ svg { display: block; }
 .palette__tab[aria-selected="true"] { background: var(--color-paper-4); color: var(--color-ink); box-shadow: inset 0 -2px 0 var(--color-accent); }
 .palette__label { margin: 0; font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
 @media (max-width: 30rem) { .palette__label { display: none; } }
-.palette:has([data-palette-panel="formation"]:not([hidden])) .palette__label { display: none; }
-.palette__tools[data-palette-panel="formation"] { display: flex; gap: var(--space-xs); overflow-x: auto; padding-bottom: 2px; }
-.palette__tools[data-palette-panel="formation"] .tool { flex: 0 0 5rem; }
+.palette:has([data-palette-panel="formation"]:not([hidden]), [data-palette-panel="measure"]:not([hidden])) .palette__label { display: none; }
+.palette__tools[data-palette-panel="formation"], .palette__tools[data-palette-panel="measure"] { display: flex; gap: var(--space-xs); overflow-x: auto; padding-bottom: 2px; }
+.palette__tools[data-palette-panel="formation"] .tool, .palette__tools[data-palette-panel="measure"] .tool { flex: 0 0 5rem; }
+/* Desktop: the Conditions row is as wide and as tall as the Formation and Measure rows (ten 5rem cells, same bottom padding), so the box does not move between tabs. */
+@media (min-width: 48rem) and (min-height: 30.0625rem) {
+  .palette__tools[data-palette-panel="conditions"] { width: calc(10 * 5rem + 9 * var(--space-xs)); max-width: 100%; padding-bottom: 2px; }
+}
+.tool[data-measure] .tool__icon { color: var(--color-wind); }
 .palette__tools { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--space-xs); }
 .tool {
   position: relative; display: grid; justify-items: center; align-content: center; gap: var(--space-2xs);
@@ -358,7 +363,7 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
 .fine { color: var(--color-muted); font-size: var(--text-xs); line-height: 1.45; }
 .empty { color: var(--color-muted); font-size: var(--text-sm); padding-block: var(--space-xs); }
 
-.report-tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px; padding: 2px; background: var(--color-paper); border-radius: var(--radius-md); }
+.report-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; padding: 2px; background: var(--color-paper); border-radius: var(--radius-md); }
 .report-tab { border-color: transparent; background: transparent; font-size: var(--text-sm); font-weight: 600; color: var(--color-muted); white-space: nowrap; padding: 0 var(--space-xs); }
 .report-tab[aria-selected="true"] { background: var(--color-paper-4); color: var(--color-ink); box-shadow: inset 0 -2px 0 var(--color-accent); }
 .settings-panel { display: grid; min-width: 0; }
@@ -525,10 +530,50 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
   color: var(--color-muted); border: var(--rule-width) solid var(--color-rule); border-radius: var(--radius-sm);
 }
 
+/* ---- Measure tab: one card per measured quantity, one line per pin ------------------------------- */
+
+.measure__head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-sm); }
+.measure__head .fine { flex: 1 1 auto; min-width: 0; }
+.measure__head .btn { flex: none; }
+.measure__cards { display: grid; gap: var(--space-sm); min-width: 0; }
+.measure-card { display: grid; gap: var(--space-xs); min-width: 0; padding: var(--space-sm); background: var(--color-paper-3); border: var(--rule-width) solid var(--color-rule); border-radius: var(--radius-md); }
+.measure-card__head { display: flex; align-items: baseline; gap: var(--space-xs); min-width: 0; }
+.measure-card__title { min-width: 0; font-family: var(--font-display); font-size: var(--text-md); font-weight: 700; color: var(--color-ink); overflow-wrap: anywhere; }
+.measure-card__unit { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
+.measure-card__remove { flex: none; margin-inline-start: auto; align-self: center; width: 2rem; height: 2rem; min-height: 2rem; color: var(--color-muted); }
+.measure-card__remove:hover { color: var(--color-ink); background: var(--color-paper-4); }
+.measure-card__remove svg { width: 1rem; height: 1rem; }
+@media (pointer: coarse) { .measure-card__remove { width: 2.75rem; height: 2.75rem; min-height: 2.75rem; } }
+.measure-lines { display: grid; gap: 2px; }
+.measure-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-xs); min-width: 0; font-size: var(--text-xs); }
+.measure-line__name { flex: 1 1 8rem; min-width: 0; color: var(--color-muted); overflow-wrap: anywhere; }
+.measure-line__values { display: inline-flex; align-items: baseline; gap: var(--space-xs); white-space: nowrap; }
+.measure-line__sep { color: var(--color-muted); }
+.measure-line__value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 600; color: var(--color-ink); white-space: nowrap; }
+.measure-key { flex: none; width: 14px; height: 0; border-top: 2px solid var(--line); border-radius: 1px; }
+.measure-key[data-dashed] { border-top-style: dashed; }
+.measure-plots { display: grid; gap: var(--space-sm); min-width: 0; }
+.measure-plot { display: grid; gap: 2px; margin: 0; min-width: 0; }
+.measure-plot__label { display: flex; justify-content: space-between; gap: var(--space-xs); font-size: var(--text-xs); color: var(--color-muted); }
+.measure-plot__unit { font-family: var(--font-mono); white-space: nowrap; }
+.measure-plot__frame { position: relative; min-width: 0; }
+.measure-plot__canvas { display: block; width: 100%; height: 7.25rem; border-radius: var(--radius-sm); touch-action: pan-y; }
+.measure-card[data-plots="2"] .measure-plot__canvas { height: 5.75rem; }
+.measure-tip {
+  position: absolute; top: 2px; z-index: 2; max-width: 75%; padding: var(--space-xs) var(--space-sm); pointer-events: none;
+  background: var(--float-bg); border: var(--rule-width) solid var(--color-rule); border-radius: var(--radius-sm); font-size: var(--text-xs);
+}
+.measure-tip p { display: flex; align-items: center; gap: var(--space-xs); white-space: nowrap; }
+.measure-tip__time { color: var(--color-muted); }
+.measure-tip__value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--color-ink); }
+.measure-tip__name { color: var(--color-muted); }
+.measure-tip__name:empty { display: none; }
+.measure-note { margin: 0; }
+
 /* ---- Larger screens: clock beside the brand, labelled palette, roomier legend ------------------ */
 
 @media (min-width: 48rem) {
-  .report-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .report-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .report-tab[data-tab="settings"] { display: none; }
   .settings-panel[hidden] { display: grid !important; }
   .sidebar__head { order: -2; }

@@ -139,17 +139,17 @@ describe('natural typhoon formation and weakening conditions', () => {
     const untouched = createGame(); run(untouched, 80); // the calendar has moved on 80 h, so compare with an effect-free world at the same hour
     // Every tool field is back to normal. The twelve cool tools were also one merged cold SST patch (-6 C, 12 degrees wide) of the dynamic
     // climate layer, and the sea warms back over weeks, so 80 h in (a few hours after the 72 h tools ended) the water and the air above it are
-    // still about 5 C and 3.7 C cool, with the matching weak high, drier and shearier air. Measured: -5.28 C, -3.70 C, +4.34 hPa, -0.049, +0.64 m/s.
+    // still about 5 C and 3.7 C cool, with the matching weak high, drier and shearier air. Measured: -5.28 C, -3.70 C, +2.17 hPa, -0.049, +0.64 m/s (the pressure was +4.34 hPa before the Gill pressure scale HPA_PER_ND was recalibrated from 1.6 to 0.8).
     const gone = sampleEnvironment(s, 140, 16), clean = sampleEnvironment(untouched, 140, 16);
     for (const key of ['airHeating', 'updraft', 'instability', 'drying', 'cooling', 'land'] as const) expect(gone[key]).toEqual(clean[key]);
     const within = (value: number, expected: number, tolerance: number) => expect(Math.abs(value - expected)).toBeLessThan(tolerance);
     within(gone.temperature - clean.temperature, -5.28, 0.4);
     within(gone.airTemperature - clean.airTemperature, -3.70, 0.4);
-    within(gone.pressure - clean.pressure, 4.34, 0.5);
-    within(gone.humidity - clean.humidity, -0.049, 0.015);
-    within(gone.shear - clean.shear, 0.64, 0.3);
-    within(gone.u - clean.u, 0.51, 0.3);
-    within(gone.v - clean.v, -0.96, 0.3);
+    within(gone.pressure - clean.pressure, 4.69, 0.5); // 2.17 before the cold-air, downdraft and stable-air tools also cooled the layer's atmosphere (12 cooling heat patches fading with the 2.4-day adjustment time)
+    within(gone.humidity - clean.humidity, -0.097, 0.015); // -0.049 before the heat patches (their rain anomaly dries the cooled column)
+    within(gone.shear - clean.shear, 1.58, 0.3); // 0.64 before the heat patches (the Gill baroclinic shear change near a patch)
+    within(gone.u - clean.u, 0.69, 0.3); // 0.51 before the heat patches
+    within(gone.v - clean.v, -1.07, 0.3); // was -0.96 before the Gill pressure recalibration (HPA_PER_ND 1.6 -> 0.8) weakened the pressure-driven wind
   });
 
   it('early intervention prevents the first wave from forming instead of merely hiding a storm', () => {
@@ -183,7 +183,7 @@ describe('natural typhoon formation and weakening conditions', () => {
     const s = natural(4); protect(s, s.effects[0].lon, s.effects[0].lat); run(s, 60);
     setGenesis(s, false); run(s, 20); setGenesis(s, true); run(s, 40);
     const file = buildReplay(s); const parsed = parseReplay(JSON.stringify(file));
-    expect(parsed.ok).toBe(true); expect(file.formatVersion).toBe(7);
+    expect(parsed.ok).toBe(true); expect(file.formatVersion).toBe(8);
     expect(s.actions.map(a => a.type)).toEqual(['genesis', 'cool', 'dry', 'cold-air', 'downdraft', 'genesis', 'genesis']);
     const result = replayGame(s.seed, s.actions, s.tick);
     expect(result.ok).toBe(true);

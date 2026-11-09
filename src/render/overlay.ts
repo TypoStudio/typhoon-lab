@@ -41,7 +41,13 @@ export interface MapOverlay {
   rightInset: number;
   /** First-visit tutorial: a pulsing ring and 'Drop here' label at this spot. */
   tutorialTarget?: GeoPoint | null;
+  /** Measure tab: numbered pins on the map, and the aiming reticle while a measurement icon is armed or dragged. */
+  pins?: MeasurePin[];
+  reticle?: GeoPoint | null;
 }
+
+/** A measurement pin: its number, place and line colour. */
+export interface MeasurePin { n: number; lon: number; lat: number; color: string; ink: string }
 
 /** Which label layers the overlay draws. */
 export interface MapLabels {
@@ -233,6 +239,8 @@ export class OverlayPainter {
       if (overlay.target) this.targetPreview(view, overlay, tm);
     }
     if (overlay.tutorialTarget) this.tutorialMarker(view, overlay.tutorialTarget, tm);
+    if (overlay.pins?.length) this.measurePins(view, overlay.pins);
+    if (overlay.reticle) this.reticle(view, overlay.reticle);
     // Live systems stay above placed icons and the armed/dragged tool preview.
     if (state) {
       for (const storm of thunderstorms) this.thunderstorm(view, storm);
@@ -1413,6 +1421,49 @@ export class OverlayPainter {
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.fillText(text, lx + 8, ly + 11.5);
+      ctx.restore();
+    });
+  }
+
+  /** Numbered pins of the Measure tab: a coloured disc on a short stem, so the point itself stays visible. */
+  private measurePins(view: MapCamera, pins: MeasurePin[]): void {
+    const { ctx, theme, w } = this;
+    for (const pin of pins) {
+      each(view, pin.lon, pin.lat, 24, w, this.h, (x, y, a) => {
+        ctx.save();
+        ctx.globalAlpha = a;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = theme.paper;
+        ctx.beginPath(); ctx.arc(x, y, 3.5, 0, TAU); ctx.stroke();
+        ctx.fillStyle = pin.color;
+        ctx.beginPath(); ctx.arc(x, y, 3.5, 0, TAU); ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = pin.color;
+        ctx.beginPath(); ctx.moveTo(x, y - 3.5); ctx.lineTo(x, y - 11); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y - 18, 8.5, 0, TAU);
+        ctx.fillStyle = pin.color; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = theme.paper; ctx.stroke();
+        ctx.font = `700 11px ${theme.font}`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = pin.ink;
+        ctx.fillText(String(pin.n), x, y - 17.5);
+        ctx.restore();
+      });
+    }
+  }
+
+  /** Where a measurement icon would land: a plain crosshair with a ring. */
+  private reticle(view: MapCamera, at: GeoPoint): void {
+    const { ctx, theme, w } = this;
+    each(view, at.lon, at.lat, 24, w, this.h, (x, y, a) => {
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = theme.accent;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, 7, 0, TAU); ctx.stroke();
+      ctx.beginPath();
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { ctx.moveTo(x + dx * 4, y + dy * 4); ctx.lineTo(x + dx * 14, y + dy * 14); }
+      ctx.stroke();
       ctx.restore();
     });
   }

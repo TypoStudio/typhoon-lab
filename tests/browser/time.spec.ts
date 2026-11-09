@@ -65,7 +65,7 @@ test('the clock starts locally and SVG arrows cycle through speeds', async ({ pa
   await expect(page.getByTestId('speed-value')).toHaveText('×600');
   expect(await page.evaluate(() => (window as any).__typhoonLab.speed)).toBe(600);
   await page.getByTestId('speed-next').click();
-  await expect(page.getByTestId('speed-value')).toHaveText('×1,200');
+  await expect(page.getByTestId('speed-value')).toHaveText('×1.2k');
   expect(await page.evaluate(() => (window as any).__typhoonLab.speed)).toBe(1200);
   await expect(page.getByTestId('speed-next')).toBeEnabled();
   await page.getByTestId('speed-prev').click();
@@ -82,7 +82,7 @@ test('speed reset returns to ×200 without restarting or unpausing the world', a
   await expect(reset).toBeDisabled();
   await page.getByTestId('speed-next').click();
   await page.getByTestId('speed-next').click();
-  await expect(page.getByTestId('speed-value')).toHaveText('×1,200');
+  await expect(page.getByTestId('speed-value')).toHaveText('×1.2k');
   await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.tick)).toBeGreaterThan(0);
   const before = await page.evaluate(() => {
     const s = (window as any).__typhoonLab.state;

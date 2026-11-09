@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { REPLAY_FILE_VERSION, REPLAY_MAX_ACTIONS, REPLAY_MAX_TICKS, createGame } from '../src/simulation/engine';
+import { REPLAY_FILE_VERSION, REPLAY_MAX_ACTIONS, REPLAY_MAX_TICKS, advanceClimateTime, createGame, placeTool, replayGame, setClimateMode } from '../src/simulation/engine';
+import type { GameState } from '../src/types';
+import { actionsHash } from '../src/ui/rankings';
 import { MAX_REPLAY_BYTES, buildReplay, parseReplay, replayExportProblem } from '../src/ui/storage';
 
-describe('portable world snapshots (replay files, version 7)', () => {
+describe('portable world snapshots (replay files, version 8)', () => {
   const state = createGame();
   state.tick = 40;
   state.actions.push(
@@ -39,11 +41,11 @@ describe('portable world snapshots (replay files, version 7)', () => {
   });
 
   it('reads version 6 files that never activate the climate layer, and rejects those that do with a clear reason', () => {
-    const quiet = { ...file, formatVersion: 6, actions: [{ tick: 0, type: 'low', lon: 140, lat: 16 }, { tick: 2, type: 'warm', lon: 140, lat: 40 }, { tick: 3, type: 'climate', key: 'warming', value: 1 }, { tick: 4, type: 'climate', key: 'enso', value: 0 }] };
+    const quiet = { ...file, formatVersion: 6, actions: [{ tick: 0, type: 'low', lon: 140, lat: 40 }, { tick: 2, type: 'warm', lon: 140, lat: 40 }, { tick: 3, type: 'climate', key: 'warming', value: 1 }, { tick: 4, type: 'climate', key: 'enso', value: 0 }] };
     const ok = parseReplay(JSON.stringify(quiet));
     expect(ok.ok).toBe(true);
     if (ok.ok) expect(ok.replay.formatVersion).toBe(REPLAY_FILE_VERSION);
-    for (const actions of [[{ tick: 0, type: 'climate', key: 'enso', value: 1 }], [{ tick: 0, type: 'warm', lon: 140, lat: 16 }], [{ tick: 0, type: 'cool', lon: -150, lat: -5 }]]) {
+    for (const actions of [[{ tick: 0, type: 'climate', key: 'enso', value: 1 }], [{ tick: 0, type: 'warm', lon: 140, lat: 16 }], [{ tick: 0, type: 'cool', lon: -150, lat: -5 }], [{ tick: 0, type: 'low', lon: 140, lat: 16 }]]) {
       const r = parseReplay(JSON.stringify({ ...file, formatVersion: 6, actions }));
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.error).toContain('dynamic climate model');
@@ -59,7 +61,7 @@ describe('portable world snapshots (replay files, version 7)', () => {
 
   it('rejects other scenarios, old versions, bad ticks, bad positions and unknown fields', () => {
     const bad: Record<string, unknown>[] = [
-      { scenarioId: 'another-world' }, { version: '0.1.0' }, { version: '0.2.0' }, { version: '0.2.1' }, { version: '0.3.0' }, { formatVersion: 1 }, { formatVersion: 2 }, { formatVersion: 3 }, { formatVersion: 4 }, { formatVersion: 5 }, { formatVersion: 6 }, { formatVersion: 8 }, { format: 'something-else' },
+      { scenarioId: 'another-world' }, { version: '0.1.0' }, { version: '0.2.0' }, { version: '0.2.1' }, { version: '0.3.0' }, { formatVersion: 1 }, { formatVersion: 2 }, { formatVersion: 3 }, { formatVersion: 4 }, { formatVersion: 5 }, { formatVersion: 6 }, { formatVersion: 9 }, { format: 'something-else' },
       { seed: -1 }, { seed: 1.5 }, { untilTick: -1 }, { untilTick: REPLAY_MAX_TICKS + 1 }, { untilTick: 2.5 },
       { actions: [{ tick: 41, type: 'warm', lon: 140, lat: 16 }] },
       { actions: [{ tick: 0, type: 'warm', lon: 999, lat: 16 }] },
@@ -105,5 +107,59 @@ describe('portable world snapshots (replay files, version 7)', () => {
     const crowded = structuredClone(state);
     crowded.actions = Array.from({ length: REPLAY_MAX_ACTIONS + 1 }, (_, i) => ({ tick: i, type: 'warm' as const, lon: 0, lat: 0 }));
     expect(replayExportProblem(crowded)).toMatch(/at most/);
+  });
+});
+
+describe('replay files carry the fast climate path actions', () => {
+  const made = (): GameState => {
+    const world = createGame(7);
+    setClimateMode(world, true);
+    advanceClimateTime(world, 40);
+    placeTool(world, 'low', 160, 0);
+    placeTool(world, 'high', -120, 0);
+    advanceClimateTime(world, 60);
+    setClimateMode(world, false);
+    return world;
+  };
+
+  it('exports mode and advance records with all their fields, and parses them back unchanged', () => {
+    const world = made();
+    const file = buildReplay(world);
+    expect(file.actions).toEqual(world.actions);
+    expect(file.actions.map(a => a.type)).toEqual(['climate-mode', 'climate-advance', 'low', 'high', 'climate-advance', 'climate-mode']);
+    expect(file.actions[0]).toEqual({ tick: 0, type: 'climate-mode', on: true });
+    expect(file.actions[1]).toEqual({ tick: 0, type: 'climate-advance', days: 40 });
+    const parsed = parseReplay(JSON.stringify(file));
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.replay.actions).toEqual(world.actions);
+  });
+
+  it('re-runs an imported file into the same climate state, and ranking hashes tell the actions apart', () => {
+    const world = made();
+    const parsed = parseReplay(JSON.stringify(buildReplay(world)));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const again = replayGame(parsed.replay.seed, parsed.replay.actions, parsed.replay.untilTick, parsed.replay.startDayOfYear);
+    expect(again.ok).toBe(true);
+    if (again.ok) {
+      expect(again.state.climateTime?.total).toBe(100);
+      expect(again.state.calendarOffsetDays).toBe(world.calendarOffsetDays);
+      expect(again.state.climateLayer?.core.day).toBe(world.climateLayer?.core.day);
+      expect(again.state.actions).toEqual(world.actions);
+    }
+    const shorter = structuredClone(world.actions);
+    (shorter[1] as { days: number }).days = 39;
+    expect(actionsHash(shorter, 0)).not.toBe(actionsHash(world.actions, 0));
+  });
+
+  it('reads version 6 and 7 files unless they would build a climate layer, and nothing older', () => {
+    const base = buildReplay(createGame(7));
+    const asVersion = (formatVersion: number, actions: unknown[]) => JSON.stringify({ ...base, formatVersion, actions });
+    for (const v of [6, 7]) {
+      expect(parseReplay(asVersion(v, [{ tick: 0, type: 'low', lon: 150, lat: 45 }, { tick: 0, type: 'moisture', lon: 150, lat: 5 }])).ok).toBe(true);
+      for (const tool of ['warm', 'cool', 'low', 'high', 'updraft']) expect(parseReplay(asVersion(v, [{ tick: 0, type: tool, lon: 150, lat: 5 }])).ok, `${v} ${tool}`).toBe(false);
+      expect(parseReplay(asVersion(v, [{ tick: 0, type: 'climate', key: 'enso', value: 1 }])).ok).toBe(false);
+    }
+    expect(parseReplay(asVersion(5, [])).ok).toBe(false);
   });
 });

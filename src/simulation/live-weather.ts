@@ -25,8 +25,8 @@ export function isLiveWeatherSnapshot(value: unknown): value is LiveWeatherSnaps
 }
 
 /** Current field for simulation; starting analysis is only a compatibility fallback. */
-export function currentWeather(state: Pick<GameState, 'weather' | 'initialWeather'>): WeatherField | undefined {
-  return state.weather ?? state.initialWeather;
+export function currentWeather(state: Pick<GameState, 'weather' | 'initialWeather' | 'liveEnded'>): WeatherField | undefined {
+  return state.weather ?? (state.liveEnded ? undefined : state.initialWeather);
 }
 
 /** Bilinear point sample of a weather field; wraps longitude and clamps poles. */

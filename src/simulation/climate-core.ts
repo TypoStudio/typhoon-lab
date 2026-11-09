@@ -80,7 +80,8 @@ const A_R = Math.exp(-3 * GILL_EPS * ATM_DX);
 const WIND_PER_ND = 0.6;
 /** Fraction of the steady Gill (lower-tropospheric) wind that acts as surface stress on the ocean; bursts and noise are surface winds already. */
 const GILL_STRESS_EFF = 0.549;
-const HPA_PER_ND = 1.6; // hPa per nondimensional Gill pressure
+/** hPa per nondimensional Gill pressure. Calibrated so Tahiti minus Darwin regresses on monthly Nino 3.4 at about -1.5 hPa per degC, the observed NCEP/NCAR slope (tests/climate-core.test.ts, "Gill pressure scale"); it was 1.6, which gave -2.95 hPa per degC (SOI about -15 per degC, twice the observed). Pressure does not feed back on the ocean, so this changes SLP, SOI and the pressure-driven coupling only. */
+const HPA_PER_ND = 0.8;
 const MM_DAY_PER_ND = 5; // mm/day of rain per nondimensional heating
 /**
  * Walker compensation: heating west of ~160E is reduced by WALKER_COMP times the mean heating anomaly of 160E-280E
@@ -133,6 +134,10 @@ const PULSE_WINDOW_DAYS = 30;
 const MAX_RECENT_PULSES = 4; // thermocline pulses a player may apply within PULSE_WINDOW_DAYS
 const MAX_PULSE_LOG = 300; // entries of the pulse log (three numbers each pulse)
 export const MAX_PATCHES = 8;
+/** Atmosphere-only heating patches (placed weather conditions): they heat or cool the Gill atmosphere directly and have no ocean footprint of their own. */
+export const MAX_HEAT_PATCHES = 16;
+/** Peak heating of one (merged) patch in nondimensional Gill units (5 units = 25 mm/day of rain). It equals HEAT_MAX, so stacking cannot exceed what a column's moisture supply allows. */
+const HEAT_PATCH_MAX = HEAT_MAX;
 const PATCH_NUDGE_DAYS = 2; // days, strong nudging of the ocean strip toward the imposed anomaly
 const PATCH_EDGE = 0.05; // fraction of the peak below which a patch does not touch a cell
 const PATCH_DECAY_DAYS = 45; // days, e-folding of the off-strip (no ocean model there) anomaly after release: mixed-layer heat-flux damping
@@ -170,6 +175,10 @@ export interface ClimateState {
   hold: number | null; // degC target for Nino 3.4, or null
   patches: Float64Array; // MAX_PATCHES x [lonEast, lat, radiusDeg, deltaC, startDay, days]
   nPatches: number;
+  heat: Float64Array; // MAX_HEAT_PATCHES x [lonEast, lat, radiusDeg, strength (nondimensional heating, cooling < 0), startDay, days]
+  /** 1 where the patch comes from a pressure tool (low, high), which has its own pressure system in the weather layer; 0 for the others. */
+  heatOwn: Float64Array;
+  nHeat: number;
   pulses: number[]; // log of [day, lonEast, metres] triples
 }
 
@@ -342,18 +351,21 @@ export function createClimate(seed: number, startDayOfYear = 1, startYear = 2000
     hold: null,
     patches: new Float64Array(MAX_PATCHES * 6),
     nPatches: 0,
+    heat: new Float64Array(MAX_HEAT_PATCHES * 6),
+    heatOwn: new Float64Array(MAX_HEAT_PATCHES),
+    nHeat: 0,
     pulses: [],
   };
   Object.defineProperty(state, 'stochastic', { value: stochastic, writable: false, enumerable: true }); // the mode cannot be flipped mid-run
   return state;
 }
 
-const ARRAY_KEYS = ['K', 'R', 'R3', 'T', 'tAdv', 'tTh', 'tDamp', 'tForce', 'bursts', 'patches'] as const;
+const ARRAY_KEYS = ['K', 'R', 'R3', 'T', 'tAdv', 'tTh', 'tDamp', 'tForce', 'bursts', 'patches', 'heat', 'heatOwn'] as const;
 /** Plain JSON-safe copy of the whole state. */
 export function serializeClimate(s: ClimateState): Record<string, unknown> {
   const o: Record<string, unknown> = {
     day: s.day, seed: s.seed, stochastic: s.stochastic, startDayOfYear: s.startDayOfYear, startYear: s.startYear, redNoise: s.redNoise,
-    nBursts: s.nBursts, burstCount: s.burstCount, tradeAnomaly: s.tradeAnomaly, hold: s.hold, nPatches: s.nPatches, pulses: s.pulses.slice(),
+    nBursts: s.nBursts, burstCount: s.burstCount, tradeAnomaly: s.tradeAnomaly, hold: s.hold, nPatches: s.nPatches, nHeat: s.nHeat, pulses: s.pulses.slice(),
   };
   for (const k of ARRAY_KEYS) o[k] = Array.from(s[k]);
   return o;
@@ -363,9 +375,9 @@ export function restoreClimate(data: unknown): ClimateState | null {
   if (typeof data !== 'object' || data === null) return null;
   const d = data as Record<string, unknown>;
   const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
-  if (!num(d.day) || !num(d.seed) || !num(d.startDayOfYear) || !num(d.startYear) || !num(d.redNoise) || !num(d.nBursts) || !num(d.burstCount) || !num(d.tradeAnomaly) || !num(d.nPatches)) return null;
+  if (!num(d.day) || !num(d.seed) || !num(d.startDayOfYear) || !num(d.startYear) || !num(d.redNoise) || !num(d.nBursts) || !num(d.burstCount) || !num(d.tradeAnomaly) || !num(d.nPatches) || !num(d.nHeat)) return null;
   if (d.hold !== null && (!num(d.hold) || Math.abs(d.hold) > 5)) return null;
-  if (Math.abs(d.tradeAnomaly) > 5 || !Number.isInteger(d.nBursts) || !Number.isInteger(d.nPatches) || !Number.isInteger(d.day) || d.day < 0 || d.burstCount < 0) return null;
+  if (Math.abs(d.tradeAnomaly) > 5 || !Number.isInteger(d.nBursts) || !Number.isInteger(d.nPatches) || !Number.isInteger(d.nHeat) || !Number.isInteger(d.day) || d.day < 0 || d.burstCount < 0) return null;
   if (!Array.isArray(d.pulses) || !d.pulses.every(num) || d.pulses.length % 3 !== 0 || d.pulses.length > MAX_PULSE_LOG) return null;
   for (let i = 0; i < d.pulses.length; i += 3) if (d.pulses[i] < 0 || d.pulses[i + 1] < OCEAN_LON0 || d.pulses[i + 1] > 280 || Math.abs(d.pulses[i + 2]) > 60) return null;
   if (typeof d.stochastic !== 'boolean') return null;
@@ -375,7 +387,7 @@ export function restoreClimate(data: unknown): ClimateState | null {
     if (!Array.isArray(a) || a.length !== s[k].length || !a.every(num)) return null;
     s[k].set(a as number[]);
   }
-  if (d.nBursts < 0 || d.nBursts > MAX_BURSTS || d.nPatches < 0 || d.nPatches > MAX_PATCHES) return null;
+  if (d.nBursts < 0 || d.nBursts > MAX_BURSTS || d.nPatches < 0 || d.nPatches > MAX_PATCHES || d.nHeat < 0 || d.nHeat > MAX_HEAT_PATCHES) return null;
   for (let j = 0; j < OCEAN_N; j++) if (Math.abs(s.K[j]) > WAVE_MAX || Math.abs(s.R[j]) > WAVE_MAX || Math.abs(s.R3[j]) > WAVE_MAX || Math.abs(s.T[j]) > SST_CEIL - SST_FLOOR) return null;
   for (let b = 0; b < d.nBursts; b++) {
     const lon = s.bursts[b * 4], speed = s.bursts[b * 4 + 1], days = s.bursts[b * 4 + 2];
@@ -385,6 +397,7 @@ export function restoreClimate(data: unknown): ClimateState | null {
     const o = p * 6, lon = s.patches[o], lat = s.patches[o + 1], r = s.patches[o + 2], dT = s.patches[o + 3], days = s.patches[o + 5];
     if (lon < 0 || lon > 360 || Math.abs(lat) > 30 || r < 2 || r > 40 || dT === 0 || Math.abs(dT) > 6 || days < 1 || days > 730) return null;
   }
+  for (let p = 0; p < d.nHeat; p++) if (!isValidHeatPatch(heatPatchOf(s.heat, s.heatOwn, p)) || (s.heatOwn[p] !== 0 && s.heatOwn[p] !== 1)) return null;
   s.day = Math.max(0, Math.floor(d.day));
   s.redNoise = d.redNoise;
   s.nBursts = Math.floor(d.nBursts);
@@ -392,6 +405,7 @@ export function restoreClimate(data: unknown): ClimateState | null {
   s.tradeAnomaly = d.tradeAnomaly;
   s.hold = d.hold;
   s.nPatches = Math.floor(d.nPatches);
+  s.nHeat = Math.floor(d.nHeat);
   s.pulses = d.pulses.slice();
   return s;
 }
@@ -430,9 +444,54 @@ function addPatchHeating(s: ClimateState, m0: number): void {
   }
 }
 
+// Meridional projection of a heating patch onto the Gill e^{-y^2/4} structure at 1 degree spacing, 30S..30N. Normalised so that a
+// field shaped like the SST strip (e-fold STRIP_LAT_E_FOLD) projects to its own equatorial value, like PROJ_W above.
+const HEAT_LAT_N = 61;
+const HEAT_W = new Float64Array(HEAT_LAT_N);
+{
+  let norm = 0;
+  for (let i = 0; i < HEAT_LAT_N; i++) {
+    const lat = i - 30, y = (lat * 110.57e3) / GILL_L;
+    HEAT_W[i] = Math.exp(-y * y / 4);
+    norm += Math.exp(-((lat / STRIP_LAT_E_FOLD) ** 2)) * HEAT_W[i];
+  }
+  for (let i = 0; i < HEAT_LAT_N; i++) HEAT_W[i] /= norm;
+}
+/** days: the atmosphere's own adjustment time, 1/GILL_EPS in Gill's time unit (2 beta c)^-1/2 = 0.242 day: the heating fades like this after its source is gone. */
+const HEAT_FADE_DAYS = 0.242 / GILL_EPS;
+/** Fraction (0..1) of a heat patch's strength present on `day`: 1 while its source is there, then fading with the atmosphere's adjustment time. */
+const heatAmplitude = (s: ClimateState, p: number, day: number): number => {
+  const age = day - s.heat[p * 6 + 4], days = s.heat[p * 6 + 5];
+  return age < 0 ? 0 : age < days ? 1 : Math.exp(-(age - days) / HEAT_FADE_DAYS);
+};
+/** The patch's source is still there (tools placed: the condition has not yet ended). */
+export const heatSourceActive = (s: ClimateState, p: number): boolean => {
+  const age = s.day - s.heat[p * 6 + 4];
+  return age >= 0 && age < s.heat[p * 6 + 5];
+};
+/** Adds the active heat patches (a Gaussian exp(-(d/r)^2) in longitude and latitude, projected onto the Gill structure within 30 degrees of the equator) to the Gill heating aF. */
+function addHeatPatches(s: ClimateState, skipOwn: boolean): void {
+  for (let p = 0; p < s.nHeat; p++) {
+    if (skipOwn && s.heatOwn[p] === 1) continue;
+    const amp = heatAmplitude(s, p, s.day);
+    if (amp < 0.01) continue;
+    const o = p * 6, lon0 = s.heat[o], lat0 = s.heat[o + 1], r = s.heat[o + 2], r2 = r * r;
+    let lat = 0;
+    for (let i = 0; i < HEAT_LAT_N; i++) { const dy = i - 30 - lat0; lat += Math.exp(-(dy * dy) / r2) * HEAT_W[i]; }
+    lat *= s.heat[o + 3] * amp;
+    for (let k = 0; k < ATM_N; k++) {
+      const dl = wrap180(ATM_DLON * k + 2.5 - lon0);
+      if (dl * dl > 9 * r2) continue;
+      let lonSum = 0;
+      for (let sub = -2; sub <= 2; sub++) lonSum += Math.exp(-((dl + sub) * (dl + sub)) / r2); // mean over the 5 degree cell
+      aF[k] += (lat * lonSum) / 5;
+    }
+  }
+}
+
 // ---- Atmosphere ----
-/** Fills aF/aQ0/aQ2/aU (and sTbar/sQm) from the state's SST anomaly and patches. */
-function solveGill(s: ClimateState, month: number): void {
+/** Fills aF/aQ0/aQ2/aU (and sTbar/sQm) from the state's SST anomaly and patches; `heat` picks which heat patches count: all, none, or all but those of pressure tools. */
+function solveGill(s: ClimateState, month: number, heat: 'all' | 'none' | 'notOwn' = 'all'): void {
   const { tbar: tb, qmean: qm } = tables();
   const mf = month - 0.5 < 0 ? month + 11.5 : month - 0.5;
   const m0 = Math.floor(mf) % 12;
@@ -450,6 +509,7 @@ function solveGill(s: ClimateState, month: number): void {
     aF[k] = q;
   }
   if (s.nPatches > 0) addPatchHeating(s, w < 0.5 ? m0 : m1);
+  if (heat !== 'none' && s.nHeat > 0) addHeatPatches(s, heat === 'notOwn');
   for (let k = 0; k < ATM_N; k++) aF[k] = clamp(aF[k], -HEAT_MAX, HEAT_MAX);
   let fc = 0;
   for (let k = 32; k < 56; k++) fc += aF[k]; // 160E..280E
@@ -598,6 +658,17 @@ export function stepClimateDay(s: ClimateState): void {
   for (let q = np * 6; q < s.nPatches * 6; q++) s.patches[q] = 0;
   s.nPatches = np;
 
+  // Expire heat patches once their fade-out is below 1 %.
+  let nh = 0;
+  for (let p = 0; p < s.nHeat; p++) {
+    if (heatAmplitude(s, p, day + 1) < 0.01) continue;
+    if (nh !== p) { for (let q = 0; q < 6; q++) s.heat[nh * 6 + q] = s.heat[p * 6 + q]; s.heatOwn[nh] = s.heatOwn[p]; }
+    nh++;
+  }
+  for (let q = nh * 6; q < s.nHeat * 6; q++) s.heat[q] = 0;
+  for (let q = nh; q < s.nHeat; q++) s.heatOwn[q] = 0;
+  s.nHeat = nh;
+
   // Westerly wind bursts (multiplicative noise): rate and speed grow with Nino 4, centres follow the warm-pool edge.
   if (s.stochastic && hash01(s.seed, day, 1) < wwbRateOf(sN4) && s.nBursts < MAX_BURSTS) {
     const o = s.nBursts * 4;
@@ -613,9 +684,12 @@ export function stepClimateDay(s: ClimateState): void {
 
 // ---- Player causes ----
 /** Westerly (speed > 0) or easterly burst starting next day. Returns false and changes nothing when the input is invalid. */
-export function addWesterlyBurst(s: ClimateState, b: { lonEast: number; speed: number; days: number }): boolean {
+function isValidBurst(b: { lonEast: number; speed: number; days: number }): boolean {
   if (!b || !Number.isFinite(b.lonEast) || !Number.isFinite(b.speed) || !Number.isFinite(b.days)) return false;
-  if (b.lonEast < OCEAN_LON0 || b.lonEast > 280 || Math.abs(b.speed) > 15 || b.days < 1 || b.days > 60) return false;
+  return b.lonEast >= OCEAN_LON0 && b.lonEast <= 280 && Math.abs(b.speed) <= 15 && b.days >= 1 && b.days <= 60;
+}
+export function addWesterlyBurst(s: ClimateState, b: { lonEast: number; speed: number; days: number }): boolean {
+  if (!isValidBurst(b)) return false;
   if (s.nBursts >= MAX_BURSTS - NATURAL_BURST_RESERVE) return false;
   const o = s.nBursts * 4;
   s.bursts[o] = b.lonEast; s.bursts[o + 1] = b.speed; s.bursts[o + 2] = b.days; s.bursts[o + 3] = s.day;
@@ -623,14 +697,17 @@ export function addWesterlyBurst(s: ClimateState, b: { lonEast: number; speed: n
   return true;
 }
 /** Persistent trade-wind anomaly in m/s, easterly (strengthened trades) positive. */
+const isValidTradeWind = (mPerS: number): boolean => typeof mPerS === 'number' && Number.isFinite(mPerS) && Math.abs(mPerS) <= 5;
 export function setTradeWindAnomaly(s: ClimateState, mPerS: number): boolean {
-  if (!Number.isFinite(mPerS) || Math.abs(mPerS) > 5) return false;
+  if (!isValidTradeWind(mPerS)) return false;
   s.tradeAnomaly = mPerS;
   return true;
 }
 /** Instant Gaussian (sigma 15 deg) thermocline-depth anomaly of the given peak metres, split equally into Kelvin and (n=1) Rossby parts. */
+const isValidPulse = (p: { lonEast: number; metres: number }): boolean =>
+  !!p && Number.isFinite(p.lonEast) && Number.isFinite(p.metres) && p.lonEast >= OCEAN_LON0 && p.lonEast <= 280 && Math.abs(p.metres) <= 60;
 export function addThermoclinePulse(s: ClimateState, p: { lonEast: number; metres: number }): boolean {
-  if (!p || !Number.isFinite(p.lonEast) || !Number.isFinite(p.metres) || p.lonEast < OCEAN_LON0 || p.lonEast > 280 || Math.abs(p.metres) > 60) return false;
+  if (!isValidPulse(p)) return false;
   let recent = 0;
   for (let i = 0; i < s.pulses.length; i += 3) if (s.day - s.pulses[i] < PULSE_WINDOW_DAYS) recent++;
   if (recent >= MAX_RECENT_PULSES) return false;
@@ -695,6 +772,95 @@ export function stackSstPatch(s: ClimateState, p: { lonEast: number; lat: number
   return addSstPatch(s, p);
 }
 
+// ---- Atmosphere-only heating patches ----
+export interface HeatPatch {
+  lonEast: number; lat: number; radiusDeg: number; strength: number; days: number;
+  /** The patch comes from a pressure tool (low, high) whose own pressure system the weather layer already holds; only these have their Gill pressure left out inside the footprint. */
+  own?: boolean;
+}
+const heatPatchOf = (a: Float64Array, own: Float64Array, p: number): HeatPatch => ({ lonEast: a[p * 6], lat: a[p * 6 + 1], radiusDeg: a[p * 6 + 2], strength: a[p * 6 + 3], days: a[p * 6 + 5], own: own[p] === 1 });
+export function isValidHeatPatch(p: HeatPatch): boolean {
+  return !!p && [p.lonEast, p.lat, p.radiusDeg, p.strength, p.days].every(Number.isFinite)
+    && p.lonEast >= 0 && p.lonEast <= 360 && Math.abs(p.lat) <= 30 && p.radiusDeg >= 2 && p.radiusDeg <= 40
+    && p.strength !== 0 && Math.abs(p.strength) <= HEAT_PATCH_MAX && p.days >= 1 && p.days <= 730;
+}
+/**
+ * Heats (strength > 0) or cools (< 0) the Gill atmosphere from the next day for `days` days with the Gaussian
+ * strength * exp(-(d/radiusDeg)^2), d in degrees. Nothing happens to the ocean directly: the response is the wind, which the ocean then feels.
+ * Returns false and changes nothing when the input is invalid or MAX_HEAT_PATCHES are active.
+ */
+export function addHeatPatch(s: ClimateState, p: HeatPatch): boolean {
+  if (!isValidHeatPatch(p) || s.nHeat >= MAX_HEAT_PATCHES) return false;
+  const o = s.nHeat * 6;
+  s.heat[o] = p.lonEast; s.heat[o + 1] = p.lat; s.heat[o + 2] = p.radiusDeg; s.heat[o + 3] = p.strength;
+  s.heat[o + 4] = s.day; s.heat[o + 5] = Math.floor(p.days);
+  s.heatOwn[s.nHeat] = p.own ? 1 : 0;
+  s.nHeat++;
+  return true;
+}
+function removeHeatPatch(s: ClimateState, i: number): void {
+  for (let k = i; k < s.nHeat - 1; k++) { for (let q = 0; q < 6; q++) s.heat[k * 6 + q] = s.heat[(k + 1) * 6 + q]; s.heatOwn[k] = s.heatOwn[k + 1]; }
+  for (let q = (s.nHeat - 1) * 6; q < s.nHeat * 6; q++) s.heat[q] = 0;
+  s.heatOwn[s.nHeat - 1] = 0;
+  s.nHeat--;
+}
+function mergeHeatPatch(s: ClimateState, i: number, p: HeatPatch): void {
+  const o = i * 6, remaining = Math.max(0, s.heat[o + 4] + s.heat[o + 5] - s.day);
+  const dl = wrap180(p.lonEast - s.heat[o]), dy = p.lat - s.heat[o + 1];
+  const w1 = Math.abs(s.heat[o + 3]), w2 = Math.abs(p.strength), f = w2 / (w1 + w2);
+  s.heat[o] = (((s.heat[o] + dl * f) % 360) + 360) % 360;
+  s.heat[o + 1] = s.heat[o + 1] + dy * f;
+  s.heat[o + 2] = Math.min(40, Math.hypot(s.heat[o + 2], p.radiusDeg));
+  s.heat[o + 3] = clamp(s.heat[o + 3] + p.strength, -HEAT_PATCH_MAX, HEAT_PATCH_MAX);
+  s.heat[o + 4] = s.day;
+  s.heat[o + 5] = Math.min(730, Math.floor(Math.max(remaining, p.days)));
+}
+/**
+ * Like addHeatPatch, but a patch that overlaps an active patch of the same sign and kind (pressure tool or not) merges with it (the rule of stackSstPatch):
+ * the strengths add (up to HEAT_PATCH_MAX), the areas add (radius = root of the summed squares, up to 40 degrees), the centre moves toward the stronger
+ * patch and the heating lasts as long as the longer of the remaining time and the new days. A single patch stays local; stacked ones turn into one basin-wide forcing.
+ * When all MAX_HEAT_PATCHES slots are in use, the patch takes the slot of the weakest fading one, or else merges into the nearest active patch of the same sign and kind.
+ */
+export function stackHeatPatch(s: ClimateState, p: HeatPatch): boolean {
+  if (!isValidHeatPatch(p)) return false;
+  const own = p.own ? 1 : 0;
+  let nearest = -1, nearestDist = Infinity;
+  for (let i = 0; i < s.nHeat; i++) {
+    const o = i * 6;
+    if (s.heatOwn[i] !== own || Math.sign(s.heat[o + 3]) !== Math.sign(p.strength) || s.heat[o + 4] + s.heat[o + 5] - s.day <= 0) continue;
+    const d = Math.hypot(wrap180(p.lonEast - s.heat[o]), p.lat - s.heat[o + 1]);
+    if (d <= s.heat[o + 2] + p.radiusDeg) { mergeHeatPatch(s, i, p); return true; }
+    if (d < nearestDist) { nearestDist = d; nearest = i; }
+  }
+  if (s.nHeat < MAX_HEAT_PATCHES) return addHeatPatch(s, p);
+  let weakest = -1, weakestAmp = Infinity;
+  for (let i = 0; i < s.nHeat; i++) {
+    if (heatSourceActive(s, i)) continue;
+    const a = heatAmplitude(s, i, s.day);
+    if (a < weakestAmp) { weakestAmp = a; weakest = i; }
+  }
+  if (weakest >= 0) { removeHeatPatch(s, weakest); return addHeatPatch(s, p); }
+  if (nearest >= 0) { mergeHeatPatch(s, nearest, p); return true; }
+  return false;
+}
+/**
+ * Ends the patches that placed tools made, now: an SST or heat patch whose source is still there is released (its off-strip anomaly and its heating then fade out as after any
+ * release); one placed within the current day is removed. Used when the fast climate path wipes the tools; the ENSO hold is not a tool and stays.
+ */
+export function releaseToolPatches(s: ClimateState): void {
+  for (let i = s.nPatches - 1; i >= 0; i--) {
+    const o = i * 6, age = s.day - s.patches[o + 4];
+    if (age >= s.patches[o + 5]) continue;
+    if (age < 1) { for (let k = i; k < s.nPatches - 1; k++) for (let q = 0; q < 6; q++) s.patches[k * 6 + q] = s.patches[(k + 1) * 6 + q]; for (let q = (s.nPatches - 1) * 6; q < s.nPatches * 6; q++) s.patches[q] = 0; s.nPatches--; }
+    else s.patches[o + 5] = age;
+  }
+  for (let i = s.nHeat - 1; i >= 0; i--) {
+    const age = s.day - s.heat[i * 6 + 4];
+    if (age >= s.heat[i * 6 + 5]) continue;
+    if (age < 1) removeHeatPatch(s, i); else s.heat[i * 6 + 5] = age;
+  }
+}
+
 /**
  * Starts the ocean from an observed equatorial SST anomaly (degC per ocean cell, smoothed by the caller): sets T and puts
  * the thermocline where the Tsub relation balances it (the inverse of tsubRaw), ramped in east of 165E where upwelling
@@ -718,6 +884,18 @@ export function initialiseFromSstAnomaly(s: ClimateState, anomaly: ArrayLike<num
 }
 
 // ---- Diagnostics ----
+/** Thermocline depth (m: mean depth plus anomaly) and anomaly (m, deeper positive, K + R) at a longitude (deg E) of the equatorial strip, interpolated between cell centres; null outside 120E..280E. */
+export function thermoclineAt(s: ClimateState, lonEast: number): { depth: number; anomaly: number } | null {
+  if (!Number.isFinite(lonEast)) return null;
+  const lon = ((lonEast % 360) + 360) % 360;
+  if (lon < OCEAN_LON0 || lon > 280) return null;
+  const f = clamp((lon - OCEAN_LON0) / OCEAN_DLON - 0.5, 0, OCEAN_N - 1);
+  const j = Math.min(OCEAN_N - 2, Math.floor(f)), w = f - j;
+  const anomaly = (s.K[j] + s.R[j]) * (1 - w) + (s.K[j + 1] + s.R[j + 1]) * w;
+  return { depth: thermoclineMeanDepth(lon) + anomaly, anomaly };
+}
+/** Mean thermocline depth (m) at a longitude (deg E): the profile the anomaly is added to; also what a world without an ENSO layer has. */
+export const thermoclineMeanDepth = (lonEast: number): number => THERMO_DEPTH_W + (THERMO_DEPTH_E - THERMO_DEPTH_W) * smoothstep(150, 260, lonEast);
 /** Expected burst wind (m/s, from rate x amplitude x mean duration x mean speed x sine envelope) and its centre, given the current SST. */
 export function expectedBurst(s: ClimateState): { lonEast: number; speed: number } {
   solveGill(s, monthOf(s));
@@ -729,7 +907,15 @@ function boxMean(a: Float64Array, box: readonly [number, number]): number {
   for (let j = 0; j < OCEAN_N; j++) if (inBox(box, j)) { sum += a[j]; n++; }
   return sum / n;
 }
-export function climateIndices(s: ClimateState): ClimateIndices {
+/** Nino 3.4 (degC): the mean SST anomaly of the box. Allocation-free, for per-day use. */
+export function nino34Of(s: ClimateState): number {
+  return boxMean(s.T, BOXES.nino34);
+}
+function newClimateIndices(): ClimateIndices {
+  return { nino34: 0, nino3: 0, nino4: 0, wwv: 0, soi: 0, budget: { tendency: 0, advection: 0, upwelling: 0, damping: 0, forcing: 0 } };
+}
+/** Fills `out` with the indices of the current state (reuses `out` and its budget object: no allocation). */
+function climateIndicesInto(s: ClimateState, out: ClimateIndices): ClimateIndices {
   solveGill(s, monthOf(s));
   let wwv = 0;
   for (let j = 0; j < OCEAN_N; j++) wwv += s.K[j] + 3 * s.R[j] + ROSSBY3_DIV * s.R3[j]; // volume weights, see ROSSBY3_SHARE
@@ -737,14 +923,17 @@ export function climateIndices(s: ClimateState): ClimateIndices {
   const M = 30.4;
   const adv = boxMean(s.tAdv, BOXES.nino34) * M, th = boxMean(s.tTh, BOXES.nino34) * M;
   const dmp = boxMean(s.tDamp, BOXES.nino34) * M, frc = boxMean(s.tForce, BOXES.nino34) * M;
-  return {
-    nino34: boxMean(s.T, BOXES.nino34),
-    nino3: boxMean(s.T, BOXES.nino3),
-    nino4: boxMean(s.T, BOXES.nino4),
-    wwv: wwv / OCEAN_N,
-    soi: (10 * dp) / SOI_SIGMA_HPA,
-    budget: { tendency: adv + th + dmp + frc, advection: adv, upwelling: th, damping: dmp, forcing: frc },
-  };
+  out.nino34 = boxMean(s.T, BOXES.nino34);
+  out.nino3 = boxMean(s.T, BOXES.nino3);
+  out.nino4 = boxMean(s.T, BOXES.nino4);
+  out.wwv = wwv / OCEAN_N;
+  out.soi = (10 * dp) / SOI_SIGMA_HPA;
+  const b = out.budget;
+  b.tendency = adv + th + dmp + frc; b.advection = adv; b.upwelling = th; b.damping = dmp; b.forcing = frc;
+  return out;
+}
+export function climateIndices(s: ClimateState): ClimateIndices {
+  return climateIndicesInto(s, newClimateIndices());
 }
 
 // ---- Global 5 degree fields ----
@@ -754,12 +943,26 @@ export interface ClimateFields { sst: Float32Array; slp: Float32Array; u: Float3
 /**
  * SST (degC), SLP (hPa), zonal/meridional wind (m/s) and precipitation (mm/day) anomalies on the 72x36 5-degree grid
  * (index row*72+col, row south to north, col centres from -177.5 E). Zero poleward of 30 degrees. Reuses `out` buffers.
+ * With `heatSlp` (same grid), also fills the part of the SLP anomaly that the pressure tools' (low, high) heat patches cause (full solution minus the solution without them).
  */
-export function climateFields(s: ClimateState, out?: ClimateFields): ClimateFields {
+export function climateFields(s: ClimateState, out?: ClimateFields, heatSlp?: Float32Array): ClimateFields {
   const size = FIELD_COLS * FIELD_ROWS;
   const f = out ?? { sst: new Float32Array(size), slp: new Float32Array(size), u: new Float32Array(size), v: new Float32Array(size), precip: new Float32Array(size) };
   f.sst.fill(0); f.slp.fill(0); f.u.fill(0); f.v.fill(0); f.precip.fill(0);
   const month = monthOf(s);
+  let own = false;
+  for (let p = 0; p < s.nHeat; p++) if (s.heatOwn[p] === 1) own = true;
+  const wantHeat = !!heatSlp && own;
+  if (heatSlp) heatSlp.fill(0);
+  if (wantHeat) { // the pressure of everything but the pressure tools' heat patches, to be subtracted below
+    solveGill(s, month, 'notOwn');
+    for (let row = 0; row < FIELD_ROWS; row++) {
+      const lat = -87.5 + 5 * row, taper = 1 - smoothstep(22, 30, Math.abs(lat));
+      if (taper <= 0) continue;
+      const y = (lat * 110.57e3) / GILL_L, psi = Math.exp(-y * y / 4);
+      for (let col = 0; col < FIELD_COLS; col++) { const i = (col + 36) % ATM_N; heatSlp![row * FIELD_COLS + col] = -taper * HPA_PER_ND * 0.5 * (aQ0[i] + aQ2[i] * (1 + y * y)) * psi; }
+    }
+  }
   solveGill(s, month);
   const m0 = Math.floor(month - 0.5 < 0 ? month + 11.5 : month - 0.5) % 12;
   for (let row = 0; row < FIELD_ROWS; row++) {
@@ -773,6 +976,7 @@ export function climateFields(s: ClimateState, out?: ClimateFields): ClimateFiel
       const q0 = aQ0[i], q2 = aQ2[i], F = aF[i];
       const idx = row * FIELD_COLS + col;
       f.slp[idx] = taper * HPA_PER_ND * 0.5 * (q0 + q2 * (1 + y * y)) * psi;
+      if (wantHeat) heatSlp![idx] += f.slp[idx];
       f.u[idx] = taper * WIND_PER_ND * 0.5 * (q0 + q2 * (y * y - 3)) * psi;
       f.v[idx] = taper * WIND_PER_ND * (F + 4 * GILL_EPS * q2) * y * psi;
       f.precip[idx] = taper * MM_DAY_PER_ND * F * psi;

@@ -5,6 +5,7 @@ import { WEATHER_HAZARDS, WEATHER_HAZARD_KINDS } from '../data/weather-hazards';
 import type { GameState } from '../types';
 import type { ClimateKey, MapOverlays, ToolType } from '../types';
 import { SEASONS } from './calendar';
+import { MEASURE_ITEMS, type MeasureId } from './measure';
 import { RANKING_METRICS } from './rankings';
 
 /** The cyclone glyph shared by the brand mark and the active-storm rows. */
@@ -57,16 +58,31 @@ export const FORMATION_TOOLS = [
   })),
 ] as const;
 /** Keyboard shortcut per formation tool, in list order (A is Typhoon formation). */
-export const FORMATION_KEYS = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'z'] as const;
+export const FORMATION_KEYS = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';'] as const;
 export type FormationToolId = (typeof FORMATION_TOOLS)[number]['id'];
 
 export const PALETTE_TABS = [
   { id: 'conditions', label: 'Conditions' },
   { id: 'formation', label: 'Formation' },
+  { id: 'measure', label: 'Measure' },
 ] as const;
 
-export const toolIconSvg = (type: ToolType | FormationToolId, cls = 'tool__icon') =>
-  `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${type in TOOL_ICON ? TOOL_ICON[type as ToolType] : FORMATION_TOOLS.find(f => f.id === type)!.icon}</svg>`;
+/** Measurement icons, same 24 px stroke style as the other tools. */
+const MEASURE_ICON: Record<MeasureId, string> = {
+  'measure-sea-temperature': '<path d="M8 13V5a2 2 0 0 1 4 0v8a4 4 0 1 1-4 0ZM10 9v7M15 5h3M15 8.5h2M15 12h3"/><path d="M13 20c1.4-1.4 2.6 1.4 4 0s2.6 1.4 4 0"/>',
+  'measure-air-temperature': '<path d="M8 13V5a2 2 0 0 1 4 0v8a4 4 0 1 1-4 0ZM10 9v7M15 5h3M15 8.5h2M15 12h3"/><path d="M15 17h6M15 20.5h4"/>',
+  'measure-pressure': '<circle cx="12" cy="12" r="9"/><path d="M6 13a6 6 0 0 1 12 0M12 13l4-5M8 18h8"/><circle cx="12" cy="13" r="1"/>',
+  'measure-wind': '<path d="M3 8h11a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h5a3 3 0 1 1-3 3"/>',
+  'measure-humidity': '<path d="M9 2.5C6.5 6 4 8.8 4 12a5 5 0 0 0 10 0c0-3.2-2.5-6-5-9.5Z"/><path d="M17 11l-1 3M20.5 10l-1 3M18 17.5l-1 3M21 17l-1 3"/>',
+  'measure-shear': '<path d="M4 3v18"/><path d="M4 7h6M4 12h10M4 17h15"/><path d="m8 5 2 2-2 2M12 10l2 2-2 2M17 15l2 2-2 2"/>',
+  'measure-formation': `<path d="${CYCLONE_PATH}" transform="translate(0 4.5) scale(.8)" fill="currentColor" fill-rule="evenodd" stroke="none"/><path d="M17 4.5c1.5-1.5 3.5-1.5 5 0M19.5 2v5"/>`,
+  'measure-thermocline': '<path d="M3 4c2-1.5 3.5 1.5 6 0s3.5 1.5 6 0 3.5 1.5 6 0"/><path d="M3 10c6 0 8 6 18 6M3 20h18"/>',
+  'measure-nino34': '<rect x="2.5" y="6" width="19" height="12" rx="2" stroke-dasharray="3 2.4"/><text x="12" y="15.2" text-anchor="middle" font-family="ui-monospace, monospace" font-size="8.5" font-weight="700" fill="currentColor" stroke="none">3.4</text>',
+  'measure-soi-wwv': '<path d="m4 15 8-3 8 3M12 12v8M9 20h6"/><circle cx="5" cy="8.5" r="2.4"/><circle cx="19" cy="5.5" r="2.4"/>',
+};
+
+export const toolIconSvg = (type: ToolType | FormationToolId | MeasureId, cls = 'tool__icon') =>
+  `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${type in TOOL_ICON ? TOOL_ICON[type as ToolType] : type in MEASURE_ICON ? MEASURE_ICON[type as MeasureId] : FORMATION_TOOLS.find(f => f.id === type)!.icon}</svg>`;
 
 export const MAP_OVERLAY_OPTIONS: { id: keyof MapOverlays; label: string; tip: string }[] = [
   { id: 'wind', label: 'Wind', tip: 'Moving streaks show surface wind speed and direction.' },
@@ -134,6 +150,7 @@ export const TABS = [
   { id: 'settings', label: 'Settings' },
   { id: 'storms', label: 'Disasters' },
   { id: 'environment', label: 'World' },
+  { id: 'measure', label: 'Measure' },
   { id: 'news', label: 'News' },
   { id: 'rank', label: 'Ranking' },
   { id: 'replay', label: 'Replay' },
@@ -174,6 +191,13 @@ export function shellHtml(): string {
       <span class="tool__key" aria-hidden="true">${FORMATION_KEYS[i].toUpperCase()}</span>
       ${toolIconSvg(f.id)}
       <span class="tool__name">${f.name}</span>
+    </button>`).join('');
+  const measureTools = MEASURE_ITEMS.map(m => `
+    <button type="button" class="tool" data-tool="${m.id}" data-measure data-testid="tool-${m.id}" aria-pressed="false" aria-keyshortcuts="${m.key.toUpperCase()}"
+      aria-label="${m.name}: drag onto the map, or press to arm it" data-tip-title="${m.name}" data-tip="${m.tip}">
+      <span class="tool__key" aria-hidden="true">${m.key.toUpperCase()}</span>
+      ${toolIconSvg(m.id)}
+      <span class="tool__name">${m.name}</span>
     </button>`).join('');
   const paletteTabs = PALETTE_TABS.map((t, i) => `
     <button type="button" role="tab" class="palette__tab" id="palette-tab-${t.id}" data-palette-tab="${t.id}" data-testid="palette-tab-${t.id}"
@@ -225,7 +249,7 @@ export function shellHtml(): string {
       tabindex="0" role="group" aria-roledescription="map" aria-label="World weather map" aria-describedby="map-help">
       <div class="stage__veil" data-ref="veil" data-testid="map-veil"><p data-ref="veilText">Starting the world…</p></div>
     </main>
-    <p id="map-help" class="sr-only">Map controls. With a weather tool armed, arrow keys move the placement target one degree, Shift five degrees, Alt a quarter degree, and Enter places it. Without a tool, arrow keys pan the map. Keys Q to U cycle paired conditions. Keys A, S and D select a formation tool. Number keys 1–8 set the speed steps. Shift plus and Shift minus zoom. Space plays or pauses, Escape disarms.</p>
+    <p id="map-help" class="sr-only">Map controls. With a weather tool armed, arrow keys move the placement target one degree, Shift five degrees, Alt a quarter degree, and Enter places it. Without a tool, arrow keys pan the map. Keys Q to U cycle paired conditions. Keys A, S, D, F, G, H, J, K, L and semicolon select a formation tool. Keys Z, X, C, V, B, N, M, comma, period and slash select a measurement tool. Number keys 1–9 set the speed steps. Shift plus and Shift minus zoom. Space plays or pauses, Escape disarms.</p>
 
     <header class="brandbar">
       <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor" fill-rule="evenodd"><path d="${CYCLONE_PATH}"/></svg>
@@ -281,6 +305,7 @@ export function shellHtml(): string {
       </div>
       <div class="palette__tools" role="tabpanel" id="palette-panel-conditions" aria-labelledby="palette-tab-conditions" data-palette-panel="conditions">${tools}</div>
       <div class="palette__tools" role="tabpanel" id="palette-panel-formation" aria-labelledby="palette-tab-formation" data-palette-panel="formation" hidden>${formationTools}</div>
+      <div class="palette__tools" role="tabpanel" id="palette-panel-measure" aria-labelledby="palette-tab-measure" data-palette-panel="measure" hidden>${measureTools}</div>
     </nav>
     </div>
 
@@ -390,6 +415,14 @@ export function shellHtml(): string {
         <p class="fine" data-ref="cityCount" data-testid="city-count"></p>
         <ul class="city-list" data-ref="cityList" data-testid="city-list"></ul>
         <p class="fine" data-ref="populationNote"></p>
+      </div>
+
+      <div class="report-panel measure" role="tabpanel" id="panel-measure" aria-labelledby="tab-measure" data-panel="measure" data-testid="measure-panel" tabindex="0" hidden>
+        <div class="measure__head">
+          <p class="fine" data-ref="measureHint">Nothing measured yet. Open the Measure tab of the palette and drop an icon on the map to graph that point over time.</p>
+          <button type="button" class="btn btn--small" data-ref="measureClear" data-testid="measure-clear" hidden>Clear all</button>
+        </div>
+        <div class="measure__cards" data-ref="measureCards" data-testid="measure-cards"></div>
       </div>
 
       <div class="report-panel" role="tabpanel" id="panel-news" aria-labelledby="tab-news" data-panel="news" tabindex="0" hidden>

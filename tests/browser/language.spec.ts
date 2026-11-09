@@ -116,7 +116,7 @@ test('storm news and replay results are Korean while the simulation remains unch
   });
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
   await page.getByTestId('tab-replay').click();
-  const replay = { ...initial, format: 'typhoon-lab-replay', formatVersion: 7, startDayOfYear: 213, untilTick: 80,
+  const replay = { ...initial, format: 'typhoon-lab-replay', formatVersion: 8, startDayOfYear: 213, untilTick: 80,
     actions: ['warm', 'moisture', 'low'].map(type => ({ tick: 0, type, lon: 140, lat: 16 })) };
   await page.getByTestId('import-replay-input').setInputFiles({ name: 'storm.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(replay)) });
   await expect(page.getByTestId('replay-message')).toHaveText('틱 80까지 다시 보기를 불러와 일시정지했습니다. 계속하려면 재생을 누르십시오.');

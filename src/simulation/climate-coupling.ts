@@ -1,6 +1,6 @@
 import { teleconnectionInto } from '../data/climate-teleconnections';
 import {
-  FIELD_COLS, FIELD_ROWS, OCEAN_DLON, OCEAN_LON0, OCEAN_N, climateFields, climateIndices, climateMonth, patchAmplitude, createClimate, initialiseFromSstAnomaly, stepClimateDay,
+  FIELD_COLS, FIELD_ROWS, OCEAN_DLON, OCEAN_LON0, OCEAN_N, climateFields, climateIndices, climateMonth, heatSourceActive, nino34Of, patchAmplitude, createClimate, initialiseFromSstAnomaly, restoreClimate, serializeClimate, stepClimateDay,
   type ClimateFields, type ClimateState,
 } from './climate-core';
 import { equatorNormalSst } from '../data/climate-normals';
@@ -123,7 +123,27 @@ export function createLiveClimateLayer(seed: number, startDayOfYear: number, sta
 /** Advance one model day and update the smoothed Nino 3.4. */
 export function stepClimateLayer(layer: ClimateLayer): void {
   stepClimateDay(layer.core);
-  layer.nino += (climateIndices(layer.core).nino34 - layer.nino) * NINO_ALPHA;
+  layer.nino += (nino34Of(layer.core) - layer.nino) * NINO_ALPHA;
+}
+
+/** Advances the layer by whole model days without building anomaly fields (the caller rebuilds once at the end) and without allocating. */
+export function advanceClimateLayer(layer: ClimateLayer, days: number): void {
+  for (let d = 0; d < days; d++) stepClimateLayer(layer);
+}
+
+/**
+ * Switches a layer to natural variability (westerly wind bursts, background wind and SST noise). A core's `stochastic` flag is
+ * fixed for its lifetime, so the core is rebuilt through serialisation with the flag set; every other field carries over. Returns
+ * false (and changes nothing) when the core cannot be restored. A layer that is already stochastic is left untouched.
+ */
+export function enableClimateNoise(layer: ClimateLayer): boolean {
+  if (layer.core.stochastic) return true;
+  const data = serializeClimate(layer.core);
+  data.stochastic = true;
+  const core = restoreClimate(data);
+  if (!core) return false;
+  layer.core = core;
+  return true;
 }
 
 /** Moves the layer's calendar so that its day of year equals `doy` (1..365) today. */
@@ -173,6 +193,8 @@ const scratchTele = { slp: new Float32Array(size5), air: new Float32Array(size5)
 const comb = { slp: new Float32Array(size5), air: new Float32Array(size5), rhum: new Float32Array(size5), shear: new Float32Array(size5) };
 const WT5 = Float32Array.from({ length: size5 }, (_, i) => smoothstep(TELE_LAT_LO, TELE_LAT_HI, Math.abs(-87.5 + 5 * Math.floor(i / FIELD_COLS))));
 const patchWeight = new Float32Array(CELLS);
+const heatWeight = new Float32Array(CELLS);
+const scratchHeatSlp = new Float32Array(size5);
 const RAIN_FULL_MM = 1.5; // mm/day of Gill rain anomaly at which the model's humidity replaces the observed map
 
 /**
@@ -215,13 +237,43 @@ function fillPatchWeight(core: ClimateState): boolean {
 }
 const COUNT_ROWS_M1 = COUPLING_ROWS - 1;
 
+/**
+ * Footprint weight (0..1) of the active heat patches of pressure tools (low, high) on each 2 degree cell: exp(-(d/r)^2), the largest of them, within 3r. A tool's Gaussian
+ * pressure system exp(-d^2/2 sigma^2) is the same shape (r = sigma sqrt 2), so this is where the weather layer already holds the tool's own
+ * pressure. Returns false when no patch is active.
+ */
+function fillHeatWeight(core: ClimateState): boolean {
+  heatWeight.fill(0);
+  let any = false;
+  for (let p = 0; p < core.nHeat; p++) {
+    if (core.heatOwn[p] !== 1 || !heatSourceActive(core, p)) continue;
+    const o = p * 6;
+    any = true;
+    const lon0 = core.heat[o] > 180 ? core.heat[o] - 360 : core.heat[o], lat0 = core.heat[o + 1], r = core.heat[o + 2], reach = Math.min(3 * r, 180);
+    const r0 = Math.max(0, Math.floor((lat0 - reach + 89) / 2)), r1 = Math.min(COUNT_ROWS_M1, Math.ceil((lat0 + reach + 89) / 2));
+    for (let row = r0; row <= r1; row++) {
+      const dy = -89 + 2 * row - lat0;
+      for (let col = 0; col < COUPLING_COLS; col++) {
+        let dl = Math.abs(-179 + 2 * col - lon0);
+        if (dl > 180) dl = 360 - dl;
+        const d2 = dl * dl + dy * dy;
+        if (d2 > reach * reach) continue;
+        const k = row * COUPLING_COLS + col, w = Math.exp(-d2 / (r * r));
+        if (w > heatWeight[k]) heatWeight[k] = w;
+      }
+    }
+  }
+  return any;
+}
+
 /** Recomputes the layer's anomaly fields from its current state (once per model day and after every action that changes the core). */
 export function rebuildAnomalies(layer: ClimateLayer, ctx: AnomalyContext): AnomalySet {
   const out = layer.anomalies ?? newSet();
   layer.anomalies = out;
   out.rev++;
   const core = layer.core;
-  const f = climateFields(core, scratchFields);
+  const heated = core.heatOwn.some((v, i) => i < core.nHeat && v === 1);
+  const f = climateFields(core, scratchFields, heated ? scratchHeatSlp : undefined);
   const base = layer.base;
   if (base) for (let i = 0; i < size5; i++) { f.sst[i] -= base.sst[i]; f.slp[i] -= base.slp[i]; f.u[i] -= base.u[i]; f.v[i] -= base.v[i]; f.precip[i] -= base.precip[i]; }
   const month = climateMonth(core);
@@ -234,12 +286,14 @@ export function rebuildAnomalies(layer: ClimateLayer, ctx: AnomalyContext): Anom
     comb.shear[i] = dn * scratchTele.shear[i];
   }
   const patched = fillPatchWeight(core);
+  const footprint = heated && fillHeatWeight(core);
   for (let k = 0; k < CELLS; k++) {
     const land = ctx.land[k] === 1;
     const wt = WT[k], wtrop = WTROP[k];
     const sst = land ? 0 : bil(f.sst, k);
     out.sst[k] = sst;
-    out.slp[k] = bil(comb.slp, k);
+    // Inside a heat patch's footprint the tool's own pressure system is already in the weather layer: its Gill pressure is left out (wind and remote effects stay).
+    out.slp[k] = bil(comb.slp, k) - (footprint && heatWeight[k] > 0 ? heatWeight[k] * bil(scratchHeatSlp, k) : 0);
     const gu = bil(f.u, k), gv = bil(f.v, k);
     out.u[k] = gu * WWIND[k]; out.v[k] = gv * WWIND[k];
     out.air[k] = (land ? 1 : wtrop) * bil(comb.air, k) + (land || layer.live ? 0 : AIR_PER_SST * sst);

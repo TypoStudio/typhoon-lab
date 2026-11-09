@@ -5,8 +5,11 @@ import { typhoonById } from './data/typhoons';
 import { loadEnvironment } from './data/environment';
 import { loadLiveWeather } from './data/live-weather';
 import { focusTraffic } from './simulation/traffic';
-import { DEFAULT_START_DOY, REPLAY_MAX_TICKS, STEP_HOURS, createGame, isValidDayOfYear, isValidSeed, loadHistoric, placeFormation, placeTool, replayGame, setClimate, setGenesis, setHistoricEnvironment, setSeason, stepGame, validateActions } from './simulation/engine';
-import { DEFAULT_TIME_SPEED, TIME_SPEEDS, isTimeSpeed, takeSteps } from './time';
+import {
+  DEFAULT_START_DOY, REPLAY_MAX_TICKS, STEP_HOURS, CLIMATE_MAX_DAYS, advanceClimateTime, createGame, fastDaysLeft, isValidDayOfYear, isValidSeed, loadHistoric, placeFormation, placeTool, refreshClimateView, replayGame, setClimate, setClimateMode,
+  setGenesis, setHistoricEnvironment, setSeason, stepGame, validateActions,
+} from './simulation/engine';
+import { DEFAULT_TIME_SPEED, MAX_WEATHER_SPEED, TIME_SPEEDS, isFastClimateSpeed, isTimeSpeed, takeSteps } from './time';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 const TIMER_MS = 250;
@@ -23,6 +26,11 @@ let carry = 0;
 let lastWallMs = performance.now();
 let timer: ReturnType<typeof setInterval> | null = null;
 
+// Fast climate path: above MAX_WEATHER_SPEED the weather engine is not stepped; the ENSO layer advances day by day instead.
+const FAST_CHUNK_DAYS = 30; // days per engine call, so the tick budget is checked often
+let fastCarry = 0; // fractional model days not yet advanced
+let fastViewStale = false; // days have passed since the anomaly fields and the grid were last rebuilt for the map
+
 function post(message: WorkerResponse): void {
   ctx.postMessage(message);
 }
@@ -31,6 +39,16 @@ function postState(): void {
 }
 function fail(message: string): void {
   post({ type: 'error', message });
+}
+
+/** Takes the fast path while the speed is above the weather speeds and leaves it when it is back down. Both switches are recorded actions, so replays follow. */
+function syncPath(): void {
+  const wantFast = isFastClimateSpeed(speed);
+  if (wantFast === (state.climateTime?.active ?? false)) return;
+  const result = setClimateMode(state, wantFast);
+  if (!result.ok) { fail(result.reason ?? 'The climate path could not be switched.'); return; }
+  fastCarry = 0;
+  fastViewStale = false;
 }
 
 function syncTimer(): void {
@@ -48,6 +66,8 @@ function advanceTo(now: number): number {
   const elapsed = Math.max(0, now - lastWallMs);
   lastWallMs = now;
   if (!playing || interacting) return 0;
+  syncPath();
+  if (state.climateTime?.active) { advanceFast(elapsed); return 0; }
   carry += elapsed * speed / STEP_MS;
   const due = takeSteps(carry, MAX_STEPS_PER_TICK);
   carry = due.carry;
@@ -62,8 +82,40 @@ function advanceTo(now: number): number {
   return steps;
 }
 
+/** The run's fast climate time is used up: the speed drops to the fastest weather speed (once, so Play does not fail again and again) and the player is told. */
+function fastTimeUsedUp(): void {
+  speed = MAX_WEATHER_SPEED;
+  syncPath();
+  post({ type: 'speed', speed });
+  fail(`Fast climate time is limited to ${CLIMATE_MAX_DAYS / 365} model years per run.`);
+}
+
+/** Advances the ENSO layer for `elapsedMs` of real time within the tick budget and the days the run has left; what is not done stays in the carry. The map's fields are rebuilt once per tick, not per model day. */
+function advanceFast(elapsedMs: number): void {
+  let left = fastDaysLeft(state);
+  if (left <= 0) return fastTimeUsedUp();
+  const daysPerSecond = speed / 86_400;
+  fastCarry = Math.min(daysPerSecond, fastCarry + (elapsedMs / 1000) * daysPerSecond); // at most a second's worth after a stall
+  let due = Math.floor(fastCarry);
+  fastCarry -= due;
+  const began = performance.now();
+  while (due > 0 && left > 0) {
+    const n = Math.min(due, FAST_CHUNK_DAYS, left);
+    const result = advanceClimateTime(state, n);
+    if (!result.ok) { fail(result.reason ?? 'Climate time cannot advance.'); due = 0; break; }
+    fastViewStale = true;
+    due -= n;
+    left -= n;
+    if (performance.now() - began > TICK_BUDGET_MS) break;
+  }
+  fastCarry += due;
+  if (fastViewStale) { refreshClimateView(state); fastViewStale = false; }
+  if (left <= 0) fastTimeUsedUp();
+}
+
 function tick(): void {
-  if (advanceTo(performance.now())) postState();
+  const before = state.climateTime?.total ?? 0;
+  if (advanceTo(performance.now()) || (state.climateTime?.total ?? 0) !== before) postState();
   else post({ type: 'progress', clockHours: state.hours + carry * STEP_HOURS });
 }
 
@@ -91,6 +143,8 @@ async function handle(msg: WorkerRequest): Promise<void> {
       if (weather) state.weatherSource = weather.source;
       speed = DEFAULT_TIME_SPEED;
       carry = 0;
+      fastCarry = 0;
+      fastViewStale = false;
       playing = true;
       syncTimer();
       return postState();
@@ -113,7 +167,9 @@ async function handle(msg: WorkerRequest): Promise<void> {
     case 'speed': {
       if (!isTimeSpeed(msg.speed)) return fail(`Speed must be one of ${TIME_SPEEDS.join(', ')} model seconds per real second.`);
       advanceTo(performance.now());
+      if (isFastClimateSpeed(msg.speed) && fastDaysLeft(state) <= 0) return fail(`Fast climate time is limited to ${CLIMATE_MAX_DAYS / 365} model years per run.`);
       speed = msg.speed;
+      if (playing && !interacting) syncPath();
       return postState();
     }
     case 'traffic-view': {
@@ -169,6 +225,8 @@ async function handle(msg: WorkerRequest): Promise<void> {
       state = result.state;
       playing = false; // replay loads a paused snapshot
       carry = 0;
+      fastCarry = 0;
+      fastViewStale = false;
       syncTimer();
       return postState();
     }

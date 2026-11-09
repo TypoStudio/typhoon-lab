@@ -36,15 +36,15 @@ import { CITIES, LAND_POLYGONS, SCENARIO } from '../data/world';
 import { AGENCY_NAMES, typhoonById } from '../data/typhoons';
 import { fieldsAt, sampleHistoric, windowCells } from './historic';
 import { currentWeather, isLiveWeatherSnapshot, sampleLiveWeather, stepLiveWeather } from './live-weather';
-import { setSstHold, stackSstPatch } from './climate-core';
+import { climateIndices, releaseToolPatches, setSstHold, stackHeatPatch, stackSstPatch, thermoclineAt, type ClimateIndices } from './climate-core';
 import {
-  alignClimateCalendar, anomaliesFor, anomalyAt, createClimateLayer, createLiveClimateLayer, newAnomalyPoint, rebuildAnomalies, sstUnionAdjustment, stepClimateLayer,
+  advanceClimateLayer, alignClimateCalendar, anomaliesFor, anomalyAt, createClimateLayer, enableClimateNoise, createLiveClimateLayer, newAnomalyPoint, rebuildAnomalies, sstUnionAdjustment, stepClimateLayer,
   type AnomalyContext, type AnomalyPoint, type AnomalySet,
 } from './climate-coupling';
 import { LandIndex, clamp, cosLat, distanceKm, hash01, moveKm, offsetKm, smoothstep, wrapLon } from './geo';
 
 export const SIMULATION_VERSION = '0.8.0';
-export const REPLAY_FILE_VERSION = 7;
+export const REPLAY_FILE_VERSION = 8;
 export const BOUNDS = { west: -180, east: 180, south: -90, north: 90 } as const;
 export const STEP_HOURS = 0.25;
 export const TICKS_PER_HOUR = Math.round(1 / STEP_HOURS);
@@ -322,9 +322,9 @@ export function isValidDayOfYear(day: unknown): day is number {
   return typeof day === 'number' && Number.isFinite(day) && day >= 0 && day < 366;
 }
 
-/** Today's day of the year (0..365.25) in the world's calendar: the start day plus model time. Never reads the real clock. */
-export function dayOfYear(state: Pick<GameState, 'startDayOfYear' | 'hours'>): number {
-  return (state.startDayOfYear + state.hours / 24) % YEAR_DAYS;
+/** Today's day of the year (0..365.25) in the world's calendar: the start day plus model time plus the days climate time has added. Never reads the real clock. */
+export function dayOfYear(state: Pick<GameState, 'startDayOfYear' | 'hours'> & { calendarOffsetDays?: number }): number {
+  return (state.startDayOfYear + state.hours / 24 + (state.calendarOffsetDays ?? 0)) % YEAR_DAYS;
 }
 
 /** Day of the year (1 = Jan 1, fractional) of an ISO timestamp. */
@@ -457,13 +457,13 @@ function climateGrid(c: ClimateState): ClimateGrid | null {
 // ---- Dynamic climate layer (ENSO): anomalies from climate-coupling.ts, cached per layer ----
 const CLIMATE_DAY_TICKS = 24 * TICKS_PER_HOUR;
 let anomalyContext: AnomalyContext | null = null;
-function climateContext(): AnomalyContext {
+export function climateAnomalyContext(): AnomalyContext {
   anomalyContext ??= { land: centreLandMask(), baseShear: (seed, lon, lat) => Math.max(0, baseShear(seed, lon, lat)) };
   return anomalyContext;
 }
 /** The layer's current anomaly fields, or null while no action has activated it. */
 function anomalySet(state: GameState): AnomalySet | null {
-  return state.climateLayer ? anomaliesFor(state.climateLayer, climateContext()) : null;
+  return state.climateLayer ? anomaliesFor(state.climateLayer, climateAnomalyContext()) : null;
 }
 /** Anomaly fields for a base world only: a live game carries them in its evolving weather instead. */
 interface SteeringClimate { set: AnomalySet; recorded: ((lon: number, lat: number) => boolean) | null }
@@ -474,7 +474,7 @@ function baseModeAnomalies(state: GameState): SteeringClimate | null {
   return { set, recorded: active ? (lon, lat) => sampleHistoric(active.data, active.hours, active.startIso, lon, lat) !== null : null };
 }
 function rebuildClimate(state: GameState): void {
-  if (state.climateLayer) rebuildAnomalies(state.climateLayer, climateContext());
+  if (state.climateLayer) rebuildAnomalies(state.climateLayer, climateAnomalyContext());
 }
 const anomalyScratch = newAnomalyPoint();
 function climateAnomalyAt(state: GameState, lon: number, lat: number): AnomalyPoint | null {
@@ -510,12 +510,22 @@ function activeHistoric(state: GameState): { data: HistoricEnvironment; hours: n
   return null;
 }
 
+/** False while the newest running historic typhoon uses recorded fields whose reanalysis file is not registered in this thread yet (sampling would read the synthetic base instead of the record). */
+export function historicEnvironmentReady(state: Pick<GameState, 'historic'>): boolean {
+  for (let k = state.historic.length - 1; k >= 0; k--) {
+    const load = state.historic[k];
+    if (load.finished || load.environment !== 'loaded') continue;
+    return historicEnvironments.has(load.typhoonId);
+  }
+  return true;
+}
+
 export interface EnvironmentSample {
   temperature: number; airTemperature: number; airHeating: number; updraft: number; instability: number; drying: number; cooling: number; humidity: number; shear: number; pressure: number; u: number; v: number; land: boolean;
 }
 
 function allSystems(state: GameState): PressureSystem[] {
-  const list: PressureSystem[] = state.initialWeather ? [] : baseSystems(state.seed).slice();
+  const list: PressureSystem[] = currentWeather(state) ? [] : baseSystems(state.seed).slice();
   for (const e of state.effects) if (isPressureTool(e.type)) list.push(effectSystem(e));
   for (const hazard of state.weatherHazards ?? []) list.push(hazardPressureSystem(hazard));
   return list;
@@ -551,7 +561,7 @@ function environmentAt(state: GameState, systems: PressureSystem[], lon: number,
   const active = activeHistoric(state);
   const h = active && sampleHistoric(active.data, active.hours, active.startIso, lon, lat);
   if (h) { // a historic typhoon is loaded: the recorded field is the base where it has data; player effects stack on top
-    const added = systemsAt(state.initialWeather ? systems : systems.slice(baseSystems(state.seed).length), lon, lat);
+    const added = systemsAt(currentWeather(state) ? systems : systems.slice(baseSystems(state.seed).length), lon, lat);
     if (!Number.isNaN(h.t)) temperature = h.t;
     if (!Number.isNaN(h.air)) airTemperature = h.air;
     if (!Number.isNaN(h.h)) humidity = h.h;
@@ -1065,7 +1075,7 @@ export function totalWind(state: GameState, lon: number, lat: number): { u: numb
   const rec = h && !Number.isNaN(h.u) && !Number.isNaN(h.v) ? h : null; // recorded base replaces the base systems and background, as in refreshGrid
   const background = currentWeather(state);
   const initial = rec ?? (background && sampleLiveWeather(background, x, lat));
-  const s = systemsAt(rec && !state.initialWeather ? systems.slice(baseSystems(state.seed).length) : systems, x, lat);
+  const s = systemsAt(rec && !currentWeather(state) ? systems.slice(baseSystems(state.seed).length) : systems, x, lat);
   const ur = initial ? initial.u : 0;
   const vr = initial ? initial.v : 0;
   let u = initial ? ur + s.u : s.u + zonalBackground(lat) + seasonalAt(seasonDay(state), lat, false).jet;
@@ -1099,7 +1109,7 @@ export function totalPressure(state: GameState, lon: number, lat: number): numbe
   const recorded = h && !Number.isNaN(h.p) ? h.p : null;
   const systems = allSystems(state);
   let p = (recorded ?? (background ? sampleLiveWeather(background, x, lat).p : REFERENCE_PRESSURE))
-    + systemsAt(recorded !== null && !state.initialWeather ? systems.slice(baseSystems(state.seed).length) : systems, x, lat).p;
+    + systemsAt(recorded !== null && !currentWeather(state) ? systems.slice(baseSystems(state.seed).length) : systems, x, lat).p;
   if (!h && !background && state.climateLayer) p += climateAnomalyAt(state, x, lat)!.slp;
   for (const storm of state.storms) p += stormVortexAt(storm, NO_MOTION, x, lat).dp;
   for (const r of state.remnants) p += stormVortexAt(r, NO_MOTION, x, lat).dp;
@@ -1129,7 +1139,7 @@ export function createGame(seed: number = SCENARIO.seed, startDayOfYear: number 
       ...(initialWeather.airTemperature ? { airTemperature: initialWeather.airTemperature.slice() } : {}),
     } } : {}),
     traffic: createTraffic(seed),
-    genesis: { enabled: false, waves: 0, nextSpawnTick: 0 }, climate: { warming: 0, enso: 0, polar: 0 }, climateLayer: null, historic: [], nextStormId: 1,
+    genesis: { enabled: false, waves: 0, nextSpawnTick: 0 }, climate: { warming: 0, enso: 0, polar: 0 }, climateLayer: null, climateTime: null, calendarOffsetDays: 0, historic: [], nextStormId: 1,
     scenarioId: SCENARIO.id, version: SIMULATION_VERSION, seed, tick: 0, hours: 0, startDayOfYear, initialStartDayOfYear: startDayOfYear, phase: 'seeding',
     score: 0, exposedPopulation: 0, storms: [], remnants: [], stormArchive: [], thunderstorms: [], nextThunderstormId: 1, candidates: [], effects: [], grid,
     cities: CITIES.map(c => ({ id: c.id, score: 0, damage: 0, exposedPopulation: 0, maxWind: 0, blizzardHours: 0 })),
@@ -1175,22 +1185,37 @@ export function placeTool(state: GameState, type: ToolType, lon: number, lat: nu
     }
   }
   appendTool(state, type, lon, lat, formation);
-  if (!formation && (type === 'warm' || type === 'cool') && Math.abs(lat) <= 30) feedClimate(state, type, lon, lat);
+  if (!formation && Math.abs(lat) <= 30) feedClimate(state, type, lon, lat);
   syncStormPressures(state);
   refreshGrid(state);
   refreshForecasts(state);
   return { ok: true };
 }
 
-/** A warm or cool tool in the tropics is also an SST patch of the climate layer; overlapping patches merge, so stacked tools escalate. Formation recipes are local and stay out. */
-function feedClimate(state: GameState, type: 'warm' | 'cool', lon: number, lat: number): void {
+/**
+ * Heating (nondimensional Gill units, 5 = 25 mm/day of rain) that a placed condition adds to the climate layer's atmosphere at its centre;
+ * negative cools. Low pressure and updraft are the strongest (a low pressure system and rising air are what convective heating looks like in a column),
+ * warm and unstable air are weaker (they raise the buoyancy of the lower air without moving it), and the four opposites mirror them. Moisture and dry air
+ * feed nothing: this model's convective heating depends on sea temperature, and extra humidity alone releases no heat without something lifting the air
+ * (the weather layer already says moisture cannot create a storm alone). A single condition is a local, short-lived patch; stacking merges them (stackHeatPatch).
+ */
+export const HEAT_PER_TOOL: Partial<Record<ToolType, number>> = {
+  low: 2, updraft: 1.4, 'warm-air': 1, 'unstable-air': 0.8,
+  high: -2, downdraft: -1.4, 'cold-air': -1, 'stable-air': -0.8,
+};
+
+/** A condition placed in the tropics (within 30 degrees) also drives the climate layer: warm and cool water as SST patches, the pressure, air and vertical-motion conditions as atmosphere heating. Overlapping patches of one sign merge, so stacked tools escalate. Formation recipes are local and stay out. */
+function feedClimate(state: GameState, type: ToolType, lon: number, lat: number): void {
   const tool = TOOL_BY_TYPE.get(type)!;
-  const layer = ensureClimateLayer(state);
   const sigmaKm = tool.radiusKm / 2; // the tool's Gaussian exp(-d²/2σ²) is the patch's exp(-(d/r)²) with r = σ√2
-  stackSstPatch(layer.core, {
-    lonEast: (wrapLon(lon) + 360) % 360, lat, radiusDeg: Math.max(2, (sigmaKm * Math.SQRT2) / 111.32),
-    deltaC: type === 'warm' ? EFFECT_STRENGTH.warm : -EFFECT_STRENGTH.cool, days: tool.durationHours / 24,
-  });
+  const radiusDeg = Math.max(2, (sigmaKm * Math.SQRT2) / 111.32), lonEast = (wrapLon(lon) + 360) % 360, days = tool.durationHours / 24;
+  if (type === 'warm' || type === 'cool') {
+    stackSstPatch(ensureClimateLayer(state).core, { lonEast, lat, radiusDeg, deltaC: type === 'warm' ? EFFECT_STRENGTH.warm : -EFFECT_STRENGTH.cool, days });
+  } else {
+    const strength = HEAT_PER_TOOL[type];
+    if (strength === undefined) return;
+    stackHeatPatch(ensureClimateLayer(state).core, { lonEast, lat, radiusDeg, strength, days, own: type === 'low' || type === 'high' });
+  }
   rebuildClimate(state);
 }
 
@@ -1256,11 +1281,119 @@ export function setClimate(state: GameState, key: ClimateKey, value: number): Pl
 export function setSeason(state: GameState, day: number): PlacementResult {
   if (!isValidDayOfYear(day)) return { ok: false, reason: 'The day of the year must be between 0 and 366.' };
   state.actions.push({ tick: state.tick, type: 'season', dayOfYear: day });
-  state.startDayOfYear = (((day - state.hours / 24) % YEAR_DAYS) + YEAR_DAYS) % YEAR_DAYS;
+  state.startDayOfYear = (((day - state.hours / 24 - state.calendarOffsetDays) % YEAR_DAYS) + YEAR_DAYS) % YEAR_DAYS;
   if (state.climateLayer) { alignClimateCalendar(state.climateLayer, Math.max(1, Math.floor(dayOfYear(state)))); rebuildClimate(state); }
   refreshGrid(state);
   refreshForecasts(state);
   return { ok: true };
+}
+
+// ---- Fast climate path ----
+/** Total fast-path time one run may spend (model days, 200 years); validateActions enforces it on replays. */
+export const CLIMATE_MAX_DAYS = 200 * 365;
+
+/**
+ * Weeks to years have gone by: storms, remnants, forming lows, thunderstorms, hazards and placed tools are over, and loaded
+ * historic typhoons are finished. Nothing is damaged by this; ended storms go to the archive.
+ */
+function endWeatherAfterClimateTime(state: GameState): void {
+  for (const storm of state.storms) archiveStorm(state, storm, 'dissipated');
+  state.storms = []; state.remnants = []; state.candidates = []; state.effects = []; state.thunderstorms = []; state.weatherHazards = [];
+  for (const load of state.historic) load.finished = true;
+  state.phase = 'seeding';
+  addNews(state, { id: `climate-time-${state.tick}-${state.climateTime?.total ?? 0}`, kind: 'info', title: 'Time has passed',
+    text: 'Earlier storms and tools are over.' });
+}
+
+/**
+ * The first time fast-path time passes in a world that started from a live analysis, the analysis is out of date: it is dropped and the world goes on
+ * with the base climate plus the climate layer, whose anomalies are now complete (no live-start baseline). The starting analysis stays in the state for replays.
+ */
+function dropLiveWeather(state: GameState): void {
+  if (!state.weather || state.liveEnded) return;
+  const layer = state.climateLayer!;
+  state.weather = undefined;
+  state.liveEnded = true;
+  layer.live = false;
+  layer.base = null;
+  layer.nino0 = 0;
+  addNews(state, { id: `live-ended-${state.tick}`, kind: 'info', title: 'Live weather ended', text: 'The starting analysis is out of date. The map goes on with the base climate and the ENSO layer.' });
+}
+
+/** Whole model days of fast-path time this run may still spend. */
+export const fastDaysLeft = (state: Pick<GameState, 'climateTime'>): number => CLIMATE_MAX_DAYS - (state.climateTime?.total ?? 0);
+
+/**
+ * Enters (on) or leaves (off) the fast climate path. The worker does this by itself when the time speed goes above or back down to
+ * FAST_CLIMATE_SPEED. Entering makes the ENSO layer exist, switches it to natural variability and aligns its calendar with the world's.
+ * Leaving after at least one day has passed aligns the layer with the world's date and rebuilds the weather fields for the new season.
+ * Entering and leaving at once changes nothing. Already being in the requested mode is a no-op that records nothing.
+ */
+export function setClimateMode(state: GameState, on: boolean): PlacementResult {
+  if (typeof on !== 'boolean') return { ok: false, reason: 'Climate mode needs on or off.' };
+  if (on === (state.climateTime?.active ?? false)) return { ok: true };
+  if (on) {
+    const layer = ensureClimateLayer(state);
+    if (!enableClimateNoise(layer)) return { ok: false, reason: 'The climate state could not be switched to natural variability.' };
+    alignClimateCalendar(layer, Math.max(1, Math.floor(dayOfYear(state))));
+    rebuildClimate(state);
+    state.climateTime = { active: true, sinceEntry: 0, total: state.climateTime?.total ?? 0 };
+    state.actions.push({ tick: state.tick, type: 'climate-mode', on: true });
+    return { ok: true };
+  }
+  const time = state.climateTime!;
+  const passed = time.sinceEntry;
+  state.climateTime = { active: false, sinceEntry: 0, total: time.total };
+  state.actions.push({ tick: state.tick, type: 'climate-mode', on: false });
+  if (passed > 0) {
+    alignClimateCalendar(state.climateLayer!, Math.max(1, Math.floor(dayOfYear(state))));
+    rebuildClimate(state);
+    refreshGrid(state);
+    refreshForecasts(state);
+  }
+  return { ok: true };
+}
+
+/**
+ * Advances the ENSO layer by whole model days on the fast path; the weather engine does not run, so tick, hours and the grid stay as
+ * they were. The calendar moves with the days (the world's year is 365.25 days, the layer's 365, so a layer day is 365.25/365 world days
+ * and both return to the same date each year). Tools age with the days and end when their time is up; the first advance of a stay also ends the
+ * storms and tools that were there. Consecutive advances at the same tick merge into one action record. The anomaly fields and the grid are
+ * not rebuilt here (see `refreshClimateView`), so live play and replay take the same steps whatever the display cadence.
+ */
+export function advanceClimateTime(state: GameState, days: number): PlacementResult {
+  const time = state.climateTime;
+  if (!time?.active || !state.climateLayer) return { ok: false, reason: 'The fast climate path is off.' };
+  if (typeof days !== 'number' || !Number.isInteger(days) || days < 1 || days > CLIMATE_MAX_DAYS) return { ok: false, reason: `Climate time advances by 1 to ${CLIMATE_MAX_DAYS} whole days.` };
+  if (time.total + days > CLIMATE_MAX_DAYS) return { ok: false, reason: `Fast climate time is limited to ${CLIMATE_MAX_DAYS / 365} model years per run.` };
+  if (time.sinceEntry === 0) {
+    endWeatherAfterClimateTime(state);
+    releaseToolPatches(state.climateLayer.core); // the patches of the tools that were just wiped end with them
+    dropLiveWeather(state);
+    refreshGrid(state);
+    syncDisasters(state, point => state.grid[gridIndex(point.lon, point.lat)]);
+    refreshForecasts(state);
+  }
+  advanceClimateLayer(state.climateLayer, days);
+  // Placed tools age with the model time that passes, so they expire (and free their slots) instead of lasting for the whole stay.
+  if (state.effects.length) {
+    const hours = days * 24;
+    for (const e of state.effects) { e.ageHours += hours; e.remainingHours -= hours; }
+    state.effects = state.effects.filter(e => e.remainingHours > 1e-9);
+  }
+  time.sinceEntry += days;
+  time.total += days;
+  state.calendarOffsetDays = (time.total * YEAR_DAYS) / 365;
+  const last = state.actions[state.actions.length - 1];
+  if (last?.type === 'climate-advance' && last.tick === state.tick) last.days += days;
+  else state.actions.push({ tick: state.tick, type: 'climate-advance', days });
+  return { ok: true };
+}
+
+/** Rebuilds the layer's anomaly fields and the weather grid for the date the fast path has reached, so the map shows it. Display only: nothing here changes how the run goes on. */
+export function refreshClimateView(state: GameState): void {
+  rebuildClimate(state);
+  refreshGrid(state);
 }
 
 /** Loads a recorded typhoon at its first best-track point; it follows the record from this hour on. Several may run at once. */
@@ -1856,6 +1989,44 @@ function climateGenesisPotential(seed: number, systems: PressureSystem[], lon: n
     pressure: REFERENCE_PRESSURE + systemsAt(systems, lon, lat).p, u: 0, v: 0, land: false,
   }, lat);
 }
+
+// ---- Point readings for the Measure tab ----
+/** Everything the Measure tab can read at one point of the map (storm-free environment plus the weather grid's rain). */
+export interface ClimatePointReading {
+  /** degC; null over land. */
+  seaTemperature: number | null;
+  airTemperature: number;
+  /** hPa, of the whole pressure field including storms (like the wind). */
+  pressure: number;
+  /** m/s, of the whole wind field including storms. */
+  windSpeed: number;
+  /** 0..1. */
+  humidity: number;
+  /** mm/h from the weather grid cell. */
+  rainfall: number;
+  /** m/s, 200-850 hPa. */
+  shear: number;
+  /** The game's own genesis score (0 over land). */
+  genesisPotential: number;
+}
+/** The point values behind the map overlays, from the same fields the simulation uses. `lon` -180..180 (wrapped), `lat` -90..90. */
+export function readClimatePoint(state: GameState, lon: number, lat: number): ClimatePointReading {
+  const x = wrapLon(lon);
+  const env = sampleEnvironment(state, x, lat);
+  const wind = totalWind(state, x, lat);
+  return {
+    seaTemperature: env.land ? null : env.temperature, airTemperature: env.airTemperature, pressure: totalPressure(state, x, lat), windSpeed: Math.hypot(wind.u, wind.v),
+    humidity: env.humidity, rainfall: state.grid[gridIndex(x, lat)].rain, shear: env.shear, genesisPotential: genesisPotential(env, lat),
+  };
+}
+/** Nino 3.4, Nino 3, Nino 4, SOI, warm water volume and the Nino 3.4 budget of the ENSO layer; null while the world has no layer. */
+export function readClimateIndices(state: GameState): ClimateIndices | null {
+  return state.climateLayer ? climateIndices(state.climateLayer.core) : null;
+}
+/** Thermocline depth (m, mean depth plus anomaly) and its anomaly (m, deeper positive) at a longitude (degrees east, 120..280) of the equatorial strip; null outside it or without a layer. */
+export function readThermocline(state: GameState, lonEast: number): { depth: number; anomaly: number } | null {
+  return state.climateLayer ? thermoclineAt(state.climateLayer.core, lonEast) : null;
+}
 const genesisMaxCache = new Map<number, number>();
 /** Highest climate genesis potential over all ocean cells, per seed. */
 function genesisPotentialMax(seed: number): number {
@@ -2044,7 +2215,7 @@ function stepStorm(state: GameState, storm: Storm, systems: PressureSystem[], mo
     const land = isLand(storm.lon, storm.lat);
     const w = recorded.wind + storm.windDelta;
     const envWith = environmentAt(state, systems, storm.lon, storm.lat, land);
-    const envBase = environmentAt(state, state.initialWeather ? [] : baseSystems(state.seed), storm.lon, storm.lat, land, false);
+    const envBase = environmentAt(state, currentWeather(state) ? [] : baseSystems(state.seed), storm.lon, storm.lat, land, false);
     storm.windDelta += (intensityTendency(envWith, w, lf) - intensityTendency(envBase, w, lf)) * dt;
     storm.windDelta *= Math.exp(-dt / WIND_DELTA_RELAX_HOURS);
     storm.wind = Math.max(0, recorded.wind + storm.windDelta);
@@ -2248,22 +2419,25 @@ export function isValidUntilTick(untilTick: unknown): untilTick is number {
   return typeof untilTick === 'number' && Number.isInteger(untilTick) && untilTick >= 0 && untilTick <= REPLAY_MAX_TICKS;
 }
 
+const isLayerTool = (type: string): boolean => type === 'warm' || type === 'cool' || Object.hasOwn(HEAT_PER_TOOL, type);
 /**
- * Whether replaying this log builds the dynamic climate layer: a live starting analysis, an ENSO slider moved off 0, or a
- * warm/cool tool (not a formation recipe) within 30 degrees of the equator. Without it the replay does not depend on the layer.
+ * Whether replaying this log builds the dynamic climate layer: a live starting analysis, an ENSO slider moved off 0, a fast-path switch or advance, or a
+ * warm/cool/low/high/updraft/downdraft/warm-air/cold-air/unstable-air/stable-air tool (not a formation recipe) within 30 degrees of the equator. Without it the replay does not depend on the layer.
  */
 export function replayActivatesClimateLayer(actions: readonly ActionRecord[], initialWeather?: unknown): boolean {
   if (initialWeather !== undefined) return true;
   return actions.some(a => (a.type === 'climate' && a.key === 'enso' && a.value !== 0)
-    || ((a.type === 'warm' || a.type === 'cool') && !a.formation && Math.abs(a.lat) <= 30));
+    || a.type === 'climate-mode' || a.type === 'climate-advance'
+    || (isLayerTool(a.type) && !(a as { formation?: unknown }).formation && Math.abs((a as { lat: number }).lat) <= 30));
 }
 
-/** Validates an untrusted action log without iterating unbounded input. Each action is one of: a placed tool, a natural-formation switch, a world-climate control, a season change or a loaded historic typhoon. */
+/** Validates an untrusted action log without iterating unbounded input. Each action is one of: a placed tool, a natural-formation switch, a world-climate control, a season change, a fast-path mode switch or advance, or a loaded historic typhoon. */
 export function validateActions(actions: unknown, untilTick: number = REPLAY_MAX_TICKS): { ok: true; actions: ActionRecord[] } | { ok: false; reason: string } {
   if (!Array.isArray(actions)) return { ok: false, reason: 'Replay actions must be a list.' };
   if (actions.length > REPLAY_MAX_ACTIONS) return { ok: false, reason: `Replay has more than ${REPLAY_MAX_ACTIONS} actions.` };
   const clean: ActionRecord[] = [];
   let lastTick = 0;
+  let climateDays = 0;
   for (let k = 0; k < actions.length; k++) {
     const a: unknown = actions[k];
     if (typeof a !== 'object' || a === null) return { ok: false, reason: `Action ${k + 1} is not an object.` };
@@ -2279,6 +2453,15 @@ export function validateActions(actions: unknown, untilTick: number = REPLAY_MAX
       const rounded = normalizeClimate(key, value);
       if (rounded === null) return { ok: false, reason: `Action ${k + 1} has an unknown climate control or a value out of range.` };
       clean.push({ tick, type, key: key as ClimateKey, value: rounded });
+    } else if (type === 'climate-mode') {
+      if (typeof on !== 'boolean') return { ok: false, reason: `Action ${k + 1} needs the climate mode set to on or off.` };
+      clean.push({ tick, type, on });
+    } else if (type === 'climate-advance') {
+      const days = (a as Record<string, unknown>).days;
+      if (typeof days !== 'number' || !Number.isInteger(days) || days < 1 || days > CLIMATE_MAX_DAYS) return { ok: false, reason: `Action ${k + 1} needs a whole number of climate days from 1 to ${CLIMATE_MAX_DAYS}.` };
+      climateDays += days;
+      if (climateDays > CLIMATE_MAX_DAYS) return { ok: false, reason: `Replay advances climate time by more than ${CLIMATE_MAX_DAYS / 365} model years.` };
+      clean.push({ tick, type, days });
     } else if (type === 'season') {
       if (!isValidDayOfYear(day)) return { ok: false, reason: `Action ${k + 1} needs a day of the year between 0 and 366.` };
       clean.push({ tick, type, dayOfYear: day });
@@ -2320,6 +2503,8 @@ export function replayGame(seed: unknown, actions: unknown, untilTick: unknown, 
       const r = a.type === 'genesis' ? setGenesis(state, a.on)
         : a.type === 'climate' ? setClimate(state, a.key, a.value)
         : a.type === 'season' ? setSeason(state, a.dayOfYear)
+        : a.type === 'climate-mode' ? setClimateMode(state, a.on)
+        : a.type === 'climate-advance' ? advanceClimateTime(state, a.days)
         : a.type === 'historic' ? loadHistoric(state, a.typhoonId)
         : placeTool(state, a.type, a.lon, a.lat, a.formation);
       if (!r.ok) return `Action ${k + 1} was rejected at hour ${state.hours}: ${r.reason}`;

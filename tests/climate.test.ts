@@ -216,10 +216,10 @@ describe('climate in replays', () => {
     }
   });
 
-  it('exports as version 7 and parseReplay accepts a climate action', () => {
+  it('exports as version 8 and parseReplay accepts a climate action', () => {
     const file = buildReplay(live());
     expect(file.formatVersion).toBe(REPLAY_FILE_VERSION);
-    expect(REPLAY_FILE_VERSION).toBe(7);
+    expect(REPLAY_FILE_VERSION).toBe(8);
     const parsed = parseReplay(JSON.stringify(file));
     expect(parsed.ok).toBe(true);
     if (parsed.ok) expect(parsed.replay).toEqual(file);

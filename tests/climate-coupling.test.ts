@@ -59,11 +59,16 @@ describe('A. an untouched base world is unchanged', () => {
     for (let i = 0; i < golden.steps; i++) stepGame(s); // 200 steps cross two climate-day boundaries (ticks 96 and 192)
     expect(s.climateLayer).toBeNull();
     expect({ base: fingerprint(s), env: [[140, 15], [-120, 0], [10, 50], [-50, 15]].map(([x, y]) => sampleEnvironment(s, x, y)), tp: totalPressure(s, 140, 15), tw: totalWind(s, 140, 15) }).toEqual(golden.neutral);
+    // Warming, polar and a low poleward of 30 degrees build no layer, and the world is what commit 3b72763 (before the climate layer) produced: golden values recorded there.
     const w = createGame(SEED);
-    setClimate(w, 'warming', 1.5); setClimate(w, 'polar', -3); placeTool(w, 'low', 140, 16); placeTool(w, 'moisture', 140, 16);
+    setClimate(w, 'warming', 1.5); setClimate(w, 'polar', -3); placeTool(w, 'low', 140, 45); placeTool(w, 'moisture', 140, 16);
     for (let i = 0; i < golden.steps; i++) stepGame(w);
-    expect(w.climateLayer).toBeNull(); // warming, polar and non-water tools do not activate the layer
-    expect({ base: fingerprint(w), env: [[140, 15], [-120, 0]].map(([x, y]) => sampleEnvironment(w, x, y)) }).toEqual(golden.controls);
+    expect(w.climateLayer).toBeNull();
+    expect({ base: fingerprint(w), env: [[140, 15], [-120, 0]].map(([x, y]) => sampleEnvironment(w, x, y)) }).toEqual(golden.warmingPolarLow45);
+    // A low within 30 degrees now drives the layer.
+    const low = createGame(SEED);
+    placeTool(low, 'low', 140, 16);
+    expect(low.climateLayer).not.toBeNull();
   });
 
   it('activates only on the ENSO slider, a warm/cool tool within 30 degrees (not recipes), or a live start; a zero slider changes nothing', () => {
@@ -236,8 +241,10 @@ describe('B. cause and effect through the weather layer (twin worlds, same seed)
     note('hold -2 vs neutral, day 90:', JSON.stringify(c));
     note('12 cool tools vs neutral, day 90:', JSON.stringify(k));
     expect(w.east).toBeGreaterThan(0.5); expect(w.darwin).toBeGreaterThan(0.5); expect(w.tahiti).toBeLessThan(-0.3); expect(w.trades).toBeGreaterThan(0); expect(w.np).toBeLessThan(-0.3);
-    expect(c.east).toBeLessThan(-0.3); expect(c.darwin).toBeLessThan(-0.3); expect(c.tahiti).toBeGreaterThan(0.3); expect(c.trades).toBeLessThan(0); expect(c.np).toBeGreaterThan(0.1);
-    expect(k.east).toBeLessThan(-0.1); expect(k.darwin).toBeLessThan(-0.2); expect(k.tahiti).toBeGreaterThan(0.15); expect(k.trades).toBeLessThan(0); expect(k.np).toBeGreaterThan(0.5);
+    // Pressure thresholds were sized to the old Gill pressure scale (HPA_PER_ND 1.6); with the recalibrated 0.8 the measured values at day 90 are
+    // hold -2: darwin -0.35, tahiti +0.15 (were > 0.3 and < -0.3); 12 cool tools: darwin -0.19 (was < -0.2), tahiti +0.12 (was > 0.15). Signs unchanged.
+    expect(c.east).toBeLessThan(-0.3); expect(c.darwin).toBeLessThan(-0.15); expect(c.tahiti).toBeGreaterThan(0.08); expect(c.trades).toBeLessThan(0); expect(c.np).toBeGreaterThan(0.1);
+    expect(k.east).toBeLessThan(-0.1); expect(k.darwin).toBeLessThan(-0.1); expect(k.tahiti).toBeGreaterThan(0.06); expect(k.trades).toBeLessThan(0); expect(k.np).toBeGreaterThan(0.5);
   });
 
   it('ENSO hold +2 vs -2 from August: the western North Pacific genesis centroid is east under +2 and west under -2; Atlantic shear rises under +2 and falls under -2', () => {

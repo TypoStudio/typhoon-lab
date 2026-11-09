@@ -10,7 +10,8 @@ import { MapRenderer } from '../render/map';
 import type { MapOverlay } from '../render/overlay';
 import { wrapLon } from '../render/view';
 import { SEAS, seaName } from '../data/seas';
-import { GENESIS_HOURS, GENESIS_THRESHOLD, TICKS_PER_HOUR, TOOLS, dayOfYear } from '../simulation/engine';
+import { GENESIS_HOURS, GENESIS_THRESHOLD, TICKS_PER_HOUR, TOOLS, dayOfYear, historicEnvironmentReady, setHistoricEnvironment } from '../simulation/engine';
+import { loadEnvironment } from '../data/environment';
 import { distanceKm } from '../simulation/geo';
 import { TRAFFIC_SPEED } from '../simulation/traffic';
 import { trafficDistance } from '../simulation/traffic-routing';
@@ -24,15 +25,18 @@ import { disasterDamage, disasterName } from '../simulation/disasters';
 import { newsArt } from './art';
 import { DISASTER_HELP, DISASTER_HELP_INTRO, DISASTER_HELP_TIMING } from './disaster-help';
 import { el, svgEl, fmtClock, fmtClockLive, fmtClockShort, fmtCoord, fmtInt, fmtMoney, fmtPop, fmtUtc, rovingKeys } from './dom';
-import { SEASONS, fmtMonthDay, parseStartParam, realTimeOfYear, seasonIdOf } from './calendar';
-import { DEFAULT_TIME_SPEED, TIME_SPEEDS, adjacentTimeSpeed, timeSpeedLabel, type TimeSpeed } from '../time';
+import { SEASONS, fmtDateWithYear, fmtMonthDay, parseStartParam, realTimeOfYear, seasonIdOf, showsYear, worldDay } from './calendar';
+import { DEFAULT_TIME_SPEED, TIME_SPEEDS, adjacentTimeSpeed, isTimeSpeed, timeSpeedLabel, type TimeSpeed } from '../time';
 import { attachMapInput } from './input';
 import { attachPalette } from './palette';
 import { attachTooltips } from './tooltip';
 import { createTutorial, shouldAutoStart } from './tutorial';
 import { initialiseLocation } from './initial-location';
+import { MEASURE_BY_ID, MEASURE_ITEMS, MEASURE_KEYS, ProbeBook, isMeasureId, pinStyle, type MeasureId } from './measure';
+import { createMeasurePanel } from './measure-panel';
+import { shortcutChar } from './shortcuts';
 import { CLIMATE_ROWS, CONDITION_GROUPS, CYCLONE_PATH, FORMATION_TOOLS, PALETTE_TABS, FORMATION_KEYS, TOOL_KEYS, footerHtml, shellHtml, terrainIconSvg, toolIconSvg, type FormationToolId, type Terrain } from './shell';
-import { MAX_REPLAY_BYTES, buildReplay, downloadJson, parseReplay, parseSeedParam, randomSeed, replayExportProblem } from './storage';
+import { MAX_REPLAY_BYTES, actionKey, buildReplay, downloadJson, parseReplay, parseSeedParam, randomSeed, replayExportProblem } from './storage';
 import { deleteMyData, queuedCount, flushQueue, resultFromRecord, resultFromDisaster, setNickname, storedNickname, defaultNickname, subscribe as subscribeLeaderboard, submit as submitResult, type LbView, type LbWindow } from '../net/leaderboard';
 import { entryFromStorm, entryFromDisaster, localRankingStore, rankBy, upsert, type RankingEntry, type RankingMetric } from './rankings';
 
@@ -47,15 +51,16 @@ const clamp = (n: number, lo: number, hi: number) => (n < lo ? lo : n > hi ? hi 
 const END_REASON_LABEL: Record<RankingEntry['endReason'], string> = { active: 'Active', ended: 'Ended', dissipated: 'Dissipated', extratropical: 'Extratropical transition', merged: 'Merged' };
 const TOOL_BY_TYPE = new Map<ToolType, ToolDefinition>(TOOLS.map(t => [t.type, t]));
 /** Anything the palette can arm: a weather condition, or a formation probe that opens the recipe popover. */
-type ArmedTool = ToolType | FormationToolId;
+type ArmedTool = ToolType | FormationToolId | MeasureId;
 const FORMATION_BY_ID = new Map<ArmedTool, (typeof FORMATION_TOOLS)[number]>(FORMATION_TOOLS.map(f => [f.id, f]));
 const isFormation = (tool: ArmedTool | null): tool is FormationToolId => tool !== null && FORMATION_BY_ID.has(tool);
+const isMeasure = (tool: ArmedTool | null): tool is MeasureId => isMeasureId(tool);
 const PALETTE_TAB_KEY = 'typhoon-lab-palette-tab';
 const LEGEND_KEY = 'typhoon-lab-legend';
 function storedPaletteTab(): string {
   try { const v = localStorage.getItem(PALETTE_TAB_KEY); return PALETTE_TABS.some(t => t.id === v) ? v! : PALETTE_TABS[0].id; } catch { return PALETTE_TABS[0].id; }
 }
-const actionsSig = (a: ActionRecord[]) => JSON.stringify(a.map(x => x.type === 'genesis' ? [x.tick, x.type, x.on] : x.type === 'historic' ? [x.tick, x.type, x.typhoonId] : x.type === 'climate' ? [x.tick, x.type, x.key, x.value] : x.type === 'season' ? [x.tick, x.type, x.dayOfYear] : [x.tick, x.type, x.lon, x.lat, ...(x.formation ? [x.formation] : [])]));
+const actionsSig = (a: ActionRecord[]) => JSON.stringify(a.map(actionKey));
 /** UI-only setting, remembered like the language. */
 const PATHS_KEY = 'typhoon-lab-recorded-paths';
 function storedShowPaths(): boolean {
@@ -177,6 +182,17 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     /** Spot the tutorial rings on the map. */
     tutorialTarget: null as GeoPoint | null,
   };
+  // Measure tab: read-only probes. Nothing here is posted to the worker, recorded in actions or exported in a replay.
+  const probes = new ProbeBook();
+  let probePinsRev = -1;
+  let probePinsCache: NonNullable<MapOverlay['pins']> = [];
+  function probePins(): NonNullable<MapOverlay['pins']> {
+    if (probePinsRev !== probes.layoutRev) {
+      probePinsRev = probes.layoutRev;
+      probePinsCache = probes.pins.map(p => { const style = pinStyle(p.n); return { n: p.n, lon: p.lon, lat: p.lat, color: style.color, ink: style.ink }; });
+    }
+    return probePinsCache;
+  }
   /** Called with every accepted worker state (the tutorial watches for the player's moves). */
   const stateListeners: ((state: GameState) => void)[] = [];
   let lbStop: (() => void) | null = null;
@@ -227,7 +243,6 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
 
   // ---- helpers -----------------------------------------------------------------------------
   const post = (msg: WorkerRequest) => worker.postMessage(msg);
-
   function syncTrafficView(now: number): void {
     if (!renderer || renderer.isInteracting || !ui.latest || !ui.playing || ui.expect !== 'normal' || now - trafficFocusAt < 750) return;
     trafficFocusAt = now;
@@ -325,8 +340,9 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   function refreshOverlay(): void {
     if (!renderer) return;
     const type = ui.drag?.tool ?? ui.tool;
+    const measuring = isMeasure(type ?? null);
     const previewType = type && isFormation(type) ? FORMATION_BY_ID.get(type)!.preview : type;
-    const def = previewType ? TOOL_BY_TYPE.get(previewType) ?? null : null;
+    const def = previewType && !measuring ? TOOL_BY_TYPE.get(previewType as ToolType) ?? null : null;
     const overlay: MapOverlay = {
       tool: def,
       target: ui.drag ? ui.drag.point : ui.tool ? ui.hover ?? ui.cursor : null,
@@ -337,6 +353,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       showRecordedPaths: ui.showRecordedPaths,
       rightInset: sidebarInset(),
       tutorialTarget: ui.tutorialTarget,
+      pins: probePins(),
+      reticle: measuring && !MEASURE_BY_ID.get(type!)!.basin ? (ui.drag ? ui.drag.point : ui.hover ?? ui.cursor) : null,
     };
     renderer.setOverlay(overlay);
   }
@@ -369,7 +387,11 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     ui.cursor = null;
     closeSpot();
     if (isFormation(ui.tool)) toast(`${FORMATION_BY_ID.get(ui.tool)!.name} armed. Tap or click a spot to see what it needs; Esc puts it away.`, 'info', 3500);
-    else if (ui.tool) toast(`${TOOL_BY_TYPE.get(ui.tool)!.name} armed. Tap or click the map to place it; Esc puts it away.`, 'info', 3500);
+    else if (isMeasure(ui.tool)) {
+      const item = MEASURE_BY_ID.get(ui.tool)!;
+      toast(item.basin ? `${item.name} armed. Tap or click anywhere on the map to add its chart; Esc puts it away.` : `${item.name} armed. Tap or click the map to measure there; Esc puts it away.`, 'info', 3500);
+    }
+    else if (ui.tool) toast(`${TOOL_BY_TYPE.get(ui.tool as ToolType)!.name} armed. Tap or click the map to place it; Esc puts it away.`, 'info', 3500);
     renderTools();
     refreshOverlay();
   }
@@ -415,9 +437,15 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   function renderClockText(): void {
     const s = ui.latest;
     const hours = s ? ui.clockHours + clockOffset(s) : 0;
-    const date = s ? fmtMonthDay(s.startDayOfYear + ui.clockHours / 24) : '';
-    setText(ref('clockText'), s ? `${fmtClockLive(hours)} · ${date}` : fmtClockLive(0));
-    ref('clockText').dataset.short = fmtClockShort(hours);
+    if (s && s.climateTime?.active) { // the fast climate path: the weather clock does not run, the date does
+      const month = fmtDateWithYear(s, ui.clockHours, getLanguage(), false);
+      setText(ref('clockText'), month);
+      ref('clockText').dataset.short = month;
+    } else {
+      const date = !s ? '' : showsYear(s, ui.clockHours) ? fmtDateWithYear(s, ui.clockHours, getLanguage(), true) : fmtMonthDay(worldDay(s, ui.clockHours));
+      setText(ref('clockText'), s ? `${fmtClockLive(hours)} · ${date}` : fmtClockLive(0));
+      ref('clockText').dataset.short = fmtClockShort(hours);
+    }
     renderer?.setSimulationClock(ui.clockHours, ui.speed, ui.playing && ui.expect === 'normal');
   }
 
@@ -1084,7 +1112,9 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
 
   function weatherSourceLines(state: GameState): HTMLElement[] {
     const lines: HTMLElement[] = [];
-    if (state.initialWeather) {
+    if (state.liveEnded) {
+      lines.push(el('p', { text: t('Live weather ended · using base climate') }));
+    } else if (state.initialWeather) {
       lines.push(el('p', { text: `${t('Starting weather')} · NOAA GFS · ${fmtUtc(state.initialWeather.modelRun, 0)}${state.weatherSource === 'cached' ? ` · ${t('Saved analysis')}` : ''}` }));
     } else if (state.weatherSource === 'base') {
       lines.push(el('p', { text: t('Live weather unavailable · using base climate') }));
@@ -1169,6 +1199,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     if (sidebar.hidden || !ui.state) return;
     if (ui.tab === 'storms') renderStorms();
     else if (ui.tab === 'environment') renderEnvironment();
+    else if (ui.tab === 'measure') measurePanel.refresh();
     else if (ui.tab === 'news') renderNews();
     else if (ui.tab === 'rank') renderRanking();
     else renderReplayPanel();
@@ -1219,7 +1250,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         </ol>
         <p>Open Formation for typhoons, blizzards, tornadoes, heatwaves, droughts, downpours, cold waves, hail, yellow dust and wind gusts. Tap a map spot to prepare the conditions. The seven weather phenomena begin after six model hours.</p>
         <h3 class="dialog__sub">Time</h3>
-        <p>Use the arrows to choose a speed from ×200 real time to 2 days per second. Number keys 1–8 select the same steps. Reset speed returns to ×200 without changing the world or pause state.</p>
+        <p>Use the arrows to choose a speed from ×200 real time to 1 month per second. Number keys 1–9 select the same steps. Reset speed returns to ×200 without changing the world or pause state.</p>
+        <p class="fine">Above 2 days per second the weather is paused and only the seasons and the oceans keep running, so the map shows years of climate in seconds. Storms and tools end when that starts; slow down and storms can form again on the changed climate.</p>
         <h3 class="dialog__sub">The map</h3>
         <ul class="help__list">
           <li>The map is a globe by default: drag to rotate it and use the wheel or pinch to zoom. Switch Globe view off in the right panel for the flat Equal Earth map.</li>
@@ -1229,7 +1261,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <li>Choose a nickname in the Ranking tab to appear on the online leaderboard. Nicknames are public.</li>
         </ul>
         <h3 class="dialog__sub">Without a mouse</h3>
-        <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L and Z select the formation tools in order. 1–8 set the speed steps. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
+        <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L and ; select the formation tools in order, and Z, X, C, V, B, N, M, comma, period and slash select the measurement tools. 1–9 set the speed steps. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
         <p class="fine">Shortcuts work from anywhere on the page, except while you type in a field or a dialog is open; with a button or tab focused, Space and Enter press it instead of playing or pausing.</p>`,
       conditions: `
         <p>The bottom palette has seven paired condition buttons. The large icon is the selected setting; the small faded icon shows the opposite. Click or tap once to select, then again to switch, or use Q–U. Drag the large icon onto the map.</p>
@@ -1251,6 +1283,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       climate: `
         <h3 class="dialog__sub">Natural formation</h3>
         <p>Turn on Natural typhoon formation in the right panel and nature starts storms for you: a wave of formation conditions appears over warm tropical ocean somewhere in the world every two to three days. Use Cool water, Dry air, Cold air and Downdraft to weaken them before a depression forms, or let them grow. Turn it off to stop new waves.</p>
+        <p>Conditions placed in the tropics also push the climate. Low pressure, updrafts, warm air and unstable air heat the air above them, while high pressure, downdrafts, cold air and stable air cool it. One condition stays local; stacked in the same area they can shift the winds across the whole Pacific and start or end an El Niño.</p>
         <h3 class="dialog__sub">World climate</h3>
         <p>World climate in the right panel changes the whole planet: Warming raises sea and air temperature, La Niña / El Niño shifts warm water and wind shear across the Pacific, and Polar temperature warms or cools the high latitudes. Low shear calms the upper winds around a storm so it can stay upright; Strong shear adds upper-level wind that tilts and tears it apart.</p>
         <dl class="help__defs">
@@ -1484,12 +1517,14 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       window.clearTimeout(expectTimer);
       ui.expect = 'normal';
       ui.pendingEvent = 'reset';
+      probes.clear();
     } else if (ui.expect === 'replay') {
       if (state.tick !== ui.expectUntil || state.seed !== ui.expectSeed || actionsSig(state.actions) !== ui.expectSig
         || JSON.stringify(state.traffic.dispatches) !== ui.expectTrafficSig) return false;
       window.clearTimeout(expectTimer);
       ui.expect = 'normal';
       ui.pendingEvent = 'replay';
+      probes.clear();
       ui.playing = false;
       setReplayMessage(`Replay loaded. The world is restored to tick ${state.tick}, paused. Press Play to continue from here.`, 'ok');
       toast('Replay loaded and paused.', 'ok', 3500);
@@ -1499,10 +1534,23 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     return true;
   }
 
+  /** The worker registers a historic typhoon's reanalysis for itself; Measure reads on this thread, so it loads the same file here and skips samples until it is in. */
+  const historicRequested = new Set<string>();
+  function ensureHistoricEnvironment(state: GameState): void {
+    for (const load of state.historic) {
+      if (load.finished || load.environment !== 'loaded' || historicRequested.has(load.typhoonId)) continue;
+      historicRequested.add(load.typhoonId);
+      void loadEnvironment(load.typhoonId).then(env => { if (env) setHistoricEnvironment(load.typhoonId, env); else historicRequested.delete(load.typhoonId); });
+    }
+  }
   worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const msg = event.data;
     if (msg.type === 'state' || msg.type === 'interaction') {
       if (!accept(msg.state)) return;
+      // Probes read the newest state as it arrives, even while a gesture holds back the drawn one; paused time adds no samples.
+      ensureHistoricEnvironment(msg.state);
+      if (probes.size && ui.playing && historicEnvironmentReady(msg.state)) probes.sample(msg.state);
+      measurePanel.refresh();
       ui.clockHours = msg.clockHours;
       ui.pending = msg.state;
       renderClock();
@@ -1514,6 +1562,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       renderClockText();
     } else if (msg.type === 'placement') {
       ui.placementQueue.shift()?.(msg.result);
+    } else if (msg.type === 'speed') {
+      if (isTimeSpeed(msg.speed)) { ui.speed = msg.speed; renderClock(); }
     } else if (msg.type === 'error') {
       const wasReplay = ui.expect === 'replay';
       if (ui.expect !== 'normal') { window.clearTimeout(expectTimer); ui.expect = 'normal'; syncClimateDisabled(); }
@@ -1623,6 +1673,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     if (ui.state) renderWorld(ui.state);
     renderSidebar();
     renderTools();
+    measurePanel.relocalize();
     renderLeaderboard();
     refreshOverlay();
     spotSig = '';
@@ -1643,6 +1694,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       ui.drag = null;
       refreshOverlay();
       if (point && isFormation(variant)) { ui.tool = variant; renderTools(); openSpot(point.lon, point.lat); }
+      else if (point && isMeasure(variant)) addProbe(variant, point.lon, point.lat);
       else if (point) placeAt(variant as ToolType, point.lon, point.lat);
       else toast('Dropped outside the map. Drag the icon onto the map to place it.', 'error', 3500);
     },
@@ -1664,6 +1716,59 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   for (const b of paletteTabButtons) b.addEventListener('click', () => setPaletteTab(b.dataset.paletteTab!));
   rovingKeys(ref('paletteTabs'), b => setPaletteTab(b.dataset.paletteTab!, true));
   setPaletteTab(storedPaletteTab());
+
+  // ---- measure tab -------------------------------------------------------------------------
+  const measurePanel = createMeasurePanel({
+    cards: ref('measureCards'),
+    hint: ref('measureHint'),
+    clear: ref<HTMLButtonElement>('measureClear'),
+    book: probes,
+    visible: () => !sidebar.hidden && ui.tab === 'measure' && !document.hidden,
+    hasLayer: () => !!ui.latest?.climateLayer,
+    onRemove: id => {
+      probes.remove(id);
+      announce(`${MEASURE_BY_ID.get(id)!.name} removed.`);
+      refreshOverlay();
+      measurePanel.refresh();
+    },
+    onClear: () => {
+      probes.clear();
+      announce('All measurements cleared.');
+      refreshOverlay();
+      measurePanel.refresh();
+    },
+  });
+  document.addEventListener('visibilitychange', measurePanel.refresh);
+
+  /** Drops a measurement: puts the pin on the map, records the first value now and shows the graphs. */
+  function addProbe(id: MeasureId, lon: number, lat: number): void {
+    const state = ui.latest;
+    if (!state) return;
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lat) > 90) { toast('Choose a position on the map (latitude within ±90°).', 'error'); return; }
+    const added = probes.add(id, lon, lat);
+    const name = added.item.name;
+    if (!added.ok) {
+      if (added.reason === 'strip') toast('The thermocline exists only in the equatorial Pacific, 120°E to 80°W. Drop it inside that strip.', 'error');
+      else if (added.reason === 'pins') toast('Twelve pins are in use. Remove a chart or clear all to measure somewhere new.', 'error');
+      else toast(added.item.basin ? `${name} is already graphed.` : `${name} is already measured at this pin.`, 'info', 3500);
+      if (added.reason === 'duplicate') showMeasureTab();
+      return;
+    }
+    if (historicEnvironmentReady(state)) probes.sample(state);
+    const phone = !sidebarBesideMap.matches; // a full-screen sidebar would block placing the next pin: the map stays, the toast says where the graph is
+    toast(added.pin ? `${name} measured at pin ${added.pin.n}.${phone ? " Open the panel's Measure tab for the graph." : ''}` : `${name} chart added.${phone ? " Open the panel's Measure tab to see it." : ''}`, 'ok', phone ? 5000 : 3500);
+    announce(added.pin ? `${name} pin ${added.pin.n} placed.` : `${name} chart added.`);
+    showMeasureTab();
+    refreshOverlay();
+    measurePanel.refresh();
+  }
+  /** Opens the sidebar on the Measure tab without moving focus, so play and the map keys carry on. On a phone it only selects the tab. */
+  function showMeasureTab(): void {
+    if (!sidebarBesideMap.matches) { if (ui.tab !== 'measure') activateTab('measure'); return; } // phones: the sidebar covers the screen, so it stays closed
+    if (sidebar.hidden) setSidebar(true);
+    if (ui.tab !== 'measure') activateTab('measure');
+    else measurePanel.refresh();
+  }
 
   ref('play').addEventListener('click', togglePlay);
   ref('speedReset').addEventListener('click', () => setSpeed(DEFAULT_TIME_SPEED));
@@ -1868,7 +1973,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   const trafficTime = (state: GameState, hour: number): string => {
     const localHour = hour + clockOffset(state);
     const within = ((Math.round(localHour * 60) % 1440) + 1440) % 1440;
-    return `${fmtMonthDay(state.startDayOfYear + hour / 24)} · ${String(Math.floor(within / 60)).padStart(2, '0')}:${String(within % 60).padStart(2, '0')}`;
+    return `${fmtMonthDay(worldDay(state, hour))} · ${String(Math.floor(within / 60)).padStart(2, '0')}:${String(within % 60).padStart(2, '0')}`;
   };
 
   function renderTrafficPopup(): void {
@@ -2003,6 +2108,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           closeTrafficPopup();
           if (!at) toast('Outside the map.', 'error');
           else if (isFormation(ui.tool)) openSpot(at[0], at[1]);
+          else if (isMeasure(ui.tool)) addProbe(ui.tool, at[0], at[1]);
           else placeAt(ui.tool, at[0], at[1]);
           return;
         }
@@ -2103,10 +2209,11 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     if (ev.defaultPrevented || ev.ctrlKey || ev.metaKey) return;
     const t = ev.target instanceof Element ? ev.target : document.body;
     if (t.closest(TYPING) || document.querySelector('dialog[open]')) return;
-    // Letter shortcuts follow the typed character, falling back to the physical key under a non-Latin layout (Korean, Japanese, Chinese input).
-    const letter = /^[a-z]$/i.test(ev.key) ? ev.key.toLowerCase() : /^Key([A-Z])$/.exec(ev.code)?.[1].toLowerCase() ?? '';
-    const slot = ev.altKey || ev.shiftKey ? -1 : (TOOL_KEYS as readonly string[]).indexOf(letter);
-    const formationSlot = ev.altKey || ev.shiftKey ? -1 : (FORMATION_KEYS as readonly string[]).indexOf(letter);
+    // Tool shortcuts follow the typed character, falling back to the physical key under a non-Latin layout (Korean, Japanese, Chinese input).
+    const letter = shortcutChar(ev);
+    const slot = letter ? (TOOL_KEYS as readonly string[]).indexOf(letter) : -1;
+    const formationSlot = letter ? (FORMATION_KEYS as readonly string[]).indexOf(letter) : -1;
+    const measureSlot = letter ? MEASURE_KEYS.indexOf(letter) : -1;
     const dir: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
     if (ev.key === 'Tab' && !ev.altKey && ui.latest) {
       ev.preventDefault();
@@ -2114,9 +2221,9 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     } else if (ev.key === 'Escape') {
       if (ui.tool) { ev.preventDefault(); armTool(null); }
       else if (selectedTrafficId) { ev.preventDefault(); closeTrafficPopup(); }
-    } else if (/^[1-8]$/.test(ev.key) && !ev.altKey) {
+    } else if (/^[1-9]$/.test(ev.key) && !ev.altKey) {
       ev.preventDefault();
-      const n = Number(ev.key) - 1;
+      const n = Number(ev.key) - 1; // 1-9 are the nine speed steps
       if (n < TIME_SPEEDS.length) setSpeed(TIME_SPEEDS[n]);
     } else if (slot >= 0 && slot < CONDITION_GROUPS.length) {
       setPaletteTab('conditions');
@@ -2124,6 +2231,10 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     } else if (formationSlot >= 0 && formationSlot < FORMATION_TOOLS.length) {
       setPaletteTab('formation');
       armTool(FORMATION_TOOLS[formationSlot].id);
+    } else if (measureSlot >= 0) {
+      ev.preventDefault(); // / opens Quick Find in Firefox
+      setPaletteTab('measure');
+      armTool(MEASURE_ITEMS[measureSlot].id);
     } else if (ev.key === ' ') {
       if (t.closest(PRESSABLE)) return;
       ev.preventDefault();
@@ -2140,7 +2251,9 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       ev.preventDefault();
       const [centreLon, centreLat] = renderer.view.centerLonLat();
       const c = ui.cursor ?? { lon: centreLon, lat: centreLat };
-      if (isFormation(ui.tool)) openSpot(c.lon, c.lat, true); else placeAt(ui.tool, c.lon, c.lat);
+      if (isFormation(ui.tool)) openSpot(c.lon, c.lat, true);
+      else if (isMeasure(ui.tool)) addProbe(ui.tool, c.lon, c.lat);
+      else placeAt(ui.tool, c.lon, c.lat);
     }
   };
   window.addEventListener('keydown', onKey);
@@ -2196,6 +2309,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       get interacting() { return renderer?.isInteracting ?? false; },
       get renderer() { return renderer?.kind ?? 'none'; },
       get speed() { return ui.speed; },
+      /** Measure tab probes: pin numbers and places, and the charts' item ids. */
+      get probes() { return { pins: probes.pins.map(p => ({ ...p })), charts: [...probes.charts.keys()] }; },
     },
   });
 
@@ -2206,6 +2321,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       detachInput();
       detachTooltips();
       window.removeEventListener('keydown', onKey);
+      document.removeEventListener('visibilitychange', measurePanel.refresh);
+      measurePanel.dispose();
       window.removeEventListener('resize', refreshOverlay);
       renderer?.dispose();
       worker.terminate();

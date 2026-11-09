@@ -81,7 +81,7 @@ for (const width of [1440, 768, 414, 375, 320]) {
     }
     const overlayRow = (await page.locator('.map-overlays').boundingBox())!;
     expect(overlayRow.width).toBeLessThanOrEqual(250);
-    for (const [id, label] of [['wind', 'Wind'], ['humidity', 'Humidity'], ['rain', 'Rain'], ['pressure', 'Pressure'], ['temperature', 'Sea temp'], ['population', 'Population']]) {
+    for (const [id, label] of [['wind', 'Wind'], ['humidity', 'Humidity'], ['rain', 'Rain'], ['pressure', 'Pressure'], ['temperature', 'Temperature'], ['population', 'Population']]) {
       const button = page.getByTestId(`layer-${id}`);
       await expect(button).toHaveAccessibleName(label);
       await expect(button).toHaveText('');
@@ -99,7 +99,7 @@ for (const width of [1440, 768, 414, 375, 320]) {
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(overlayRow.x + overlayRow.width);
       expect(await button.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     }
-    await expect(page.locator('[data-testid^="legend-"]:not([data-testid="legend-toggle"], [data-testid="legend-close"])')).toHaveCount(6);
+    await expect(page.locator('[data-testid^="legend-"]:not([data-testid="legend-toggle"], [data-testid="legend-close"], [data-testid^="legend-temperature-"])')).toHaveCount(6); // the air and sea readings inside the temperature row are not rows
     // A button can be inside the viewport yet clipped by a shrinking flex container.
     const speedRow = (await page.locator('.speed').boundingBox())!;
     for (const action of ['prev', 'next']) {

@@ -9,11 +9,11 @@ it('cycles through every speed in both directions', () => {
 });
 
 it('labels sub-day steps as real-time multiples and day steps as days per second', () => {
-  expect(TIME_SPEEDS.map(timeSpeedLabel)).toEqual(['×200', '×600', '×1,200', '×2,400', '×4,800', '×14,400', '1 day/s', '2 days/s']);
+  expect(TIME_SPEEDS.map(timeSpeedLabel)).toEqual(['×200', '×600', '×1.2k', '×2.4k', '×4.8k', '×14.4k', '1 day/s', '2 days/s', '1 month/s']);
 });
 
 it('keeps wind animation within 1 to 3 for every step', () => {
-  expect(TIME_SPEEDS.map(windAnimationMultiplier)).toEqual([1, 2, 3, 3, 3, 3, 3, 3]);
+  expect(TIME_SPEEDS.map(windAnimationMultiplier)).toEqual([1, 2, 3, 3, 3, 3, 3, 3, 3]);
 });
 
 it('takes whole steps and caps the leftover backlog', () => {

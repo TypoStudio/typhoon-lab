@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  SOI_SIGMA_HPA,
   addSstPatch,
   addThermoclinePulse,
   addWesterlyBurst,
@@ -238,6 +239,26 @@ describe('deterministic part', () => {
       expect(offMax).toBeLessThan(0.1);
       expect(meanMax).toBeLessThan(0.1);
     }
+  });
+});
+
+describe('Gill pressure scale (HPA_PER_ND)', () => {
+  /** Observed regression (NCEP/NCAR Reanalysis 1 on Nino 3.4, src/data/climate-teleconnections): Darwin +0.74 and Tahiti -0.77 hPa per degC, so Tahiti minus Darwin is about -1.5 hPa per degC (SOI about -7.5 per degC with sigma 2.0 hPa). */
+  const OBSERVED_DP_PER_C = -1.5;
+  test('Tahiti minus Darwin pressure regresses on monthly Nino 3.4 near the observed slope', () => {
+    const slopes: number[] = [];
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      const { nino34, soi } = simulate(seed, 100);
+      const dp = soi.map(v => (v * SOI_SIGMA_HPA) / 10);
+      const mx = mean(nino34), my = mean(dp);
+      let sxy = 0, sxx = 0;
+      for (let i = 0; i < nino34.length; i++) { sxy += (nino34[i] - mx) * (dp[i] - my); sxx += (nino34[i] - mx) ** 2; }
+      slopes.push(sxy / sxx);
+    }
+    const model = mean(slopes);
+    console.log(`[slp scale] Tahiti-Darwin per degC of Nino 3.4: model ${model.toFixed(2)} hPa (seeds ${slopes.map(v => v.toFixed(2)).join(' ')}), observed ${OBSERVED_DP_PER_C} hPa; SOI per degC model ${(model * 10 / SOI_SIGMA_HPA).toFixed(1)}`);
+    expect(model).toBeGreaterThan(OBSERVED_DP_PER_C * 1.25);
+    expect(model).toBeLessThan(OBSERVED_DP_PER_C * 0.75);
   });
 });
 

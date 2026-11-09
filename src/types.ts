@@ -121,7 +121,19 @@ export type ClimateState = Record<ClimateKey, number>;
 export interface ClimateAction { tick: number; type: 'climate'; key: ClimateKey; value: number }
 /** Moves the calendar to this day of the year (0..366) at the current model hour. */
 export interface SeasonAction { tick: number; type: 'season'; dayOfYear: number }
-export type ActionRecord = PlaceAction | GenesisAction | HistoricAction | ClimateAction | SeasonAction;
+/** Enters (on) or leaves (off) the fast climate path, which the worker takes by itself above 2 days of model time per second. Entering makes the ENSO layer exist with natural variability. */
+export interface ClimateModeAction { tick: number; type: 'climate-mode'; on: boolean }
+/** Whole model days of climate time that passed while in climate mode. Consecutive records at the same tick are merged. */
+export interface ClimateAdvanceAction { tick: number; type: 'climate-advance'; days: number }
+export type ActionRecord = PlaceAction | GenesisAction | HistoricAction | ClimateAction | SeasonAction | ClimateModeAction | ClimateAdvanceAction;
+/** Bookkeeping of the fast climate path (the weather engine is paused while `active`). */
+export interface ClimateTime {
+  active: boolean;
+  /** Model days advanced since the mode was last entered. */
+  sinceEntry: number;
+  /** Model days advanced in the whole run (limited to CLIMATE_MAX_DAYS). */
+  total: number;
+}
 /** Natural typhoon formation: while enabled, waves of formation conditions appear at seeded intervals. */
 export interface GenesisState { enabled: boolean; waves: number; nextSpawnTick: number; lastSite?: GeoPoint }
 /** One recorded typhoon loaded into the world at `startHour`; its storm follows the record from then on. */
@@ -168,10 +180,16 @@ export interface GameState {
   initialWeather?: LiveWeatherSnapshot;
   weather?: WeatherField;
   weatherSource?: 'live' | 'cached' | 'base';
+  /** The fast climate path dropped the live analysis (it went out of date); the world goes on with the base climate and the ENSO layer. */
+  liveEnded?: true;
   traffic: TrafficSimulation;
   genesis: GenesisState; climate: ClimateState;
   /** Dynamic ENSO layer (see climate-coupling.ts); null until the ENSO slider, a warm/cool tool within 30 degrees or a live start activates it. Derived from seed, actions and the starting weather, so replays do not store it. */
   climateLayer: ClimateLayer | null;
+  /** Fast climate path bookkeeping (see ClimateTime); null in a world that never took it. */
+  climateTime: ClimateTime | null;
+  /** Days the fast climate path has added to the calendar: `dayOfYear(state)` is (startDayOfYear + hours / 24 + calendarOffsetDays) mod the year. */
+  calendarOffsetDays: number;
   historic: HistoricLoad[]; nextStormId: number;
   scenarioId: string; version: string; seed: number; tick: number; hours: number;
   /** Calendar: day of the year (0..365.25, fractional) at hour 0; moved by season actions. `dayOfYear(state)` is today's date. */
@@ -206,4 +224,6 @@ export type WorkerResponse =
   | { type: 'interaction'; active: boolean; state: GameState; clockHours: number }
   | { type: 'progress'; clockHours: number }
   | { type: 'placement'; result: PlacementResult }
+  /** The worker changed the time speed by itself (the run's fast climate time is used up). */
+  | { type: 'speed'; speed: number }
   | { type: 'error'; message: string };

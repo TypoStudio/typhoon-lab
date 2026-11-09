@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createGame, genesisPotential, intensityTendency, placeTool, replayGame, sampleEnvironment, stepGame, validateActions } from '../src/simulation/engine';
 import type { GameState, ToolType } from '../src/types';
+import { anomalyAt, newAnomalyPoint } from '../src/simulation/climate-coupling';
 
 const site = { lon: 140, lat: 16 };
 function place(s: GameState, types: ToolType[]) {
@@ -20,10 +21,12 @@ describe('warm air and updraft conditions', () => {
     expect(env.airHeating).toBe(9);
     expect(env.updraft).toBe(4);
     expect(env.temperature).toBe(base.temperature);
-    expect(env.humidity).toBe(base.humidity);
-    expect(env.pressure).toBe(base.pressure);
-    expect(env.u).toBe(base.u);
-    expect(env.v).toBe(base.v);
+    // The tools do not touch humidity, pressure or wind themselves; the climate layer they now heat does (warm air and updraft are heating conditions).
+    const layer = anomalyAt(s.climateLayer!.anomalies!, site.lon, site.lat, newAnomalyPoint());
+    expect(env.humidity - base.humidity).toBeCloseTo(layer.hum, 6);
+    expect(env.pressure - base.pressure).toBeCloseTo(layer.slp, 6);
+    expect(env.u - base.u).toBeCloseTo(layer.u + layer.ug, 6);
+    expect(env.v - base.v).toBeCloseTo(layer.v + layer.vg, 6);
     expect(s.storms).toHaveLength(0);
     expect(s.candidates).toHaveLength(0);
   });

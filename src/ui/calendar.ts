@@ -67,3 +67,37 @@ export function fmtMonthDay(doy: number): string {
   const { month, day } = monthDayOf(doy);
   return `${MONTH_ABBR[month]} ${day}`;
 }
+
+/** The world's date as a day of the year at a model hour: start day, hours, and the days climate time has added to the calendar. */
+export function worldDay(state: { startDayOfYear: number; calendarOffsetDays?: number }, hours: number): number {
+  return state.startDayOfYear + hours / 24 + (state.calendarOffsetDays ?? 0);
+}
+
+interface DateState { startDayOfYear: number; initialStartDayOfYear?: number; calendarOffsetDays?: number; climateTime?: { active: boolean } | null; initialWeather?: { modelRun: string } }
+
+/** Model days since the world began: model hours plus the days the fast climate path has added. */
+const elapsedDays = (state: DateState, hours: number): number => hours / 24 + (state.calendarOffsetDays ?? 0);
+
+/** The calendar year is shown once a year of model time has passed, and always on the fast climate path where the date moves too quickly for a day to mean anything. */
+export function showsYear(state: DateState, hours: number): boolean {
+  return !!state.climateTime?.active || elapsedDays(state, hours) >= 365;
+}
+
+/** Calendar year of the world's date: the year of the starting analysis (or this year, for a plain start) plus the 365-day years that have passed since. The real clock is read here, never in the engine. */
+export function worldYear(state: DateState, hours: number, now: Date = new Date()): number {
+  const analysis = state.initialWeather ? new Date(state.initialWeather.modelRun).getUTCFullYear() : NaN;
+  const base = Number.isFinite(analysis) ? analysis : now.getUTCFullYear();
+  return base + Math.floor((Math.floor((state.initialStartDayOfYear ?? state.startDayOfYear) + elapsedDays(state, hours)) - 1) / 365);
+}
+
+/** `March 2031` (`2031년 3월` in Korean, ...) or with the day, `Mar 26, 2031`: the browser's own wording for the language. */
+export function fmtDateWithYear(state: DateState, hours: number, language: string, withDay: boolean): string {
+  const { month, day } = monthDayOf(worldDay(state, hours));
+  const date = new Date(Date.UTC(2000, month, day));
+  date.setUTCFullYear(worldYear(state, hours));
+  try {
+    return new Intl.DateTimeFormat(language, withDay ? { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' } : { year: 'numeric', month: 'long', timeZone: 'UTC' }).format(date);
+  } catch {
+    return `${MONTH_ABBR[month]} ${withDay ? `${day}, ` : ''}${date.getUTCFullYear()}`;
+  }
+}

@@ -3,6 +3,7 @@ import { estimateStormDamage, stormTotalLossUsd } from '../simulation/damage-new
 import { TICKS_PER_HOUR, isValidSeed, stageRank } from '../simulation/engine';
 import { disasterDamage, disasterName } from '../simulation/disasters';
 import { isWeatherHazardKind } from '../data/weather-hazards';
+import { actionKey } from './storage';
 import type { ActionRecord, DisasterKind, DisasterRecord, Storm, StormRecord, TrafficDispatch } from '../types';
 
 export interface RankingEntry {
@@ -31,8 +32,7 @@ const MAX_RANKING_BYTES = 1_000_000;
 
 /** 32-bit FNV-1a (hex) over the actions up to `untilTick`, serialised like the replay signature. */
 export function actionsHash(actions: ActionRecord[], untilTick: number, dispatches: TrafficDispatch[] = []): string {
-  let text = JSON.stringify(actions.filter(a => a.tick <= untilTick).map(a => a.type === 'genesis' ? [a.tick, a.type, a.on]
-    : a.type === 'historic' ? [a.tick, a.type, a.typhoonId] : a.type === 'climate' ? [a.tick, a.type, a.key, a.value] : a.type === 'season' ? [a.tick, a.type, a.dayOfYear] : [a.tick, a.type, a.lon, a.lat, ...(a.formation ? [a.formation] : [])]));
+  let text = JSON.stringify(actions.filter(a => a.tick <= untilTick).map(actionKey));
   const traffic = dispatches.filter(dispatch => dispatch.tick <= untilTick);
   if (traffic.length) text += JSON.stringify(traffic);
   let h = 0x811c9dc5;
