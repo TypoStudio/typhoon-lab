@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { REPLAY_FILE_VERSION, REPLAY_MAX_ACTIONS, REPLAY_MAX_TICKS, createGame } from '../src/simulation/engine';
 import { MAX_REPLAY_BYTES, buildReplay, parseReplay, replayExportProblem } from '../src/ui/storage';
 
-describe('portable world snapshots (replay files, version 6)', () => {
+describe('portable world snapshots (replay files, version 7)', () => {
   const state = createGame();
   state.tick = 40;
   state.actions.push(
@@ -38,6 +38,20 @@ describe('portable world snapshots (replay files, version 6)', () => {
     expect(strayParsed.ok && strayParsed.replay.actions).toEqual([{ tick: 1, type: 'genesis', on: true }, { tick: 2, type: 'historic', typhoonId: 'tip-1979' }]);
   });
 
+  it('reads version 6 files that never activate the climate layer, and rejects those that do with a clear reason', () => {
+    const quiet = { ...file, formatVersion: 6, actions: [{ tick: 0, type: 'low', lon: 140, lat: 16 }, { tick: 2, type: 'warm', lon: 140, lat: 40 }, { tick: 3, type: 'climate', key: 'warming', value: 1 }, { tick: 4, type: 'climate', key: 'enso', value: 0 }] };
+    const ok = parseReplay(JSON.stringify(quiet));
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.replay.formatVersion).toBe(REPLAY_FILE_VERSION);
+    for (const actions of [[{ tick: 0, type: 'climate', key: 'enso', value: 1 }], [{ tick: 0, type: 'warm', lon: 140, lat: 16 }], [{ tick: 0, type: 'cool', lon: -150, lat: -5 }]]) {
+      const r = parseReplay(JSON.stringify({ ...file, formatVersion: 6, actions }));
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toContain('dynamic climate model');
+    }
+    const live = parseReplay(JSON.stringify({ ...file, formatVersion: 6, actions: [], initialWeather: { source: 'NOAA GFS', modelRun: '2026-10-27T00:00:00.000Z', pressure: Array(16200).fill(1010), u: Array(16200).fill(0), v: Array(16200).fill(0) } }));
+    expect(live.ok).toBe(false);
+  });
+
   it('accepts southern and dateline positions', () => {
     const odd = { ...file, actions: [{ tick: 0, type: 'moisture', lon: 179.99, lat: -33 }, { tick: 1, type: 'high', lon: -180, lat: -90 }] };
     expect(parseReplay(JSON.stringify(odd)).ok).toBe(true);
@@ -45,7 +59,7 @@ describe('portable world snapshots (replay files, version 6)', () => {
 
   it('rejects other scenarios, old versions, bad ticks, bad positions and unknown fields', () => {
     const bad: Record<string, unknown>[] = [
-      { scenarioId: 'another-world' }, { version: '0.1.0' }, { version: '0.2.0' }, { version: '0.2.1' }, { version: '0.3.0' }, { formatVersion: 1 }, { formatVersion: 2 }, { formatVersion: 3 }, { formatVersion: 4 }, { formatVersion: 5 }, { formatVersion: 7 }, { format: 'something-else' },
+      { scenarioId: 'another-world' }, { version: '0.1.0' }, { version: '0.2.0' }, { version: '0.2.1' }, { version: '0.3.0' }, { formatVersion: 1 }, { formatVersion: 2 }, { formatVersion: 3 }, { formatVersion: 4 }, { formatVersion: 5 }, { formatVersion: 6 }, { formatVersion: 8 }, { format: 'something-else' },
       { seed: -1 }, { seed: 1.5 }, { untilTick: -1 }, { untilTick: REPLAY_MAX_TICKS + 1 }, { untilTick: 2.5 },
       { actions: [{ tick: 41, type: 'warm', lon: 140, lat: 16 }] },
       { actions: [{ tick: 0, type: 'warm', lon: 999, lat: 16 }] },

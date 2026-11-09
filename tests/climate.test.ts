@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ClimateState, GameState, HistoricEnvironment } from '../src/types';
 import {
-  REPLAY_FILE_VERSION, STEP_HOURS, climateAt, createGame, gridIndex, isLand, loadHistoric, placeTool, replayGame, sampleEnvironment, setClimate, setHistoricEnvironment, stepGame, validateActions,
+  REPLAY_FILE_VERSION, STEP_HOURS, createGame, gridIndex, isLand, loadHistoric, placeTool, replayGame, sampleEnvironment, setClimate, setHistoricEnvironment, stepGame, validateActions,
 } from '../src/simulation/engine';
 import { buildReplay, parseReplay } from '../src/ui/storage';
 import fixtureJson from './fixtures/environment-fixture.json';
+import { atlanticShear, fullDays, skipDays } from './climate-helpers';
 
 const run = (s: GameState, hours: number) => { const until = s.tick + Math.round(hours / STEP_HOURS); while (s.tick < until) stepGame(s); };
 const sample = (s: GameState, lon: number, lat: number) => sampleEnvironment(s, lon, lat);
@@ -62,21 +63,40 @@ describe('climate effects on the environment', () => {
     expect(warm.airTemperature - base.airTemperature).toBeCloseTo(2, 9);
   });
 
-  it('El Niño +2 warms the eastern equatorial Pacific, cools the warm pool and raises western shear', () => {
-    const base = createGame(20261022);
-    const nino = world({ enso: 2 });
-    near(sample(nino, -120, 0).temperature - sample(base, -120, 0).temperature, 3);
-    near(sample(nino, 150, 0).temperature - sample(base, 150, 0).temperature, -1.6);
-    near(sample(nino, 135, 15).shear - sample(base, 135, 15).shear, 8);
-    near(sample(nino, -115, 12).shear - sample(base, -115, 12).shear, -6);
+  // ENSO is a hold on Nino 3.4 that the dynamic climate layer (climate-coupling.ts) answers over days to weeks, so these
+  // run 60 model days (three real days, then a cheap skip) and compare with a neutral twin.
+  const enso = (value: number): [GameState, GameState] => {
+    const s = world({ enso: value }), base = createGame(20261022);
+    for (const w of [s, base]) { fullDays(w, 3); skipDays(w, 57); }
+    return [s, base];
+  };
+
+  it('El Niño +2 does not jump the sea; after two months it warms the eastern equatorial Pacific, raises Atlantic and western shear, and lowers central and east Pacific shear', () => {
+    const quick = world({ enso: 2 }), calm = createGame(20261022);
+    expect(sample(quick, -120, 0).temperature).toBe(sample(calm, -120, 0).temperature); // the ocean has not yet responded
+    const [nino, base] = enso(2);
+    const d = (lon: number, lat: number, pick: (e: ReturnType<typeof sample>) => number) => pick(sample(nino, lon, lat)) - pick(sample(base, lon, lat));
+    const shear = (e: ReturnType<typeof sample>) => e.shear, sst = (e: ReturnType<typeof sample>) => e.temperature;
+    const seen = { sst135W: d(-135, 0, sst), warmPool150E: d(150, 0, sst), wnp135_15: d(135, 15, shear), cp175W_10: d(-175, 10, shear), ep115W_12: d(-115, 12, shear), ep100W_15: d(-100, 15, shear), atl: atlanticShear(nino) - atlanticShear(base) };
+    console.info('[climate] El Nino +2 day 60 (Oct 1), change vs neutral:', JSON.stringify(Object.fromEntries(Object.entries(seen).map(([k, v]) => [k, +v.toFixed(2)]))));
+    expect(seen.sst135W).toBeGreaterThan(0.5);
+    expect(seen.sst135W).toBeLessThan(4);
+    expect(seen.warmPool150E).toBeLessThan(0);
+    expect(seen.wnp135_15).toBeGreaterThan(0); // observed: shear rises over the western North Pacific and the Philippines
+    expect(seen.cp175W_10).toBeLessThan(-0.5); // and falls over the central Pacific, where genesis moves east
+    expect(seen.ep115W_12).toBeLessThan(0); // east Pacific SON shear falls under El Nino
+    expect(seen.atl).toBeGreaterThan(0);
+    expect(nino.climateLayer!.core.hold).toBe(2);
   });
 
   it('La Niña mirrors El Niño', () => {
-    const base = createGame(20261022);
-    const nina = world({ enso: -2 });
-    near(sample(nina, -120, 0).temperature - sample(base, -120, 0).temperature, -3);
-    near(sample(nina, 150, 0).temperature - sample(base, 150, 0).temperature, 1.6);
-    expect(sample(nina, 135, 15).shear).toBeLessThan(sample(base, 135, 15).shear);
+    const [nina, base] = enso(-2);
+    const d = (lon: number, lat: number, pick: (e: ReturnType<typeof sample>) => number) => pick(sample(nina, lon, lat)) - pick(sample(base, lon, lat));
+    expect(d(-135, 0, e => e.temperature)).toBeLessThan(-0.5);
+    expect(d(-175, 10, e => e.shear)).toBeGreaterThan(0.5);
+    expect(d(-115, 12, e => e.shear)).toBeGreaterThan(0);
+    expect(d(135, 15, e => e.shear)).toBeLessThan(0);
+    expect(atlanticShear(nina)).toBeLessThan(atlanticShear(base));
   });
 
   it('polar -5 cools air poleward of 50 degrees by 5 and leaves the tropics alone, ramping linearly from 35 degrees', () => {
@@ -126,35 +146,48 @@ describe('climate effects on the environment', () => {
 });
 
 describe('ENSO pattern is smooth', () => {
-  const enso2: ClimateState = { warming: 0, enso: 2, polar: 0 };
-  const maxStep = (points: [number, number][], pick: (o: ReturnType<typeof climateAt>) => number) => {
-    const values = points.map(([lon, lat]) => pick(climateAt(enso2, lon, lat)));
-    return Math.max(...values.slice(1).map((v, i) => Math.abs(v - values[i])));
-  };
+  // Holds of +2 and -2 against a neutral twin, sampled at days 20, 60, 100, 140 and 180 from Aug 1. The equator runs from 100E to 83W:
+  // beyond that the coast of South America (land, no SST change) ends the ocean, which is a coastline and not a front in the anomaly.
+  const sampled: Record<string, { up: GameState; down: GameState; base: GameState }> = {};
+  const DAYS = [20, 60, 100, 140, 180];
+  const worst = { equator: 0, meridian180: 0, meridian130W: 0, shearEquatorAlong15N: 0 };
+  beforeAll(() => {
+    const up = world({ enso: 2 }), down = world({ enso: -2 }), base = createGame(20261022);
+    for (const w of [up, down, base]) fullDays(w, 2);
+    let day = 2;
+    for (const d of DAYS) {
+      for (const w of [up, down, base]) skipDays(w, d - day);
+      day = d;
+      const step = (w: GameState, pts: [number, number][], pick: (e: ReturnType<typeof sampleEnvironment>) => number) => {
+        const v = pts.map(([lon, lat]) => pick(sampleEnvironment(w, lon, lat)) - pick(sampleEnvironment(base, lon, lat)));
+        return Math.max(...v.slice(1).map((x, i) => Math.abs(x - v[i])));
+      };
+      const line = (a: [number, number], b: [number, number]) => { const n = Math.max(Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])); return Array.from({ length: n + 1 }, (_, k) => { const lon = a[0] + ((b[0] - a[0]) * k) / n; return [((lon + 540) % 360) - 180, a[1] + ((b[1] - a[1]) * k) / n] as [number, number]; }); };
+      for (const w of [up, down]) {
+        worst.equator = Math.max(worst.equator, step(w, line([100, 0], [277, 0]), e => e.temperature));
+        worst.meridian180 = Math.max(worst.meridian180, step(w, line([180, -20], [180, 20]), e => e.temperature));
+        worst.meridian130W = Math.max(worst.meridian130W, step(w, line([230, -20], [230, 20]), e => e.temperature));
+        worst.shearEquatorAlong15N = Math.max(worst.shearEquatorAlong15N, step(w, line([100, 15], [260, 15]), e => e.shear));
+      }
+      if (d === 60) sampled[d] = { up: structuredClone(up), down: structuredClone(down), base: structuredClone(base) };
+    }
+    console.info('[climate] largest SST / shear change per degree over holds +-2, days 20-180:', JSON.stringify(worst));
+  }, 240000);
 
-  it('SST offset changes by less than 0.2 °C per degree along the equator from 100°E to 80°W, across the dateline', () => {
-    const points: [number, number][] = [];
-    for (let lon = 100; lon <= 280; lon++) points.push([((lon + 180) % 360) - 180, 0]);
-    expect(maxStep(points, o => o.sst)).toBeLessThan(0.2);
-    expect(climateAt(enso2, 179.5, 0).sst).toBeCloseTo(climateAt(enso2, -180.5, 0).sst, 9); // same place in either longitude convention
-    expect(climateAt(enso2, 179.99, 0).sst).toBeCloseTo(climateAt(enso2, -179.99, 0).sst, 1);
+  it('SST changes by less than 0.2 °C per degree along the equator, along 180° and along 130°W, across the dateline, for holds of ±2 on days 20 to 180', () => {
+    expect(worst.equator).toBeLessThan(0.2);
+    expect(worst.meridian180).toBeLessThan(0.2);
+    expect(worst.meridian130W).toBeLessThan(0.2);
   });
 
-  it('SST offset changes by less than 0.2 °C per degree along 180° from 20°S to 20°N', () => {
-    const points: [number, number][] = [];
-    for (let lat = -20; lat <= 20; lat++) points.push([180, lat]);
-    expect(maxStep(points, o => o.sst)).toBeLessThan(0.2);
+  it('the same location is the same place in either longitude convention', () => {
+    const { up, base } = sampled[60];
+    const d = (lon: number) => sampleEnvironment(up, lon, 0).temperature - sampleEnvironment(base, lon, 0).temperature;
+    expect(d(179.99)).toBeCloseTo(d(-179.99), 1);
   });
 
-  it('the shear offset has no jump across the dateline or the box edges either', () => {
-    const along = (a: [number, number], b: [number, number]) => { // one-degree steps
-      const pts: [number, number][] = [];
-      const n = Math.max(Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1]));
-      for (let k = 0; k <= n; k++) pts.push([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n]);
-      return pts.map(([lon, lat]) => [((lon + 540) % 360) - 180, lat] as [number, number]);
-    };
-    expect(maxStep(along([100, 15], [280, 15]), o => o.shear)).toBeLessThan(1);
-    expect(maxStep(along([180, -10], [180, 40]), o => o.shear)).toBeLessThan(1);
+  it('shear changes by less than 1 m/s per degree along 15°N', () => {
+    expect(worst.shearEquatorAlong15N).toBeLessThan(1);
   });
 });
 
@@ -183,10 +216,10 @@ describe('climate in replays', () => {
     }
   });
 
-  it('exports as version 6 and parseReplay accepts a climate action', () => {
+  it('exports as version 7 and parseReplay accepts a climate action', () => {
     const file = buildReplay(live());
     expect(file.formatVersion).toBe(REPLAY_FILE_VERSION);
-    expect(REPLAY_FILE_VERSION).toBe(6);
+    expect(REPLAY_FILE_VERSION).toBe(7);
     const parsed = parseReplay(JSON.stringify(file));
     expect(parsed.ok).toBe(true);
     if (parsed.ok) expect(parsed.replay).toEqual(file);

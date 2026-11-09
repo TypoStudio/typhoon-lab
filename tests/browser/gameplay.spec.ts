@@ -214,7 +214,7 @@ test('snapshot export/import reproduces the moment and reload resumes live play'
   expect(replay.untilTick).toBe(snapshot.tick);
   expect(replay.actions).toHaveLength(1);
   expect(replay).not.toHaveProperty('budget');
-  expect(replay.formatVersion).toBe(6);
+  expect(replay.formatVersion).toBe(7);
   expect(replay.startDayOfYear).toBe(213);
   expect(replay).not.toHaveProperty('mode');
   expect(replay).not.toHaveProperty('typhoonId');
@@ -360,7 +360,7 @@ test('same-tick replays with different tool positions refresh the visible weathe
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
   await page.getByTestId('tab-replay').click();
   const initial = await state(page);
-  const makeReplay = (lon: number) => ({ format: 'typhoon-lab-replay', formatVersion: 6, startDayOfYear: 213, scenarioId: initial.scenarioId, version: initial.version, seed: initial.seed, untilTick: 24, actions: [{ tick: 0, type: 'low', lon, lat: 16 }] });
+  const makeReplay = (lon: number) => ({ format: 'typhoon-lab-replay', formatVersion: 7, startDayOfYear: 213, scenarioId: initial.scenarioId, version: initial.version, seed: initial.seed, untilTick: 24, actions: [{ tick: 0, type: 'low', lon, lat: 16 }] });
   const load = async (lon: number) => {
     await page.getByTestId('import-replay-input').setInputFiles({ name: 'snapshot.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(makeReplay(lon))) });
     await expect.poll(async () => (await state(page)).actions[0]?.lon).toBe(lon);

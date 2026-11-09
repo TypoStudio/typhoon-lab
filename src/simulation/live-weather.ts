@@ -55,7 +55,9 @@ export function sampleLiveWeather(weather: WeatherField, lon: number, lat: numbe
   };
 }
 
-interface WeatherForcing { dayOfYear?: number; cells?: readonly EnvironmentCell[] }
+/** Climate-layer anomalies (2 degree grid, same layout as the weather): pressure in hPa, direct wind in m/s, sea temperature in degC. */
+interface ClimateForcing { slp: ArrayLike<number>; u: ArrayLike<number>; v: ArrayLike<number>; sst: ArrayLike<number>; air: ArrayLike<number> }
+interface WeatherForcing { dayOfYear?: number; cells?: readonly EnvironmentCell[]; climate?: ClimateForcing | null }
 const gaussian = (x: number, centre: number, width: number) => Math.exp(-(((x - centre) / width) ** 2));
 /** Solar-heating approximation used when no imported air temperature exists (older replays). */
 function radiativeTemperature(lat: number, day: number): number {
@@ -80,9 +82,10 @@ export function stepLiveWeather(weather: WeatherField, dt: number, forcing: Weat
     const lat = -89 + row * 2, weight = cosLat(lat);
     for (let col = 0; col < LIVE_WEATHER_COLS; col++) {
       const k = row * LIVE_WEATHER_COLS + col;
-      const t = forcing.cells?.[k]?.airTemperature ?? weather.airTemperature?.[k] ?? radiativeTemperature(lat, day);
+      const t = (forcing.cells?.[k]?.airTemperature ?? weather.airTemperature?.[k] ?? radiativeTemperature(lat, day)) - (forcing.climate && forcing.cells ? forcing.climate.air[k] : 0);
       const sea = forcing.cells ? (forcing.cells[k].land ? null : forcing.cells[k].temperature) : weather.seaTemperature?.[k];
-      heat[k] = sea == null ? t : 0.7 * t + 0.3 * sea;
+      // The climate layer's sea-surface and air-temperature anomalies are already represented by its own pressure anomaly: keep them out of the thermal low.
+      heat[k] = sea == null ? t : 0.7 * t + 0.3 * (forcing.climate ? sea - forcing.climate.sst[k] : sea);
       zonalHeat[row] += heat[k] / LIVE_WEATHER_COLS;
       if (Math.abs(lat) < 20) { tropicHeat += heat[k] * weight; tropicWeight += weight; }
       if (Math.abs(lat) > 60) { polarHeat += heat[k] * weight; polarWeight += weight; }
@@ -102,7 +105,7 @@ export function stepLiveWeather(weather: WeatherField, dt: number, forcing: Weat
       const fromLon = lon - weather.u[k] * 3.6 * dt / (KM_PER_DEG_LON_EQ * cosLat((lat + fromLat) / 2));
       const from = sampleLiveWeather(weather, fromLon, fromLat);
       const thermalLow = clamp(-0.18 * (heat[k] - zonalHeat[row]), -5, 5);
-      const equilibrium = REFERENCE_PRESSURE + belt * circulation + thermalLow;
+      const equilibrium = REFERENCE_PRESSURE + belt * circulation + thermalLow + (forcing.climate ? forcing.climate.slp[k] : 0);
       pressure[k] = clamp(equilibrium + (from.p - equilibrium) * decay, 800, 1100);
       u[k] = from.u; v[k] = from.v;
       if (air) {
@@ -114,6 +117,7 @@ export function stepLiveWeather(weather: WeatherField, dt: number, forcing: Weat
   }
   // Same damped pressure-gradient response as the game's other pressure systems.
   const sinFloor = Math.sin(10 * Math.PI / 180);
+  const climate = forcing.climate;
   for (let row = 0; row < LIVE_WEATHER_ROWS; row++) {
     const lat = -89 + row * 2, s = Math.sin(lat * Math.PI / 180);
     const response = (0.45 / 1.2) * (s / (s * s + sinFloor * sinFloor)) / (2 * 7.292e-5);
@@ -130,8 +134,9 @@ export function stepLiveWeather(weather: WeatherField, dt: number, forcing: Weat
       const gx = (pressure[east] - pressure[west]) * 100 / (4 * KM_PER_DEG_LON_EQ * cosLat(lat) * 1000);
       const gy = (pressure[north * LIVE_WEATHER_COLS + col] - pressure[south * LIVE_WEATHER_COLS + col]) * 100
         / ((north - south) * 2 * KM_PER_DEG_LAT * 1000);
-      u[k] = clamp(u[k] * (1 - adjust) + (zonal - response * gy) * adjust, -200, 200);
-      v[k] = clamp(v[k] * (1 - adjust) + (meridional + response * gx) * adjust, -200, 200);
+      // Near the equator the geostrophic response vanishes: the climate layer's tropical wind (faded out poleward) joins the target directly.
+      u[k] = clamp(u[k] * (1 - adjust) + (zonal - response * gy + (climate ? climate.u[k] : 0)) * adjust, -200, 200);
+      v[k] = clamp(v[k] * (1 - adjust) + (meridional + response * gx + (climate ? climate.v[k] : 0)) * adjust, -200, 200);
     }
   }
   weather.pressure = pressure; weather.u = u; weather.v = v;

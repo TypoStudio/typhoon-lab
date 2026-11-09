@@ -1,4 +1,5 @@
 import type { LocalNames } from './i18n';
+import type { ClimateLayer } from './simulation/climate-coupling';
 
 export interface GeoPoint { lon: number; lat: number }
 export type Coordinate = [number, number];
@@ -168,7 +169,10 @@ export interface GameState {
   weather?: WeatherField;
   weatherSource?: 'live' | 'cached' | 'base';
   traffic: TrafficSimulation;
-  genesis: GenesisState; climate: ClimateState; historic: HistoricLoad[]; nextStormId: number;
+  genesis: GenesisState; climate: ClimateState;
+  /** Dynamic ENSO layer (see climate-coupling.ts); null until the ENSO slider, a warm/cool tool within 30 degrees or a live start activates it. Derived from seed, actions and the starting weather, so replays do not store it. */
+  climateLayer: ClimateLayer | null;
+  historic: HistoricLoad[]; nextStormId: number;
   scenarioId: string; version: string; seed: number; tick: number; hours: number;
   /** Calendar: day of the year (0..365.25, fractional) at hour 0; moved by season actions. `dayOfYear(state)` is today's date. */
   startDayOfYear: number;

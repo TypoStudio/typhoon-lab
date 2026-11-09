@@ -91,7 +91,7 @@ test('a loaded typhoon survives a replay export and import', async ({ page }) =>
   await page.getByTestId('export-replay').click();
   const file = await readFile((await (await downloaded).path())!, 'utf8');
   const replay = JSON.parse(file);
-  expect(replay.formatVersion).toBe(6);
+  expect(replay.formatVersion).toBe(7);
   expect(replay).not.toHaveProperty('mode');
   expect(replay.actions).toEqual([expect.objectContaining({ type: 'historic', typhoonId: 'maemi-2003' })]);
   const snapshot = () => page.evaluate(() => {

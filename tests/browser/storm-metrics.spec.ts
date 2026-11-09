@@ -36,7 +36,7 @@ test('each storm shows movement speed, maximum wind, centre pressure and radii i
     return { scenarioId, version, seed };
   });
   await page.getByTestId('tab-replay').click();
-  const replay = { ...meta, format: 'typhoon-lab-replay', formatVersion: 6, startDayOfYear: 213, untilTick: 128,
+  const replay = { ...meta, format: 'typhoon-lab-replay', formatVersion: 7, startDayOfYear: 213, untilTick: 128,
     actions: [
       { tick: 0, type: 'warm', lon: 140, lat: 16 }, { tick: 0, type: 'moisture', lon: 140, lat: 16 },
       { tick: 0, type: 'low', lon: 140, lat: 16 }, { tick: 0, type: 'low', lon: 141, lat: 16 },

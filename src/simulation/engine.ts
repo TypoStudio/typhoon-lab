@@ -36,10 +36,15 @@ import { CITIES, LAND_POLYGONS, SCENARIO } from '../data/world';
 import { AGENCY_NAMES, typhoonById } from '../data/typhoons';
 import { fieldsAt, sampleHistoric, windowCells } from './historic';
 import { currentWeather, isLiveWeatherSnapshot, sampleLiveWeather, stepLiveWeather } from './live-weather';
+import { setSstHold, stackSstPatch } from './climate-core';
+import {
+  alignClimateCalendar, anomaliesFor, anomalyAt, createClimateLayer, createLiveClimateLayer, newAnomalyPoint, rebuildAnomalies, sstUnionAdjustment, stepClimateLayer,
+  type AnomalyContext, type AnomalyPoint, type AnomalySet,
+} from './climate-coupling';
 import { LandIndex, clamp, cosLat, distanceKm, hash01, moveKm, offsetKm, smoothstep, wrapLon } from './geo';
 
 export const SIMULATION_VERSION = '0.8.0';
-export const REPLAY_FILE_VERSION = 6;
+export const REPLAY_FILE_VERSION = 7;
 export const BOUNDS = { west: -180, east: 180, south: -90, north: 90 } as const;
 export const STEP_HOURS = 0.25;
 export const TICKS_PER_HOUR = Math.round(1 / STEP_HOURS);
@@ -423,36 +428,21 @@ export function normalizeClimate(key: unknown, value: unknown): number | null {
   const [lo, hi] = CLIMATE_RANGE[key as ClimateKey];
   return value < lo || value > hi ? null : Math.round(value * 10) / 10 + 0; // + 0 turns -0 into 0
 }
-/**
- * 1 inside a lon/lat box, falling off as a Gaussian outside it. Longitude uses the wrapped difference to the
- * box centre, so a box (or its taper) may cross the dateline and cells stored as -180..180 or 0..360 agree.
- */
-function boxTaper(lon: number, lat: number, lon0: number, lon1: number, lat0: number, lat1: number, sLon: number, sLat: number): number {
-  const dLon = Math.max(0, Math.abs(wrapLon(lon - (lon0 + lon1) / 2)) - (lon1 - lon0) / 2);
-  const dLat = Math.max(lat0 - lat, 0, lat - lat1);
-  return Math.exp(-((dLon / sLon) ** 2) - ((dLat / sLat) ** 2));
-}
-/** ENSO box tapers (degrees): wide enough that the SST pattern changes by less than 0.2 °C per degree at ENSO ±2. */
-const ENSO_TAPER_LON = 20;
-const ENSO_TAPER_LAT = 6;
 interface ClimateOffsets { sst: number; air: number; shear: number; humidity: number }
-/** Offsets the climate controls add at a point. SST applies to ocean only; air, shear and humidity everywhere. */
+/**
+ * Offsets the warming and polar controls add at a point. SST applies to ocean only; air and humidity everywhere. ENSO is
+ * not an offset: it nudges the dynamic climate layer (climate-coupling.ts), whose anomalies the sampler and grid add.
+ */
 export function climateAt(c: ClimateState, lon: number, lat: number): ClimateOffsets {
   const polar = c.polar * clamp((Math.abs(lat) - 35) / 15, 0, 1); // 0 at 35°, full from 50°
-  let sst = c.warming + polar;
-  let shear = 0;
-  if (c.enso !== 0) {
-    sst += c.enso * (1.5 * boxTaper(lon, lat, -170, -80, -6, 6, ENSO_TAPER_LON, ENSO_TAPER_LAT) - 0.8 * boxTaper(lon, lat, 120, 170, -6, 6, ENSO_TAPER_LON, ENSO_TAPER_LAT));
-    shear = c.enso * (4 * boxTaper(lon, lat, 110, 170, 5, 25, ENSO_TAPER_LON, ENSO_TAPER_LAT) - 3 * boxTaper(lon, lat, -140, -95, 5, 20, ENSO_TAPER_LON, ENSO_TAPER_LAT));
-  }
-  return { sst, air: c.warming + polar, shear, humidity: 0.02 * c.warming };
+  return { sst: c.warming + polar, air: c.warming + polar, shear: 0, humidity: 0.02 * c.warming };
 }
 interface ClimateGrid { key: string; sst: Float64Array; air: Float64Array; shear: Float64Array; humidity: number }
 let climateGridCache: ClimateGrid | null = null;
-/** Per-cell climate offsets, recomputed only when a control changes; null while every control is 0. */
+/** Per-cell climate offsets, recomputed only when a control changes; null while warming and polar are 0. */
 function climateGrid(c: ClimateState): ClimateGrid | null {
-  if (c.warming === 0 && c.enso === 0 && c.polar === 0) return null;
-  const key = `${c.warming},${c.enso},${c.polar}`;
+  if (c.warming === 0 && c.polar === 0) return null;
+  const key = `${c.warming},${c.polar}`;
   if (climateGridCache?.key === key) return climateGridCache;
   const cells = getStaticGrid().cells;
   const grid: ClimateGrid = { key, sst: new Float64Array(cells.length), air: new Float64Array(cells.length), shear: new Float64Array(cells.length), humidity: 0.02 * c.warming };
@@ -463,6 +453,43 @@ function climateGrid(c: ClimateState): ClimateGrid | null {
   climateGridCache = grid;
   return grid;
 }
+
+// ---- Dynamic climate layer (ENSO): anomalies from climate-coupling.ts, cached per layer ----
+const CLIMATE_DAY_TICKS = 24 * TICKS_PER_HOUR;
+let anomalyContext: AnomalyContext | null = null;
+function climateContext(): AnomalyContext {
+  anomalyContext ??= { land: centreLandMask(), baseShear: (seed, lon, lat) => Math.max(0, baseShear(seed, lon, lat)) };
+  return anomalyContext;
+}
+/** The layer's current anomaly fields, or null while no action has activated it. */
+function anomalySet(state: GameState): AnomalySet | null {
+  return state.climateLayer ? anomaliesFor(state.climateLayer, climateContext()) : null;
+}
+/** Anomaly fields for a base world only: a live game carries them in its evolving weather instead. */
+interface SteeringClimate { set: AnomalySet; recorded: ((lon: number, lat: number) => boolean) | null }
+function baseModeAnomalies(state: GameState): SteeringClimate | null {
+  const set = state.climateLayer && !currentWeather(state) ? anomalySet(state) : null;
+  if (!set) return null;
+  const active = activeHistoric(state);
+  return { set, recorded: active ? (lon, lat) => sampleHistoric(active.data, active.hours, active.startIso, lon, lat) !== null : null };
+}
+function rebuildClimate(state: GameState): void {
+  if (state.climateLayer) rebuildAnomalies(state.climateLayer, climateContext());
+}
+const anomalyScratch = newAnomalyPoint();
+function climateAnomalyAt(state: GameState, lon: number, lat: number): AnomalyPoint | null {
+  const a = anomalySet(state);
+  return a ? anomalyAt(a, lon, lat, anomalyScratch) : null;
+}
+function ensureClimateLayer(state: GameState) {
+  if (!state.climateLayer) {
+    state.climateLayer = createClimateLayer(state.seed, Math.max(1, Math.floor(dayOfYear(state))));
+    rebuildClimate(state);
+  }
+  return state.climateLayer;
+}
+const warmScratch = new Float64Array(GRID_COLS * GRID_ROWS);
+const recordedScratch = new Uint8Array(GRID_COLS * GRID_ROWS);
 
 /** E-folding time (h) with which a player-driven wind departure relaxes back to the record. */
 const WIND_DELTA_RELAX_HOURS = 72;
@@ -506,6 +533,7 @@ function environmentAt(state: GameState, systems: PressureSystem[], lon: number,
   let shearDelta = 0;
   const unlimited = { air: 0, vertical: 0, instability: 0, cooling: 0, drying: 0, shear: 0 };
   let humidity = baseHumidity(state.seed, lon, lat) - (land ? 0.08 : 0);
+  let warmSum = 0; // the tools' own warming, for the climate layer's union
   const s = systemsAt(systems, lon, lat);
   let airTemperature = baseTemp - 1.5 + season.air;
   let pressure = REFERENCE_PRESSURE + s.p;
@@ -534,8 +562,15 @@ function environmentAt(state: GameState, systems: PressureSystem[], lon: number,
   if (!land) temperature += climate.sst;
   airTemperature += climate.air;
   humidity += climate.humidity;
+  // ENSO layer: not where a recorded field holds the real ENSO state. A live game's pressure and wind already carry it.
+  const ca = h || !state.climateLayer ? null : climateAnomalyAt(state, lon, lat);
+  if (ca) {
+    airTemperature += ca.air;
+    humidity += ca.hum;
+    if (!background) { pressure += ca.slp; u += ca.u + ca.ug; v += ca.v + ca.vg; }
+  }
   if (withEffects) for (const e of state.effects) {
-    if (e.type === 'warm' && !land) temperature += EFFECT_STRENGTH.warm * effectWeight(e) * effectFalloff(e, lon, lat);
+    if (e.type === 'warm' && !land) { const dT = EFFECT_STRENGTH.warm * effectWeight(e) * effectFalloff(e, lon, lat); temperature += dT; warmSum += dT; }
     else if (e.type === 'moisture') humidity += EFFECT_STRENGTH.moisture * effectWeight(e) * effectFalloff(e, lon, lat);
     else if (e.type === 'warm-air' || e.type === 'cold-air') {
       const delta = EFFECT_STRENGTH[e.type] * effectWeight(e) * effectFalloff(e, lon, lat);
@@ -562,8 +597,9 @@ function environmentAt(state: GameState, systems: PressureSystem[], lon: number,
       instability += delta; if (e.formation) unlimited.instability += delta;
     }
   }
+  const coolCap = capEffect(cooling, unlimited.cooling, EFFECT_STACK_LIMITS.cooling, 0);
   return {
-    temperature: temperature - capEffect(cooling, unlimited.cooling, EFFECT_STACK_LIMITS.cooling, 0), airTemperature: airTemperature + capEffect(airHeating, unlimited.air, EFFECT_STACK_LIMITS.air), airHeating: capEffect(airHeating, unlimited.air, EFFECT_STACK_LIMITS.air), updraft: capEffect(updraft, unlimited.vertical, EFFECT_STACK_LIMITS.vertical), instability: capEffect(instability, unlimited.instability, EFFECT_STACK_LIMITS.instability), drying: capEffect(drying, unlimited.drying, EFFECT_STACK_LIMITS.drying, 0), cooling: capEffect(cooling, unlimited.cooling, EFFECT_STACK_LIMITS.cooling, 0), humidity: clamp(humidity - drying, 0, 1), shear: Math.max(0, baseShear(state.seed, lon, lat) + climate.shear + capEffect(shearDelta, unlimited.shear, SHEAR_STACK_CAP)), land,
+    temperature: ca && !land ? temperature - coolCap + sstUnionAdjustment(warmSum - coolCap, ca.sst) : temperature - coolCap, airTemperature: airTemperature + capEffect(airHeating, unlimited.air, EFFECT_STACK_LIMITS.air), airHeating: capEffect(airHeating, unlimited.air, EFFECT_STACK_LIMITS.air), updraft: capEffect(updraft, unlimited.vertical, EFFECT_STACK_LIMITS.vertical), instability: capEffect(instability, unlimited.instability, EFFECT_STACK_LIMITS.instability), drying: capEffect(drying, unlimited.drying, EFFECT_STACK_LIMITS.drying, 0), cooling: capEffect(cooling, unlimited.cooling, EFFECT_STACK_LIMITS.cooling, 0), humidity: clamp(humidity - drying, 0, 1), shear: Math.max(0, baseShear(state.seed, lon, lat) + climate.shear + (ca ? ca.shear : 0) + capEffect(shearDelta, unlimited.shear, SHEAR_STACK_CAP)), land,
     pressure, u, v,
   };
 }
@@ -952,7 +988,7 @@ export function stormVortexAt(storm: Vortex, motion: { u: number; v: number }, l
 }
 
 const STEER_RING_KM = 400;
-function steeringAt(systems: PressureSystem[], p0: GeoPoint, wind: number, day: number, weather?: WeatherField): { u: number; v: number } {
+function steeringAt(systems: PressureSystem[], p0: GeoPoint, wind: number, day: number, weather?: WeatherField, climate?: SteeringClimate | null): { u: number; v: number } {
   let u = 0;
   let v = 0;
   const n = 8;
@@ -962,6 +998,7 @@ function steeringAt(systems: PressureSystem[], p0: GeoPoint, wind: number, day: 
     const initial = weather && sampleLiveWeather(weather, p.lon, p.lat);
     u += s.u + (initial ? initial.u : zonalBackground(p.lat) + seasonalAt(day, p.lat, false).jet);
     v += s.v + (initial ? initial.v : 0);
+    if (climate && !climate.recorded?.(p.lon, p.lat)) { const ca = anomalyAt(climate.set, p.lon, p.lat, anomalyScratch); u += ca.u + ca.ug; v += ca.v + ca.vg; } // recorded winds already hold the real ENSO state
   }
   // Game beta drift: westward and poleward, stronger for stronger vortices.
   const beta = 0.6 + 0.6 * clamp(wind / 40, 0, 1);
@@ -973,8 +1010,8 @@ function steeringAt(systems: PressureSystem[], p0: GeoPoint, wind: number, day: 
  * core avoids singular speeds, and young pairs ramp in without losing independent births.
  * Sum in stable ID order, then cap the combined perturbation for crowded worlds.
  */
-function coupledSteering(systems: PressureSystem[], storm: Storm, neighbours: Storm[], day: number, weather?: WeatherField): { u: number; v: number } {
-  const base = steeringAt(systems, storm, storm.wind, day, weather);
+function coupledSteering(systems: PressureSystem[], storm: Storm, neighbours: Storm[], day: number, weather?: WeatherField, climate?: SteeringClimate | null): { u: number; v: number } {
+  const base = steeringAt(systems, storm, storm.wind, day, weather, climate);
   let u = 0;
   let v = 0;
   for (const other of [...neighbours].sort((a, b) => a.id - b.id)) {
@@ -998,18 +1035,19 @@ function coupledSteering(systems: PressureSystem[], storm: Storm, neighbours: St
 /** Instantaneous steering velocity (m/s), excluding the storm's own circulation. */
 export function steeringFlow(state: GameState, storm: Storm | undefined = state.storms[0]): { u: number; v: number } {
   if (!storm) return { u: 0, v: 0 };
-  return coupledSteering(allSystems(state), storm, state.storms, seasonDay(state), currentWeather(state));
+  return coupledSteering(allSystems(state), storm, state.storms, seasonDay(state), currentWeather(state), baseModeAnomalies(state));
 }
 
 const motionCache = new WeakMap<GameState, { tick: number; key: string; motions: { u: number; v: number }[] }>();
 function stormMotions(state: GameState, systems?: PressureSystem[]): { u: number; v: number }[] {
   const key = state.storms.map(s => `${s.id}:${s.lon}:${s.lat}:${s.wind}:${s.radiusKm}:${s.ageHours}`).join('|')
-    + '#' + state.effects.map(e => `${e.id}:${e.ageHours}`).join(',');
+    + '#' + state.effects.map(e => `${e.id}:${e.ageHours}`).join(',') + '#' + (state.climateLayer?.anomalies?.rev ?? 0);
   const c = motionCache.get(state);
   if (c && c.tick === state.tick && c.key === key) return c.motions;
   const sys = systems ?? allSystems(state);
   const day = seasonDay(state);
-  const motions = state.storms.map(s => coupledSteering(sys, s, state.storms, day, currentWeather(state)));
+  const climateSet = baseModeAnomalies(state);
+  const motions = state.storms.map(s => coupledSteering(sys, s, state.storms, day, currentWeather(state), climateSet));
   motionCache.set(state, { tick: state.tick, key, motions });
   return motions;
 }
@@ -1032,6 +1070,8 @@ export function totalWind(state: GameState, lon: number, lat: number): { u: numb
   const vr = initial ? initial.v : 0;
   let u = initial ? ur + s.u : s.u + zonalBackground(lat) + seasonalAt(seasonDay(state), lat, false).jet;
   let v = initial ? vr + s.v : s.v;
+  const ca = h || background || !state.climateLayer ? null : climateAnomalyAt(state, x, lat); // a live game's wind already carries the ENSO layer
+  if (ca) { u += ca.u + ca.ug; v += ca.v + ca.vg; }
   const motions = stormMotions(state, systems);
   state.storms.forEach((storm, k) => {
     const w = stormVortexAt(storm, motions[k], x, lat);
@@ -1060,6 +1100,7 @@ export function totalPressure(state: GameState, lon: number, lat: number): numbe
   const systems = allSystems(state);
   let p = (recorded ?? (background ? sampleLiveWeather(background, x, lat).p : REFERENCE_PRESSURE))
     + systemsAt(recorded !== null && !state.initialWeather ? systems.slice(baseSystems(state.seed).length) : systems, x, lat).p;
+  if (!h && !background && state.climateLayer) p += climateAnomalyAt(state, x, lat)!.slp;
   for (const storm of state.storms) p += stormVortexAt(storm, NO_MOTION, x, lat).dp;
   for (const r of state.remnants) p += stormVortexAt(r, NO_MOTION, x, lat).dp;
   return p;
@@ -1088,12 +1129,14 @@ export function createGame(seed: number = SCENARIO.seed, startDayOfYear: number 
       ...(initialWeather.airTemperature ? { airTemperature: initialWeather.airTemperature.slice() } : {}),
     } } : {}),
     traffic: createTraffic(seed),
-    genesis: { enabled: false, waves: 0, nextSpawnTick: 0 }, climate: { warming: 0, enso: 0, polar: 0 }, historic: [], nextStormId: 1,
+    genesis: { enabled: false, waves: 0, nextSpawnTick: 0 }, climate: { warming: 0, enso: 0, polar: 0 }, climateLayer: null, historic: [], nextStormId: 1,
     scenarioId: SCENARIO.id, version: SIMULATION_VERSION, seed, tick: 0, hours: 0, startDayOfYear, initialStartDayOfYear: startDayOfYear, phase: 'seeding',
     score: 0, exposedPopulation: 0, storms: [], remnants: [], stormArchive: [], thunderstorms: [], nextThunderstormId: 1, candidates: [], effects: [], grid,
     cities: CITIES.map(c => ({ id: c.id, score: 0, damage: 0, exposedPopulation: 0, maxWind: 0, blizzardHours: 0 })),
     weatherHazards: [], disasters: [], news: [], actions: [], peakWind: 0, blizzardCells: 0,
   };
+  // A live start carries the real ENSO state of its analysis into the dynamic climate layer.
+  if (initialWeather) state.climateLayer = createLiveClimateLayer(seed, startDayOfYear, new Date(initialWeather.modelRun).getUTCFullYear(), state.weather!);
   addNews(state, { id: 'welcome', kind: 'info', title: 'Calm tropics',
     text: 'No storms yet. Overlap warm water, moisture and a low over tropical ocean to organise one.' });
   refreshGrid(state);
@@ -1132,10 +1175,23 @@ export function placeTool(state: GameState, type: ToolType, lon: number, lat: nu
     }
   }
   appendTool(state, type, lon, lat, formation);
+  if (!formation && (type === 'warm' || type === 'cool') && Math.abs(lat) <= 30) feedClimate(state, type, lon, lat);
   syncStormPressures(state);
   refreshGrid(state);
   refreshForecasts(state);
   return { ok: true };
+}
+
+/** A warm or cool tool in the tropics is also an SST patch of the climate layer; overlapping patches merge, so stacked tools escalate. Formation recipes are local and stay out. */
+function feedClimate(state: GameState, type: 'warm' | 'cool', lon: number, lat: number): void {
+  const tool = TOOL_BY_TYPE.get(type)!;
+  const layer = ensureClimateLayer(state);
+  const sigmaKm = tool.radiusKm / 2; // the tool's Gaussian exp(-d²/2σ²) is the patch's exp(-(d/r)²) with r = σ√2
+  stackSstPatch(layer.core, {
+    lonEast: (wrapLon(lon) + 360) % 360, lat, radiusDeg: Math.max(2, (sigmaKm * Math.SQRT2) / 111.32),
+    deltaC: type === 'warm' ? EFFECT_STRENGTH.warm : -EFFECT_STRENGTH.cool, days: tool.durationHours / 24,
+  });
+  rebuildClimate(state);
 }
 
 /** Append a validated tool; recipes refresh the expensive world fields just once. */
@@ -1187,6 +1243,10 @@ export function setClimate(state: GameState, key: ClimateKey, value: number): Pl
   }
   state.actions.push({ tick: state.tick, type: 'climate', key, value: rounded });
   state.climate[key] = rounded;
+  if (key === 'enso' && (rounded !== 0 || state.climateLayer)) { // the slider holds Nino 3.4 at its value; the ocean then responds over days to weeks
+    setSstHold(ensureClimateLayer(state).core, rounded === 0 ? null : rounded);
+    rebuildClimate(state);
+  }
   refreshGrid(state);
   refreshForecasts(state);
   return { ok: true };
@@ -1197,6 +1257,7 @@ export function setSeason(state: GameState, day: number): PlacementResult {
   if (!isValidDayOfYear(day)) return { ok: false, reason: 'The day of the year must be between 0 and 366.' };
   state.actions.push({ tick: state.tick, type: 'season', dayOfYear: day });
   state.startDayOfYear = (((day - state.hours / 24) % YEAR_DAYS) + YEAR_DAYS) % YEAR_DAYS;
+  if (state.climateLayer) { alignClimateCalendar(state.climateLayer, Math.max(1, Math.floor(dayOfYear(state)))); rebuildClimate(state); }
   refreshGrid(state);
   refreshForecasts(state);
   return { ok: true };
@@ -1259,14 +1320,39 @@ function getBaseGrid(seed: number): BaseGrid {
   return b;
 }
 
+interface EffectiveBase { base: BaseGrid; season: SeasonGrid; rev: number; t: Float64Array; air: Float64Array; hum: Float64Array; sh: Float64Array; p: Float64Array; u: Float64Array; v: Float64Array }
+const effectiveBases = new WeakMap<AnomalySet, EffectiveBase>();
+/** The base grid plus the season plus the layer's anomalies, refilled only when the day, the layer's fields or the seed change. */
+function effectiveBase(b: BaseGrid, season: SeasonGrid, a: AnomalySet): EffectiveBase {
+  let e = effectiveBases.get(a);
+  if (e && e.base === b && e.season === season && e.rev === a.rev) return e;
+  const n = b.t.length;
+  e ??= { base: b, season, rev: a.rev, t: new Float64Array(n), air: new Float64Array(n), hum: new Float64Array(n), sh: new Float64Array(n), p: new Float64Array(n), u: new Float64Array(n), v: new Float64Array(n) };
+  e.base = b; e.season = season; e.rev = a.rev;
+  for (let k = 0; k < n; k++) {
+    e.t[k] = b.t[k] + season.sst[k] + a.sst[k];
+    e.air[k] = b.t[k] - 1.5 + season.air[k] + a.air[k];
+    e.hum[k] = b.h[k] + a.hum[k];
+    e.sh[k] = b.sh[k] + a.shear[k];
+    e.p[k] = b.p[k] + a.slp[k];
+    e.u[k] = b.u[k] + season.jet[k] + a.u[k] + a.ug[k];
+    e.v[k] = b.v[k] + a.v[k] + a.vg[k];
+  }
+  effectiveBases.set(a, e);
+  return e;
+}
+
 let centreLandCache: Uint8Array | null = null;
-/** isLand() at a grid cell centre (point test, as in totalWind), cached because refreshGrid runs every step. */
-function centreLand(k: number): boolean {
+function centreLandMask(): Uint8Array {
   if (!centreLandCache) {
     const cells = getStaticGrid().cells;
     centreLandCache = Uint8Array.from(cells, c => (isLand(c.lon, c.lat) ? 1 : 0));
   }
-  return centreLandCache[k] === 1;
+  return centreLandCache;
+}
+/** isLand() at a grid cell centre (point test, as in totalWind), cached because refreshGrid runs every step. */
+function centreLand(k: number): boolean {
+  return centreLandMask()[k] === 1;
 }
 
 /**
@@ -1277,7 +1363,6 @@ function refreshGrid(state: GameState): void {
   const b = getBaseGrid(state.seed);
   const season = seasonGrid(seasonDay(state));
   const g = state.grid;
-  const hum = new Float64Array(b.h);
   const cooling = new Float64Array(g.length);
   const air = new Float64Array(g.length);
   const shearDelta = new Float64Array(g.length);
@@ -1286,6 +1371,10 @@ function refreshGrid(state: GameState): void {
   const recU = new Float64Array(g.length); // recorded base wind per cell, 0 where none: it already includes land friction, so the land factor skips it
   const recV = new Float64Array(g.length);
   const background = currentWeather(state);
+  const anom = anomalySet(state); // dynamic ENSO layer, if active
+  const eff = anom ? effectiveBase(b, season, anom) : null; // base fields with the layer's anomalies folded in: no per-step work for them
+  const hum = new Float64Array(eff ? eff.hum : b.h);
+  const warmAcc = anom && state.effects.some(e => e.type === 'warm' || e.type === 'cool') ? warmScratch.fill(0) : null; // the tools' own warming per cell, for the layer's union with its SST anomaly
   const seaSeasonOffsets = background?.seaTemperature ? Float64Array.from({ length: GRID_ROWS }, (_, row) => {
     const lat = BOUNDS.south + (row + 0.5) * GRID_STEP;
     return seasonalAt(seasonDay(state), lat, false).sst - seasonalAt(Math.floor(state.initialStartDayOfYear), lat, false).sst;
@@ -1293,26 +1382,30 @@ function refreshGrid(state: GameState): void {
   for (let k = 0; k < g.length; k++) {
     const c = g[k];
     c.airHeating = 0; c.updraft = 0; c.instability = 0; c.rain = 0; c.snow = 0; c.blizzard = false;
-    c.temperature = b.t[k] + season.sst[k]; c.shear = b.sh[k]; c.pressure = b.p[k]; c.u = b.u[k] + season.jet[k]; c.v = b.v[k];
+    if (eff) { c.temperature = eff.t[k]; c.shear = eff.sh[k]; c.pressure = eff.p[k]; c.u = eff.u[k]; c.v = eff.v[k]; }
+    else { c.temperature = b.t[k] + season.sst[k]; c.shear = b.sh[k]; c.pressure = b.p[k]; c.u = b.u[k] + season.jet[k]; c.v = b.v[k]; }
     if (background) {
       c.pressure = background.pressure[k];
       c.u = recU[k] = background.u[k]; c.v = recV[k] = background.v[k];
     }
-    air[k] = b.t[k] - 1.5 + season.air[k];
-    if (background?.airTemperature) air[k] = background.airTemperature[k];
+    air[k] = eff ? eff.air[k] : b.t[k] - 1.5 + season.air[k];
+    if (background?.airTemperature) air[k] = background.airTemperature[k] + (anom ? anom.air[k] : 0);
     const sea = background?.seaTemperature?.[k];
-    if (!c.land && sea != null) c.temperature = sea + seaSeasonOffsets![Math.floor(k / GRID_COLS)];
+    if (!c.land && sea != null) c.temperature = sea + seaSeasonOffsets![Math.floor(k / GRID_COLS)] + (anom ? anom.sst[k] : 0);
   }
   const active = activeHistoric(state);
+  const recorded = anom && active ? recordedScratch.fill(0) : null; // cells whose recorded fields already hold the real ENSO state
   if (active) { // a historic typhoon is loaded: recorded fields replace the fictional ones inside the dataset window (NaN = missing, keep the base value)
     const f = fieldsAt(active.data, active.hours, active.startIso);
     windowCells(active.data).forEach((k, w) => {
       const c = g[k];
-      if (!Number.isNaN(f.t[w])) c.temperature = f.t[w];
-      if (!Number.isNaN(f.p[w])) c.pressure = f.p[w];
-      if (!Number.isNaN(f.u[w]) && !Number.isNaN(f.v[w])) { c.u = recU[k] = f.u[w]; c.v = recV[k] = f.v[w]; }
-      if (!Number.isNaN(f.h[w])) hum[k] = f.h[w];
-      if (!Number.isNaN(f.air[w])) air[k] = f.air[w];
+      // The recorded field already holds the real ENSO state: it replaces the value (layer anomaly included); where a field is missing the layer's anomaly is taken out of the kept base value.
+      if (anom) { recorded![k] = 1; c.shear -= anom.shear[k]; } // shear is not recorded
+      if (!Number.isNaN(f.t[w])) c.temperature = f.t[w]; else if (anom) c.temperature -= anom.sst[k];
+      if (!Number.isNaN(f.p[w])) c.pressure = f.p[w]; else if (anom && !background) c.pressure -= anom.slp[k];
+      if (!Number.isNaN(f.u[w]) && !Number.isNaN(f.v[w])) { c.u = recU[k] = f.u[w]; c.v = recV[k] = f.v[w]; } else if (anom && !background) { c.u -= anom.u[k] + anom.ug[k]; c.v -= anom.v[k] + anom.vg[k]; }
+      if (!Number.isNaN(f.h[w])) hum[k] = f.h[w]; else if (anom) hum[k] -= anom.hum[k];
+      if (!Number.isNaN(f.air[w])) air[k] = f.air[w]; else if (anom) air[k] -= anom.air[k];
     });
   }
   const climate = climateGrid(state.climate); // world climate adds on top of the base and of any recorded field
@@ -1347,7 +1440,7 @@ function refreshGrid(state: GameState): void {
     if (e.type !== 'low' && e.type !== 'high') {
       forCellsNear(e.lon, e.lat, e.radiusKm * SCALAR_REACH, k => {
         const c = g[k];
-        if (e.type === 'warm') { if (!c.land) c.temperature += EFFECT_STRENGTH.warm * w * effectFalloff(e, c.lon, c.lat); }
+        if (e.type === 'warm') { if (!c.land) { const dT = EFFECT_STRENGTH.warm * w * effectFalloff(e, c.lon, c.lat); c.temperature += dT; if (warmAcc) warmAcc[k] += dT; } }
         else if (e.type === 'moisture') hum[k] += EFFECT_STRENGTH.moisture * w * effectFalloff(e, c.lon, c.lat);
         else if (e.type === 'warm-air' || e.type === 'cold-air') { const delta = EFFECT_STRENGTH[e.type] * w * effectFalloff(e, c.lon, c.lat); c.airHeating += delta; if (e.formation) freeAir[k] += delta; }
         else if (e.type === 'updraft' || e.type === 'downdraft') { const delta = EFFECT_STRENGTH[e.type] * w * effectFalloff(e, c.lon, c.lat); c.updraft += delta; if (e.formation) freeVertical[k] += delta; }
@@ -1359,7 +1452,10 @@ function refreshGrid(state: GameState): void {
     }
   }
   for (let k = 0; k < g.length; k++) {
-    g[k].temperature -= capEffect(cooling[k], freeCooling[k], EFFECT_STACK_LIMITS.cooling, 0);
+    const coolCap = capEffect(cooling[k], freeCooling[k], EFFECT_STACK_LIMITS.cooling, 0);
+    g[k].temperature -= coolCap;
+    // Where the player's own warm/cool tools act on a cell, the layer's SST anomaly (already in the base) and the tools are a union, not a sum.
+    if (warmAcc && (warmAcc[k] !== 0 || coolCap !== 0) && recorded?.[k] !== 1) g[k].temperature += sstUnionAdjustment(warmAcc[k] - coolCap, anom!.sst[k]) - anom!.sst[k];
     g[k].shear = Math.max(0, g[k].shear + capEffect(shearDelta[k], freeShear[k], SHEAR_STACK_CAP));
     g[k].humidity = clamp(hum[k], 0, 1);
     g[k].airHeating = capEffect(g[k].airHeating, freeAir[k], EFFECT_STACK_LIMITS.air);
@@ -1368,7 +1464,7 @@ function refreshGrid(state: GameState): void {
     g[k].instability = capEffect(g[k].instability, freeInstability[k], EFFECT_STACK_LIMITS.instability);
     g[k].convection = convectivePotential(g[k].humidity, g[k].airHeating, g[k].updraft, g[k].airTemperature, g[k].instability);
     // Display-only rain (mm/h): background convective drizzle plus frontal lift inside a player-made low; thunderstorms and cyclones add below.
-    const lift = clamp(((background?.pressure[k] ?? b.p[k]) - g[k].pressure - 2) / 6, 0, 1); // storm vortices are added later; compare tools to the current background
+    const lift = clamp(((background?.pressure[k] ?? (eff && recorded?.[k] !== 1 ? eff.p[k] : b.p[k])) - g[k].pressure - 2) / 6, 0, 1); // storm vortices are added later; compare tools to the current background
     g[k].rain = Math.min(60, 6 * clamp((g[k].humidity - 0.75) / 0.25, 0, 1) * clamp(g[k].updraft, 0, 3) / 3
       + 12 * lift * clamp((g[k].humidity - 0.45) / 0.3, 0, 1));
   }
@@ -2056,15 +2152,17 @@ export function stepGame(state: GameState): void {
     }
   }
   state.effects = state.effects.filter(e => e.remainingHours > 1e-9);
-  if (state.weather) stepLiveWeather(state.weather, dt, { dayOfYear: dayOfYear(state), cells: state.grid });
+  if (state.weather) stepLiveWeather(state.weather, dt, { dayOfYear: dayOfYear(state), cells: state.grid, climate: anomalySet(state) });
   state.tick += 1;
   state.hours = state.tick * STEP_HOURS;
+  if (state.climateLayer && state.tick % CLIMATE_DAY_TICKS === 0) { stepClimateLayer(state.climateLayer); rebuildClimate(state); } // one climate day per 96 steps
 
   stepWeatherHazards(state, dt, point => state.grid[gridIndex(point.lon, point.lat)], item => addNews(state, item));
   let systems = allSystems(state);
   if (state.storms.length > 0) {
     const day = seasonDay(state);
-    const motions = state.storms.map(s => coupledSteering(systems, s, state.storms, day, currentWeather(state))); // same pre-move snapshot
+    const climateSet = baseModeAnomalies(state);
+    const motions = state.storms.map(s => coupledSteering(systems, s, state.storms, day, currentWeather(state), climateSet)); // same pre-move snapshot
     state.storms = state.storms.filter((s, k) => stepStorm(state, s, systems, motions[k], dt));
   }
   stepRemnants(state, systems, dt);
@@ -2122,8 +2220,9 @@ function refreshForecasts(state: GameState, systems = allSystems(state)): void {
   const paths = new Map(natural.map(s => [s.id, [] as GeoPoint[]]));
   const forecast: GameState = { ...state, news: [], storms: natural.map(s => ({ ...s })) };
   const day = seasonDay(state);
+  const climateSet = baseModeAnomalies(state);
   for (let tick = 1; tick <= FORECAST_HOURS * TICKS_PER_HOUR; tick++) {
-    const motions = forecast.storms.map(s => coupledSteering(systems, s, forecast.storms, day, currentWeather(state)));
+    const motions = forecast.storms.map(s => coupledSteering(systems, s, forecast.storms, day, currentWeather(state), climateSet));
     forecast.storms = forecast.storms.filter((s, i) => {
       const p = moveKm(s.lon, s.lat, motions[i].u * 3.6 * STEP_HOURS, motions[i].v * 3.6 * STEP_HOURS);
       s.lon = p.lon; s.lat = p.lat; s.ageHours += STEP_HOURS;
@@ -2147,6 +2246,16 @@ function refreshForecasts(state: GameState, systems = allSystems(state)): void {
 
 export function isValidUntilTick(untilTick: unknown): untilTick is number {
   return typeof untilTick === 'number' && Number.isInteger(untilTick) && untilTick >= 0 && untilTick <= REPLAY_MAX_TICKS;
+}
+
+/**
+ * Whether replaying this log builds the dynamic climate layer: a live starting analysis, an ENSO slider moved off 0, or a
+ * warm/cool tool (not a formation recipe) within 30 degrees of the equator. Without it the replay does not depend on the layer.
+ */
+export function replayActivatesClimateLayer(actions: readonly ActionRecord[], initialWeather?: unknown): boolean {
+  if (initialWeather !== undefined) return true;
+  return actions.some(a => (a.type === 'climate' && a.key === 'enso' && a.value !== 0)
+    || ((a.type === 'warm' || a.type === 'cool') && !a.formation && Math.abs(a.lat) <= 30));
 }
 
 /** Validates an untrusted action log without iterating unbounded input. Each action is one of: a placed tool, a natural-formation switch, a world-climate control, a season change or a loaded historic typhoon. */

@@ -1,6 +1,6 @@
 import { SCENARIO } from '../data/world';
 import {
-  REPLAY_FILE_VERSION, REPLAY_MAX_ACTIONS, REPLAY_MAX_TICKS, TICKS_PER_HOUR, isValidDayOfYear, isValidSeed, isValidUntilTick, validateActions,
+  REPLAY_FILE_VERSION, REPLAY_MAX_ACTIONS, REPLAY_MAX_TICKS, TICKS_PER_HOUR, isValidDayOfYear, isValidSeed, isValidUntilTick, replayActivatesClimateLayer, validateActions,
 } from '../simulation/engine';
 import type { ActionRecord, GameState, LiveWeatherSnapshot, TrafficDispatch } from '../types';
 import { isLiveWeatherSnapshot } from '../simulation/live-weather';
@@ -70,7 +70,9 @@ export function parseReplay(text: string): { ok: true; replay: ReplayFile } | { 
   try { data = JSON.parse(text); } catch { return { ok: false, error: 'The file is not valid JSON.' }; }
   if (!isRecord(data)) return { ok: false, error: 'A replay must be a JSON object.' };
   if (data.format !== REPLAY_FORMAT) return { ok: false, error: 'This is not a Typhoon Lab replay file.' };
-  if (data.formatVersion !== REPLAY_VERSION) {
+  // Version 6 predates the climate layer: it replays identically unless the log activates one.
+  const legacy = data.formatVersion === REPLAY_VERSION - 1;
+  if (data.formatVersion !== REPLAY_VERSION && !legacy) {
     return { ok: false, error: `Replay format version ${String(data.formatVersion).slice(0, 12)} is not supported; this build reads version ${REPLAY_VERSION} (older regional replays cannot be loaded).` };
   }
   for (const key of Object.keys(data)) if (!TOP_KEYS.has(key)) return { ok: false, error: `Unexpected field "${key.slice(0, 40)}".` };
@@ -82,6 +84,9 @@ export function parseReplay(text: string): { ok: true; replay: ReplayFile } | { 
   if (data.initialWeather !== undefined && !isLiveWeatherSnapshot(data.initialWeather)) return { ok: false, error: 'Replay starting weather is invalid.' };
   const checked = validateActions(data.actions, data.untilTick);
   if (!checked.ok) return { ok: false, error: checked.reason };
+  if (legacy && replayActivatesClimateLayer(checked.actions, data.initialWeather)) {
+    return { ok: false, error: `Replay format version ${REPLAY_VERSION - 1} used an ENSO slider, a warm or cool tool within 30 degrees of the equator, or a live starting analysis; this build simulates those with a dynamic climate model and would not reproduce it (it reads version ${REPLAY_VERSION}).` };
+  }
   const traffic = validateTrafficDispatches(data.trafficDispatches === undefined ? [] : data.trafficDispatches, data.untilTick);
   if (!traffic.ok) return { ok: false, error: traffic.reason };
   if (data.exportedAt !== undefined && (typeof data.exportedAt !== 'string' || data.exportedAt.length > 40)) return { ok: false, error: 'Replay export time is invalid.' };

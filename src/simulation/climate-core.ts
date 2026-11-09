@@ -189,6 +189,8 @@ const dayOfYear = (s: ClimateState): number => (s.startDayOfYear - 1 + s.day) % 
 /** Fractional month 0..12 with Jan 1 = 0. */
 const monthOf = (s: ClimateState): number => ((dayOfYear(s) + 0.5) / 365) * 12;
 export const climateYear = (s: ClimateState): number => s.startYear + Math.floor((s.startDayOfYear - 1 + s.day) / 365);
+/** Fractional month 0..12 (Jan 1 = 0) of the model day, for the monthly statistics maps. */
+export const climateMonth = monthOf;
 
 // ---- Climatology tables (lazy; land cells inherit the nearest ocean value) ----
 const cellLon = (j: number): number => OCEAN_LON0 + (j + 0.5) * OCEAN_DLON;
@@ -287,7 +289,13 @@ function limitThermocline(s: ClimateState): void {
   }
 }
 const inBox = (box: readonly [number, number], j: number): boolean => cellLon(j) >= box[0] && cellLon(j) <= box[1];
-const IN_NINO34: boolean[] = Array.from({ length: OCEAN_N }, (_, j) => inBox(BOXES.nino34, j));
+/** Strength of the hold nudging: 1 across the Nino 3.4 box, falling off as a Gaussian outside it (sigma 20 degrees of longitude, as the earlier fixed box did), so the held SST has no sharp front. */
+const HOLD_TAPER_SIGMA = 20;
+const HOLD_WEIGHT = new Float64Array(OCEAN_N);
+for (let j = 0; j < OCEAN_N; j++) {
+  const d = Math.max(0, BOXES.nino34[0] - cellLon(j), cellLon(j) - BOXES.nino34[1]);
+  HOLD_WEIGHT[j] = Math.exp(-((d / HOLD_TAPER_SIGMA) ** 2));
+}
 
 // Meridional projection of off-strip heating onto the Gill e^{-y^2/4} structure, on the 5 degree rows within 30 degrees.
 const PROJ_ROW0 = 12; // row of 27.5S
@@ -391,7 +399,7 @@ export function restoreClimate(data: unknown): ClimateState | null {
 // ---- Player SST patches ----
 const wrap180 = (d: number): number => ((((d + 180) % 360) + 360) % 360) - 180;
 /** Fraction (0..1) of a patch's anomaly present on `day`: 1 while held, then the off-strip part decays. */
-function patchAmplitude(s: ClimateState, p: number, day: number): number {
+export function patchAmplitude(s: ClimateState, p: number, day: number): number {
   const age = day - s.patches[p * 6 + 4];
   const days = s.patches[p * 6 + 5];
   if (age < 0) return 0;
@@ -564,7 +572,7 @@ export function stepClimateDay(s: ClimateState): void {
     const th = -((wb[j] * seasonal) / MIXED_DEPTH) * (T[j] - tsub);
     const dmp = -alpha * T[j];
     let force = s.stochastic ? SST_NOISE * Math.sqrt(12) * (hash01(s.seed, day, 100 + j) - 0.5) : 0;
-    if (s.hold !== null && IN_NINO34[j]) force -= (T[j] - holdT) / HOLD_DAYS;
+    if (s.hold !== null) force -= HOLD_WEIGHT[j] * (T[j] - holdT * HOLD_WEIGHT[j]) / HOLD_DAYS;
     let target = 0;
     for (let p = 0; p < s.nPatches; p++) {
       const o = p * 6;
@@ -659,6 +667,56 @@ export function addSstPatch(s: ClimateState, p: { lonEast: number; lat: number; 
   return true;
 }
 
+/**
+ * Like addSstPatch, but a patch that overlaps an active (not yet released) patch of the same sign merges with it
+ * instead of taking a new slot: the anomalies add (up to the 6 C limit), the area adds (radius = root of the summed
+ * squares, up to 40 degrees), the centre moves toward the stronger patch and the hold lasts as long as the longer of the two
+ * (the remaining time of the old patch and the days of the new one). Stacking therefore escalates a local patch into a basin-wide one; the merged patch stays inside the
+ * limits that restoreClimate checks. Falls back to addSstPatch otherwise.
+ */
+export function stackSstPatch(s: ClimateState, p: { lonEast: number; lat: number; radiusDeg: number; deltaC: number; days: number }): boolean {
+  if (!p || ![p.lonEast, p.lat, p.radiusDeg, p.deltaC, p.days].every(Number.isFinite)) return false;
+  if (p.lonEast < 0 || p.lonEast > 360 || Math.abs(p.lat) > 30 || p.radiusDeg < 2 || p.radiusDeg > 40 || p.deltaC === 0 || Math.abs(p.deltaC) > 6 || p.days < 1 || p.days > 730) return false;
+  for (let i = 0; i < s.nPatches; i++) {
+    const o = i * 6;
+    const remaining = s.patches[o + 4] + s.patches[o + 5] - s.day;
+    if (remaining <= 0 || Math.sign(s.patches[o + 3]) !== Math.sign(p.deltaC)) continue;
+    const dl = wrap180(p.lonEast - s.patches[o]), dy = p.lat - s.patches[o + 1];
+    if (Math.hypot(dl, dy) > s.patches[o + 2] + p.radiusDeg) continue;
+    const w1 = Math.abs(s.patches[o + 3]), w2 = Math.abs(p.deltaC), f = w2 / (w1 + w2);
+    s.patches[o] = (((s.patches[o] + dl * f) % 360) + 360) % 360;
+    s.patches[o + 1] = s.patches[o + 1] + dy * f;
+    s.patches[o + 2] = Math.min(40, Math.hypot(s.patches[o + 2], p.radiusDeg));
+    s.patches[o + 3] = clamp(s.patches[o + 3] + p.deltaC, -6, 6);
+    s.patches[o + 4] = s.day;
+    s.patches[o + 5] = Math.min(730, Math.floor(Math.max(remaining, p.days))); // simultaneous patches do not extend each other
+    return true;
+  }
+  return addSstPatch(s, p);
+}
+
+/**
+ * Starts the ocean from an observed equatorial SST anomaly (degC per ocean cell, smoothed by the caller): sets T and puts
+ * the thermocline where the Tsub relation balances it (the inverse of tsubRaw), ramped in east of 165E where upwelling
+ * couples the surface to the thermocline; zero elsewhere. A live game uses this so the real ENSO state carries on.
+ */
+export function initialiseFromSstAnomaly(s: ClimateState, anomaly: ArrayLike<number>): void {
+  const { tbar: tb } = tables();
+  const month = monthOf(s);
+  const mf = month - 0.5 < 0 ? month + 11.5 : month - 0.5;
+  const m0 = Math.floor(mf) % 12, m1 = (m0 + 1) % 12, w = mf - Math.floor(mf);
+  for (let j = 0; j < OCEAN_N; j++) {
+    const t = tb[m0 * OCEAN_N + j] * (1 - w) + tb[m1 * OCEAN_N + j] * w;
+    const T = clamp(Number.isFinite(anomaly[j]) ? anomaly[j] : 0, SST_FLOOR - t, SST_CEIL - t);
+    s.T[j] = T;
+    const x = T + (s.stochastic ? TSUB_BIAS : 0);
+    const h = x >= 0 ? TSUB_H * Math.atanh(Math.min(0.95, x / TSUB_POS)) : TSUB_H * Math.atanh(Math.max(-0.95, x / TSUB_NEG));
+    const ramp = smoothstep(165, 200, cellLon(j));
+    s.K[j] = 0.5 * h * ramp; s.R[j] = 0.5 * h * ramp; s.R3[j] = 0;
+  }
+  limitThermocline(s);
+}
+
 // ---- Diagnostics ----
 /** Expected burst wind (m/s, from rate x amplitude x mean duration x mean speed x sine envelope) and its centre, given the current SST. */
 export function expectedBurst(s: ClimateState): { lonEast: number; speed: number } {
@@ -731,7 +789,7 @@ export function climateFields(s: ClimateState, out?: ClimateFields): ClimateFiel
         t += s.patches[o + 3] * amp * Math.exp(-(dl * dl + dy * dy) / (r * r)) * (pacific ? 1 - shape : 1);
       }
       const sst = normalSst(m0, col, row)!;
-      f.sst[idx] = (clamp(sst + t, SST_FLOOR, SST_CEIL) - sst) * taper;
+      f.sst[idx] = (clamp(sst + t, SST_FLOOR, SST_CEIL) - clamp(sst, SST_FLOOR, SST_CEIL)) * taper; // a normal outside the clamp range is not an anomaly
     }
   }
   return f;

@@ -10,6 +10,7 @@
     "prepare:licenses": "node scripts/prepare-licenses.mjs",
     "prepare:environment": "node scripts/prepare-environment.mjs",
     "prepare:climate": "node scripts/prepare-climate.mjs",
+    "prepare:teleconnections": "node scripts/prepare-teleconnections.mjs",
     "prepare:traffic": "node scripts/prepare-traffic.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
