@@ -1219,7 +1219,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         </ol>
         <p>Open Formation for typhoons, blizzards, tornadoes, heatwaves, droughts, downpours, cold waves, hail, yellow dust and wind gusts. Tap a map spot to prepare the conditions. The seven weather phenomena begin after six model hours.</p>
         <h3 class="dialog__sub">Time</h3>
-        <p>Use the arrows to choose x1, x2, x4, x8, x16 or x48. Number keys 1–6 select the same steps. Reset speed returns to x1 without changing the world or pause state.</p>
+        <p>Use the arrows to choose a speed from ×200 real time to 2 days per second. Number keys 1–8 select the same steps. Reset speed returns to ×200 without changing the world or pause state.</p>
         <h3 class="dialog__sub">The map</h3>
         <ul class="help__list">
           <li>The map is a globe by default: drag to rotate it and use the wheel or pinch to zoom. Switch Globe view off in the right panel for the flat Equal Earth map.</li>
@@ -1229,7 +1229,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <li>Choose a nickname in the Ranking tab to appear on the online leaderboard. Nicknames are public.</li>
         </ul>
         <h3 class="dialog__sub">Without a mouse</h3>
-        <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L and Z select the formation tools in order. 1–6 set the speed steps. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
+        <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L and Z select the formation tools in order. 1–8 set the speed steps. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
         <p class="fine">Shortcuts work from anywhere on the page, except while you type in a field or a dialog is open; with a button or tab focused, Space and Enter press it instead of playing or pausing.</p>`,
       conditions: `
         <p>The bottom palette has seven paired condition buttons. The large icon is the selected setting; the small faded icon shows the opposite. Click or tap once to select, then again to switch, or use Q–U. Drag the large icon onto the map.</p>
@@ -2114,7 +2114,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     } else if (ev.key === 'Escape') {
       if (ui.tool) { ev.preventDefault(); armTool(null); }
       else if (selectedTrafficId) { ev.preventDefault(); closeTrafficPopup(); }
-    } else if (/^[1-6]$/.test(ev.key) && !ev.altKey) {
+    } else if (/^[1-8]$/.test(ev.key) && !ev.altKey) {
       ev.preventDefault();
       const n = Number(ev.key) - 1;
       if (n < TIME_SPEEDS.length) setSpeed(TIME_SPEEDS[n]);

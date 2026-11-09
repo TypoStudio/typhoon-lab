@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { TIME_SPEEDS, timeSpeedLabel } from '../../src/time';
 
 test('speed buttons and Tab cycle through the time settings', async ({ page }) => {
-  await page.goto('/?renderer=canvas&lang=ko&help=0&seed=42&start=2026-08-01');
+  await page.goto('/?renderer=canvas&lang=en&help=0&seed=42&start=2026-08-01');
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   const value = page.getByTestId('speed-value');
   const prev = page.getByTestId('speed-prev');
@@ -35,7 +35,7 @@ test('speed buttons and Tab cycle through the time settings', async ({ page }) =
   await expect(value).toHaveText(timeSpeedLabel(TIME_SPEEDS[0]));
 });
 
-test('number keys 1 through 6 set the time speeds', async ({ page }) => {
+test('number keys 1 through 8 set the time speeds', async ({ page }) => {
   await page.goto('/?renderer=canvas&lang=en&help=0&seed=42&start=2026-08-01');
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   const value = page.getByTestId('speed-value');
@@ -49,6 +49,11 @@ test('number keys 1 through 6 set the time speeds', async ({ page }) => {
   await expect(value).toHaveText(timeSpeedLabel(TIME_SPEEDS[5]));
   await page.keyboard.press('4');
   await expect(value).toHaveText(timeSpeedLabel(TIME_SPEEDS[3]));
+  await page.keyboard.press('8');
+  await expect(value).toHaveText(timeSpeedLabel(TIME_SPEEDS[7]));
+  await page.keyboard.press('7');
+  await expect(value).toHaveText('1 day/s');
+  await page.keyboard.press('4');
   await page.keyboard.press('9');
   await expect(value).toHaveText(timeSpeedLabel(TIME_SPEEDS[3]));
 });

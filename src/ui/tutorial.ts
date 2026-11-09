@@ -1,7 +1,7 @@
 /** First-visit tutorial: a step card that explains typhoon formation, has the player build one, then try a defence. */
 import { setText } from '../i18n';
 import { distanceKm } from '../simulation/geo';
-import { MAX_TIME_SPEED, TIME_SPEEDS, timeSpeedLabel } from '../time';
+import { TIME_SPEEDS, TUTORIAL_TIME_SPEED, timeSpeedLabel } from '../time';
 import type { GameState, GeoPoint, ToolType } from '../types';
 import { el } from './dom';
 
@@ -46,7 +46,7 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
   { id: 'low', title: 'Add low pressure', body: 'On the Low pressure / High pressure button, select Low pressure and drag it onto the same spot. E switches this pair.', highlight: [tool('low')], marker: TUTORIAL_SPOT, palette: true, done: placed('low') },
   {
     id: 'play', title: 'Let time run',
-    body: `Use the speed arrows to select ${timeSpeedLabel(MAX_TIME_SPEED)} (or press ${TIME_SPEEDS.length}), then press Play if time is paused. A depression forms after the conditions overlap for a while.`,
+    body: `Use the speed arrows to select ${timeSpeedLabel(TUTORIAL_TIME_SPEED)} (or press ${TIME_SPEEDS.indexOf(TUTORIAL_TIME_SPEED) + 1}), then press Play if time is paused. A depression forms after the conditions overlap for a while.`,
     highlight: ['[data-testid="play-toggle"]', '[data-testid="speed-next"]'], marker: TUTORIAL_SPOT,
     done: state => state.storms.length > 0,
     stuck: { hours: STUCK_HOURS, text: 'Nothing yet? Make sure all three conditions sit on the marked spot. Place them again if they faded.' },

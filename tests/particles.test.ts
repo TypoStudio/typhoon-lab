@@ -68,7 +68,7 @@ describe('particle system', () => {
       expect(particles.age[0]).toBeCloseTo(0.1);
       return particles.lon[0] - 140;
     });
-    const expectedMultipliers = [1, 2, 3, 3, 3, 3];
+    const expectedMultipliers = [1, 2, 3, 3, 3, 3, 3, 3];
     distances.forEach((distance, index) => expect(distance / distances[0]).toBeCloseTo(expectedMultipliers[index], 5));
   });
 

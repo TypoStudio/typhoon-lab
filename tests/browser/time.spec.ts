@@ -31,7 +31,7 @@ test('wind uses camera scale regardless of time speed and freezes while paused',
   await page.waitForTimeout(300);
   expect(await wind()).toEqual(before);
   await page.getByTestId('speed-reset').click();
-  await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.speed)).toBe(1);
+  await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.speed)).toBe(200);
   await page.getByTestId('play-toggle').click();
   await expect.poll(async () => (await wind()).paused).toBe(false);
   expect(errors).toEqual([]);
@@ -59,22 +59,22 @@ test('the clock starts locally and SVG arrows cycle through speeds', async ({ pa
   await expect(page.getByTestId('speed-prev')).toHaveText('');
   await expect(page.getByTestId('speed-next')).toHaveText('');
   await expect(page.getByTestId('speed-prev')).toBeEnabled();
-  await expect(page.getByTestId('speed-value')).toHaveText('x1');
-  expect(await page.evaluate(() => (window as any).__typhoonLab.speed)).toBe(1);
+  await expect(page.getByTestId('speed-value')).toHaveText('×200');
+  expect(await page.evaluate(() => (window as any).__typhoonLab.speed)).toBe(200);
   await page.getByTestId('speed-next').click();
-  await expect(page.getByTestId('speed-value')).toHaveText('x4');
+  await expect(page.getByTestId('speed-value')).toHaveText('×600');
   expect(await page.evaluate(() => (window as any).__typhoonLab.speed)).toBe(600);
   await page.getByTestId('speed-next').click();
-  await expect(page.getByTestId('speed-value')).toHaveText('x8');
+  await expect(page.getByTestId('speed-value')).toHaveText('×1,200');
   expect(await page.evaluate(() => (window as any).__typhoonLab.speed)).toBe(1200);
   await expect(page.getByTestId('speed-next')).toBeEnabled();
   await page.getByTestId('speed-prev').click();
-  await expect(page.getByTestId('speed-value')).toHaveText('x4');
+  await expect(page.getByTestId('speed-value')).toHaveText('×600');
   await page.getByTestId('speed-prev').click();
-  await expect(page.getByTestId('speed-value')).toHaveText('x1');
+  await expect(page.getByTestId('speed-value')).toHaveText('×200');
 });
 
-test('speed reset returns to x1 without restarting or unpausing the world', async ({ page }) => {
+test('speed reset returns to ×200 without restarting or unpausing the world', async ({ page }) => {
   await page.goto('/?renderer=canvas&lang=ko&help=0&seed=17&start=2026-08-01');
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   const reset = page.getByTestId('speed-reset');
@@ -82,7 +82,7 @@ test('speed reset returns to x1 without restarting or unpausing the world', asyn
   await expect(reset).toBeDisabled();
   await page.getByTestId('speed-next').click();
   await page.getByTestId('speed-next').click();
-  await expect(page.getByTestId('speed-value')).toHaveText('x8');
+  await expect(page.getByTestId('speed-value')).toHaveText('×1,200');
   await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.tick)).toBeGreaterThan(0);
   const before = await page.evaluate(() => {
     const s = (window as any).__typhoonLab.state;
@@ -90,7 +90,7 @@ test('speed reset returns to x1 without restarting or unpausing the world', asyn
   });
   await page.getByTestId('play-toggle').click();
   await reset.click();
-  await expect(page.getByTestId('speed-value')).toHaveText('x1');
+  await expect(page.getByTestId('speed-value')).toHaveText('×200');
   await expect(reset).toBeDisabled();
   await expect(page.getByTestId('play-toggle')).toHaveAttribute('data-state', 'paused');
   const after = await page.evaluate(() => {

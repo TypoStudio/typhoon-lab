@@ -204,7 +204,7 @@ export function shellHtml(): string {
     <button type="button" class="speed__opt" data-speed-action="prev" data-testid="speed-prev" aria-label="Slower" data-tip-title="Slower" data-tip="Select the previous speed.">
       <svg class="speed__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m11 6-6 6 6 6M19 6l-6 6 6 6"/></svg>
     </button>
-    <output class="speed__value" data-ref="speedValue" data-testid="speed-value" aria-live="polite">x1</output>
+    <output class="speed__value" data-ref="speedValue" data-testid="speed-value" aria-live="polite">×200</output>
     <button type="button" class="speed__opt" data-speed-action="next" data-testid="speed-next" aria-label="Faster" data-tip-title="Faster" data-tip="Select the next speed.">
       <svg class="speed__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 6 6 6-6 6M13 6l6 6-6 6"/></svg>
     </button>`;
@@ -225,7 +225,7 @@ export function shellHtml(): string {
       tabindex="0" role="group" aria-roledescription="map" aria-label="World weather map" aria-describedby="map-help">
       <div class="stage__veil" data-ref="veil" data-testid="map-veil"><p data-ref="veilText">Starting the world…</p></div>
     </main>
-    <p id="map-help" class="sr-only">Map controls. With a weather tool armed, arrow keys move the placement target one degree, Shift five degrees, Alt a quarter degree, and Enter places it. Without a tool, arrow keys pan the map. Keys Q to U cycle paired conditions. Keys A, S and D select a formation tool. Number keys 1–6 set the speed steps. Shift plus and Shift minus zoom. Space plays or pauses, Escape disarms.</p>
+    <p id="map-help" class="sr-only">Map controls. With a weather tool armed, arrow keys move the placement target one degree, Shift five degrees, Alt a quarter degree, and Enter places it. Without a tool, arrow keys pan the map. Keys Q to U cycle paired conditions. Keys A, S and D select a formation tool. Number keys 1–8 set the speed steps. Shift plus and Shift minus zoom. Space plays or pauses, Escape disarms.</p>
 
     <header class="brandbar">
       <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor" fill-rule="evenodd"><path d="${CYCLONE_PATH}"/></svg>
@@ -264,7 +264,7 @@ export function shellHtml(): string {
     <div class="clockbar" role="group" aria-label="Time controls">
       <button type="button" class="btn btn--float btn--play" data-ref="play" data-testid="play-toggle" aria-label="Pause" data-tip-title="Pause" data-tip="Stop or resume time. Shortcut: Space.">Pause</button>
       <div class="speed" role="group" aria-label="Simulation speed" data-ref="speedGroup">${speeds}</div>
-      <button type="button" class="btn btn--float" data-ref="speedReset" data-testid="speed-reset" aria-label="Reset speed" data-tip-title="Reset speed" data-tip="Return only the speed to x1."><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/></svg><span class="btn__label">Reset speed</span></button>
+      <button type="button" class="btn btn--float" data-ref="speedReset" data-testid="speed-reset" aria-label="Reset speed" data-tip-title="Reset speed" data-tip="Return only the speed to ×200."><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/></svg><span class="btn__label">Reset speed</span></button>
       <p class="clock__text" data-ref="clockText" data-testid="clock" data-short="D1 00:00">Day 1 · 00:00:00</p>
     </div>
 

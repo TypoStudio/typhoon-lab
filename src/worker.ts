@@ -6,12 +6,14 @@ import { loadEnvironment } from './data/environment';
 import { loadLiveWeather } from './data/live-weather';
 import { focusTraffic } from './simulation/traffic';
 import { DEFAULT_START_DOY, REPLAY_MAX_TICKS, STEP_HOURS, createGame, isValidDayOfYear, isValidSeed, loadHistoric, placeFormation, placeTool, replayGame, setClimate, setGenesis, setHistoricEnvironment, setSeason, stepGame, validateActions } from './simulation/engine';
-import { DEFAULT_TIME_SPEED, isTimeSpeed } from './time';
+import { DEFAULT_TIME_SPEED, TIME_SPEEDS, isTimeSpeed, takeSteps } from './time';
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 const TIMER_MS = 250;
 const STEP_MS = STEP_HOURS * 3_600_000;
 const MAX_STEPS_PER_TICK = 64;
+/** Wall-clock budget for one tick's steps, leaving the rest of the timer interval for the state post and incoming messages. */
+const TICK_BUDGET_MS = 200;
 
 let state: GameState = createGame(SCENARIO.seed);
 let playing = false;
@@ -47,9 +49,16 @@ function advanceTo(now: number): number {
   lastWallMs = now;
   if (!playing || interacting) return 0;
   carry += elapsed * speed / STEP_MS;
-  const steps = Math.min(MAX_STEPS_PER_TICK, Math.floor(carry + 1e-9));
-  carry -= steps;
-  for (let k = 0; k < steps; k++) stepGame(state);
+  const due = takeSteps(carry, MAX_STEPS_PER_TICK);
+  carry = due.carry;
+  const began = performance.now();
+  let steps = 0;
+  while (steps < due.steps) {
+    stepGame(state);
+    steps++;
+    if (performance.now() - began > TICK_BUDGET_MS) break;
+  }
+  carry = Math.min(MAX_STEPS_PER_TICK, carry + due.steps - steps);
   return steps;
 }
 
@@ -102,7 +111,7 @@ async function handle(msg: WorkerRequest): Promise<void> {
       return post({ type: 'interaction', active: interacting, state, clockHours: state.hours + carry * STEP_HOURS });
     }
     case 'speed': {
-      if (!isTimeSpeed(msg.speed)) return fail('Speed must be 1, 600, or 28800 model seconds per real second.');
+      if (!isTimeSpeed(msg.speed)) return fail(`Speed must be one of ${TIME_SPEEDS.join(', ')} model seconds per real second.`);
       advanceTo(performance.now());
       speed = msg.speed;
       return postState();

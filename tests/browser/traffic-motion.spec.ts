@@ -31,12 +31,12 @@ test('high-speed aircraft do not reverse when clock checkpoints repeat', async (
     (window as any).__trafficSamples = [];
     TrafficAnimation.prototype.frame = function (...args: any[]) {
       const markers = frame.apply(this, args), marker = markers.find((m: any) => m.id === plane.id);
-      if (marker && (window as any).__typhoonLab.speed === TIME_SPEEDS[TIME_SPEEDS.length - 1]) {
+      if (marker && (window as any).__typhoonLab.speed === TIME_SPEEDS[5]) {
         (window as any).__trafficSamples.push({ at: args[0], distance: trafficDistance(marker, plane.destination) });
       }
       return markers;
     };
-    return TIME_SPEEDS.length - 1;
+    return 5;
   });
   for (let i = 0; i < speedSteps; i++) await page.getByTestId('speed-next').click();
   const samples = await page.evaluate(async () => {

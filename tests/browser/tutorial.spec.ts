@@ -1,6 +1,6 @@
 import { setSpeed } from './speed';
 import { test, expect, type Page } from '@playwright/test';
-import { MAX_TIME_SPEED, timeSpeedLabel } from '../../src/time';
+import { TUTORIAL_TIME_SPEED, timeSpeedLabel } from '../../src/time';
 
 // No help=0: this is the first-visit flow. Each test starts with empty storage.
 const URL = '/?renderer=canvas&map=flat&lang=en&seed=20261022&start=2026-08-01';
@@ -47,8 +47,8 @@ test('first visit: the tutorial builds a typhoon, then weakens it, then stays aw
   await step('play');
 
   await expect(page.getByTestId('speed-next')).toHaveClass(/tutorial-highlight/);
-  await expect(page.getByTestId('tutorial-body')).toContainText(timeSpeedLabel(MAX_TIME_SPEED));
-  await setSpeed(page, MAX_TIME_SPEED);
+  await expect(page.getByTestId('tutorial-body')).toContainText(timeSpeedLabel(TUTORIAL_TIME_SPEED));
+  await setSpeed(page, TUTORIAL_TIME_SPEED);
   await expect(page.getByTestId('play-toggle')).toHaveAttribute('aria-label', 'Pause');
   await expect.poll(async () => card.getAttribute('data-step'), { timeout: 60_000, intervals: [500] }).toBe('formed');
 
