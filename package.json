@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && node scripts/prepare-licenses.mjs && vite build",
     "prepare:licenses": "node scripts/prepare-licenses.mjs",
     "prepare:environment": "node scripts/prepare-environment.mjs",
+    "prepare:climate": "node scripts/prepare-climate.mjs",
     "prepare:traffic": "node scripts/prepare-traffic.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",

@@ -82,6 +82,14 @@ The script fetches the OPeNDAP ASCII responses with a concurrency of 4 and 4 ret
 
 Total size: 14 files, 10,676,956 bytes (about 10.7 MB), 530 KB to 1.12 MB each.
 
+## ENSO climate layer (NOAA ERSST v5)
+
+| Item | Value |
+| --- | --- |
+| Source | NOAA ERSST v5 monthly means, 2° grid, `https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.ersst.v5/sst.mnmean.nc` (same dataset as above; see the citation there). Fetched by `npm run prepare:climate` (`scripts/prepare-climate.mjs`), raw responses cached in `.cache/climate/` |
+| Shipped file | `src/data/generated/climate-normals.json`: 1991–2020 monthly SST climatology, box-averaged from the 2° cells to a global 5° grid (72 × 36 × 12). A 5° cell averages the valid 2° cells whose centres lie inside it, and is missing (land or ice) when fewer than half are valid |
+| Test fixture | `tests/fixtures/enso-observed.json` (not shipped): observed Niño-3.4 anomaly, Jan 1950 – Dec 2024, and equatorial anomaly profiles for DJF 1997/98 and 2010/11, relative to the same 1991–2020 climatology. Used only to check the model |
+
 ## Impact cities
 
 `scripts/prepare-map.mjs` writes `src/data/generated/cities.json`, an array of `{ id, name, nameKo, lon, lat, population, populationYear }` objects, largest first. Impact cities are the places that take part in the simulation: the population grid, damage, the World tab list and the rankings. They are every 10m populated place with `POP_MAX >= 500,000` merged with the 71 original demo cities. An original is matched to its 10m feature by name within 0.3°; it keeps its id, English name and coordinates, and its population becomes the 10m `POP_MAX`. A few originals are below 500,000 under that figure (Darwin 93 k, Suva 175 k, Laoag 207 k, Colombo 217 k, Port Moresby 284 k, Wonsan 329 k, Iloilo 388 k, Baguio 448 k) and stay as impact cities. Twin features of one metro area within 0.05° (Kansas City MO and KS) collapse into the larger one.
