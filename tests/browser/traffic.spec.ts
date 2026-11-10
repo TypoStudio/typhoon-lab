@@ -75,10 +75,11 @@ test('globe view can select a moving plane', async ({ page }) => {
   await expect(page.getByTestId('traffic-popup')).toContainText(xy.id);
 });
 
-test('×200 moves planes and ships at cruising speed between weather steps', async ({ page }) => {
+test('real time moves planes and ships at cruising speed between weather steps', async ({ page }) => {
   await page.goto('/?renderer=canvas&seed=42&help=0&lang=en');
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
-  await expect(page.getByTestId('speed-value')).toHaveText('×200');
+  await page.getByTestId('speed-prev').click();
+  await expect(page.getByTestId('speed-value')).toHaveText('Real time');
   await page.evaluate(async () => {
     const path = '/src/render/traffic.ts';
     const url = performance.getEntriesByType('resource').map(entry => entry.name).find(name => new URL(name).pathname === path) ?? path;

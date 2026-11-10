@@ -17,6 +17,7 @@ test('wind animation caps at the third time-speed step and keeps moving when mod
     };
   });
   const wind = () => page.evaluate(() => (window as any).__windSpeedStep);
+  await page.getByTestId('speed-prev').click(); // the game starts on the second step
   for (const [index] of TIME_SPEEDS.entries()) {
     const multiplier = Math.min(3, index + 1);
     await expect.poll(async () => (await wind())?.multiplier).toBe(multiplier);
@@ -31,7 +32,7 @@ test('wind animation caps at the third time-speed step and keeps moving when mod
   await page.waitForTimeout(250);
   expect(await page.evaluate(() => (window as any).__typhoonLab.state.tick)).toBe(tick);
   await page.getByTestId('speed-reset').click();
-  await expect.poll(async () => (await wind())?.multiplier).toBe(1);
+  await expect.poll(async () => (await wind())?.multiplier).toBe(2);
   await page.getByTestId('play-toggle').click();
   await expect.poll(async () => (await wind())?.paused).toBe(false);
 });

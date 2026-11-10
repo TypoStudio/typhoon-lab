@@ -1,7 +1,8 @@
 /** Model seconds advanced per real second at each displayed setting. */
-export const TIME_SPEEDS = [200, 600, 1_200, 2_400, 4_800, 14_400, 86_400, 172_800, 2_592_000] as const;
+export const TIME_SPEEDS = [1, 600, 1_800, 3_600, 7_200, 14_400, 86_400, 172_800, 1_209_600] as const;
 export type TimeSpeed = (typeof TIME_SPEEDS)[number];
-export const DEFAULT_TIME_SPEED: TimeSpeed = TIME_SPEEDS[0];
+/** Real time is too slow to watch a storm; 10 model minutes per second is the default and the reset target. */
+export const DEFAULT_TIME_SPEED: TimeSpeed = 600;
 export const MIN_TIME_SPEED = TIME_SPEEDS[0];
 /** Fastest step the tutorial asks for; the day-per-second steps can outrun the CPU. */
 export const TUTORIAL_TIME_SPEED: TimeSpeed = 14_400;
@@ -16,8 +17,15 @@ export const MAX_WEATHER_SPEED = 172_800;
 export const isFastClimateSpeed = (speed: number): boolean => speed > MAX_WEATHER_SPEED;
 
 export function timeSpeedLabel(speed: TimeSpeed): string {
-  if (speed === 2_592_000) return '1 month/s';
-  return speed >= 86_400 ? `${speed / 86_400} ${speed === 86_400 ? 'day' : 'days'}/s` : speed >= 1_000 ? `×${speed / 1_000}k` : `×${speed}`;
+  if (speed === 1) return 'Real time';
+  return speed >= 86_400 ? `${speed / 86_400}d` : speed >= 1_000 ? `×${speed / 1_000}k` : `×${speed}`;
+}
+
+/** The speed in words, for tooltips and accessible names. */
+export function timeSpeedDescription(speed: TimeSpeed): string {
+  if (speed === 1) return 'Real time: 1 second per second';
+  const [amount, unit] = speed >= 86_400 ? [speed / 86_400, 'day'] : speed >= 3_600 ? [speed / 3_600, 'hour'] : [speed / 60, 'minute'];
+  return `${amount} ${unit}${amount === 1 ? '' : 's'} per second`;
 }
 
 /** Wind animation follows the time setting up to the third visual speed step. */

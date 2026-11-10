@@ -36,7 +36,7 @@ test('high-speed aircraft do not reverse when clock checkpoints repeat', async (
       }
       return markers;
     };
-    return 5;
+    return 5 - TIME_SPEEDS.indexOf((window as any).__typhoonLab.speed);
   });
   for (let i = 0; i < speedSteps; i++) await page.getByTestId('speed-next').click();
   const samples = await page.evaluate(async () => {

@@ -125,12 +125,12 @@ describe('UI calendar helpers', () => {
 
   it('cycles through the available speeds in both directions', () => {
     expect(TIME_SPEEDS.every(isTimeSpeed)).toBe(true);
-    expect([0, 1, 4, 12, 28800, 32768, Number.NaN].some(isTimeSpeed)).toBe(false);
-    expect(TIME_SPEEDS.map(timeSpeedLabel)).toEqual(['×200', '×600', '×1.2k', '×2.4k', '×4.8k', '×14.4k', '1 day/s', '2 days/s', '1 month/s']);
-    expect(adjacentTimeSpeed(200, 1)).toBe(600);
-    expect(adjacentTimeSpeed(600, 1)).toBe(1200);
-    expect(adjacentTimeSpeed(2_592_000, 1)).toBe(200);
-    expect(adjacentTimeSpeed(200, -1)).toBe(2_592_000);
+    expect([0, 4, 12, 28800, 32768, Number.NaN].some(isTimeSpeed)).toBe(false);
+    expect(TIME_SPEEDS.map(timeSpeedLabel)).toEqual(['Real time', '×600', '×1.8k', '×3.6k', '×7.2k', '×14.4k', '1d', '2d', '14d']);
+    expect(adjacentTimeSpeed(1, 1)).toBe(600);
+    expect(adjacentTimeSpeed(600, 1)).toBe(1800);
+    expect(adjacentTimeSpeed(1_209_600, 1)).toBe(1);
+    expect(adjacentTimeSpeed(1, -1)).toBe(1_209_600);
   });
 
   it('maps days to the four seasons, the season buttons to their own season, and days to dates', () => {

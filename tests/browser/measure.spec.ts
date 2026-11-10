@@ -50,7 +50,7 @@ test('measure tab: drop by drag and by key, compare points, basin indices, rejec
   await expect(page.getByTestId('map-stage')).not.toHaveAttribute('data-armed', /measure/);
 
   // The model keeps running and the line gains points.
-  await setSpeed(page, 4800);
+  await setSpeed(page, 7200);
   await expect.poll(async () => Number(await card(page, 'sea-temperature').getAttribute('data-points')), { timeout: 60_000 }).toBeGreaterThan(3);
 
   // Select, then click: another chart, and a second point on the same chart.

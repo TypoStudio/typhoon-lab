@@ -24,8 +24,8 @@ function busyWorld(): GameState {
 
 describe('the fast climate path', () => {
   it('is taken above 2 days per second only', () => {
-    expect([172_800, 86_400, 200].some(isFastClimateSpeed)).toBe(false);
-    expect(isFastClimateSpeed(2_592_000)).toBe(true);
+    expect([172_800, 86_400, 600, 1].some(isFastClimateSpeed)).toBe(false);
+    expect(isFastClimateSpeed(1_209_600)).toBe(true);
   });
 
   it('entering and leaving at once changes nothing', () => {
@@ -113,7 +113,7 @@ describe('the fast climate path', () => {
 });
 
 describe('replay across the threshold', () => {
-  /** Tools, speed changes over the 2 days/s threshold with different display cadences, more tools, back to slow time. */
+  /** Tools, speed changes over the 2d threshold with different display cadences, more tools, back to slow time. */
   function play(viewEvery: number): GameState {
     const s = createGame(SEED, AUG_1);
     placeTool(s, 'low', 160, 2);

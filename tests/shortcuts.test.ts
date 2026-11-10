@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shortcutChar } from '../src/ui/shortcuts';
+import { shortcutChar, speedKey } from '../src/ui/shortcuts';
 import { FORMATION_KEYS, FORMATION_TOOLS, TOOL_KEYS } from '../src/ui/shell';
 import { MEASURE_ITEMS, MEASURE_KEYS } from '../src/ui/measure';
 
@@ -45,5 +45,43 @@ describe('palette shortcuts', () => {
     const all = [...TOOL_KEYS, ...FORMATION_KEYS, ...MEASURE_KEYS];
     expect(new Set(all).size).toBe(all.length);
     for (const k of all) expect(shortcutChar(key(k))).toBe(k);
+  });
+});
+
+describe('speed shortcuts', () => {
+  const sk = (k: string, code = '', mods: { altKey?: boolean; shiftKey?: boolean } = {}) => speedKey(key(k, code, mods));
+
+  it('resets on backtick, the Korean won sign and the physical Backquote key', () => {
+    expect(sk('`', 'Backquote')).toBe('reset');
+    expect(sk('₩', 'Backquote')).toBe('reset');
+    expect(sk('ㅁ', 'Backquote')).toBe('reset');
+    expect(sk('Dead', 'Backquote')).toBe('reset');
+  });
+
+  it('leaves Shift and Alt free: ~ and Shift + - / + (zoom) are not speed keys', () => {
+    expect(sk('~', 'Backquote', { shiftKey: true })).toBe('');
+    expect(sk('_', 'Minus', { shiftKey: true })).toBe('');
+    expect(sk('+', 'Equal', { shiftKey: true })).toBe('');
+    expect(sk('-', 'Minus', { altKey: true })).toBe('');
+    expect(sk('`', 'Backquote', { altKey: true })).toBe('');
+  });
+
+  it('steps with - and =, and with the numpad minus and plus (which types + without Shift)', () => {
+    expect(sk('-', 'Minus')).toBe('prev');
+    expect(sk('=', 'Equal')).toBe('next');
+    expect(sk('-', 'NumpadSubtract')).toBe('prev');
+    expect(sk('+', 'NumpadAdd')).toBe('next');
+    expect(sk('+', 'NumpadAdd', { shiftKey: true })).toBe('');
+  });
+
+  it('falls back to the physical Minus and Equal keys when the layout types a non-ASCII character', () => {
+    expect(sk('ー', 'Minus')).toBe('prev');
+    expect(sk('＝', 'Equal')).toBe('next');
+    expect(sk('+', 'BracketRight')).toBe(''); // QWERTZ plus stays with zoom
+  });
+
+  it('ignores unrelated keys', () => {
+    expect(sk('a', 'KeyA')).toBe('');
+    expect(sk('1', 'Digit1')).toBe('');
   });
 });

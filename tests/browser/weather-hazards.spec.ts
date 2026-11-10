@@ -30,7 +30,7 @@ for (const [renderer, kind, label] of [['canvas', 'heatwave', '폭염'], ['webgl
     await expect(page.getByTestId('spot-place')).toBeEnabled();
     await page.getByTestId('spot-place').click();
     await expect.poll(() => page.evaluate(kind => (window as any).__typhoonLab.state.actions.some((action: any) => action.formation === kind), kind)).toBe(true);
-    await setSpeed(page, renderer === 'webgl' ? 1200 : 4800);
+    await setSpeed(page, renderer === 'webgl' ? 1800 : 7200);
     await page.getByTestId('play-toggle').click();
     await expect.poll(() => page.evaluate(kind => (window as any).__typhoonLab.state.weatherHazards.some((event: any) => event.kind === kind), kind), { timeout: 40_000 }).toBe(true);
     await page.getByTestId('play-toggle').click();

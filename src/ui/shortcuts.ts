@@ -16,3 +16,21 @@ export function shortcutChar(ev: KeyLike): string {
   if (/^[a-z]$/i.test(ev.key)) return ev.key.toLowerCase();
   return /^Key([A-Z])$/.exec(ev.code)?.[1].toLowerCase() ?? PHYSICAL[ev.code] ?? '';
 }
+
+/**
+ * Speed keys: backtick (₩ on a Korean keyboard, or the physical Backquote key) resets the speed; `-` and `=` (or the numpad
+ * minus and plus) step it one slower or faster. Shift is excluded so Shift + `-` / `+` keep zooming the map, and `~` stays free.
+ * The numpad plus types `+` without Shift, so it is matched by code before the zoom handler sees it.
+ */
+export function speedKey(ev: KeyLike): 'reset' | 'prev' | 'next' | '' {
+  if (ev.altKey || ev.shiftKey) return '';
+  if (ev.code === 'NumpadSubtract') return 'prev';
+  if (ev.code === 'NumpadAdd') return 'next';
+  if (ev.key === '`' || ev.key === '₩' || ev.code === 'Backquote') return 'reset';
+  if (ev.key === '-') return 'prev';
+  if (ev.key === '=') return 'next';
+  const plain = /^[\x20-\x7e]$/.test(ev.key); // a physical fallback only for non-Latin layouts, where the typed character is not ASCII
+  if (!plain && ev.code === 'Minus') return 'prev';
+  if (!plain && ev.code === 'Equal') return 'next';
+  return '';
+}

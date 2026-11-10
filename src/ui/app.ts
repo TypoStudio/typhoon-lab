@@ -26,7 +26,7 @@ import { newsArt } from './art';
 import { DISASTER_HELP, DISASTER_HELP_INTRO, DISASTER_HELP_TIMING } from './disaster-help';
 import { el, svgEl, fmtClock, fmtClockLive, fmtClockShort, fmtCoord, fmtInt, fmtMoney, fmtPop, fmtUtc, rovingKeys } from './dom';
 import { SEASONS, fmtDateWithYear, fmtMonthDay, parseStartParam, realTimeOfYear, seasonIdOf, showsYear, worldDay } from './calendar';
-import { DEFAULT_TIME_SPEED, TIME_SPEEDS, adjacentTimeSpeed, isTimeSpeed, timeSpeedLabel, type TimeSpeed } from '../time';
+import { DEFAULT_TIME_SPEED, TIME_SPEEDS, adjacentTimeSpeed, isTimeSpeed, timeSpeedDescription, timeSpeedLabel, type TimeSpeed } from '../time';
 import { attachMapInput } from './input';
 import { attachPalette } from './palette';
 import { attachTooltips } from './tooltip';
@@ -34,7 +34,7 @@ import { createTutorial, shouldAutoStart } from './tutorial';
 import { initialiseLocation } from './initial-location';
 import { MEASURE_BY_ID, MEASURE_ITEMS, MEASURE_KEYS, ProbeBook, isMeasureId, pinStyle, type MeasureId } from './measure';
 import { createMeasurePanel } from './measure-panel';
-import { shortcutChar } from './shortcuts';
+import { shortcutChar, speedKey } from './shortcuts';
 import { CLIMATE_ROWS, CONDITION_GROUPS, CYCLONE_PATH, FORMATION_TOOLS, PALETTE_TABS, FORMATION_KEYS, TOOL_KEYS, footerHtml, shellHtml, terrainIconSvg, toolIconSvg, type FormationToolId, type Terrain } from './shell';
 import { MAX_REPLAY_BYTES, actionKey, buildReplay, downloadJson, parseReplay, parseSeedParam, randomSeed, replayExportProblem } from './storage';
 import { deleteMyData, queuedCount, flushQueue, resultFromRecord, resultFromDisaster, setNickname, storedNickname, defaultNickname, subscribe as subscribeLeaderboard, submit as submitResult, type LbView, type LbWindow } from '../net/leaderboard';
@@ -461,10 +461,15 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     play.disabled = !s;
     syncClimateDisabled();
     if (play.dataset.label !== label) {
+      const hint = play.querySelector('.key-hint');
       play.dataset.label = label;
-      play.replaceChildren(playIcon(ui.playing), localizedText(label));
+      play.replaceChildren(...(hint ? [hint] : []), playIcon(ui.playing), localizedText(label));
     }
     setText(ref('speedValue'), timeSpeedLabel(ui.speed));
+    const speedValue = ref('speedValue'), speedWords = timeSpeedDescription(ui.speed);
+    speedValue.setAttribute('aria-label', speedWords);
+    speedValue.dataset.tipTitle = speedWords;
+    localizeTree(speedValue);
     for (const b of speedButtons) b.disabled = !s;
     ref<HTMLButtonElement>('speedReset').disabled = !s || ui.speed === DEFAULT_TIME_SPEED;
   }
@@ -1232,6 +1237,37 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         <kbd class="help-key">${TOOL_KEYS[i].toUpperCase()}</kbd>
       </li>`;
     }).join('');
+    const measureMeaning: Record<string, string> = {
+      'measure-sea-temperature': 'How warm the sea surface is. Typhoons need about 26.5 °C or more. Over land the line has gaps.',
+      'measure-air-temperature': 'The air temperature near the surface. Useful for watching heat, cold, and the Warm air and Cold air conditions.',
+      'measure-pressure': 'The sea-level pressure, storms included. A falling line means a low or a storm is coming.',
+      'measure-wind': 'The surface wind speed, storms included. Useful to see a storm pass over a place.',
+      'measure-humidity': 'Two plots: the humidity and the rainfall. Useful to see when a place turns wet or dry.',
+      'measure-shear': 'The wind shear between 200 and 850 hPa. Strong shear tears storms apart; weak shear lets them grow.',
+      'measure-formation': 'The typhoon formation score. A storm can start once the line passes the formation threshold. Over land it is 0.',
+      'measure-thermocline': 'How deep the boundary between warm surface water and cold deep water lies, and how far that is from normal. It works only in the equatorial Pacific, 120°E to 80°W, and shows an ocean wave passing as the depth rises and falls.',
+      'measure-nino34': 'How much warmer or colder than normal the central Pacific is. Above +0.5 counts as El Niño and below −0.5 as La Niña; both lines are drawn. It covers the whole Pacific, so drop it anywhere.',
+      'measure-soi-wwv': 'Two plots for the whole Pacific, so drop it anywhere: the Southern Oscillation Index (the pressure difference across the Pacific) and the warm water volume (the warm water stored in the upper ocean) as a change from normal.',
+    };
+    const measureItems = MEASURE_ITEMS.map(m => `
+      <li class="help-tool" style="--fx: var(--color-accent)">
+        <span class="help-tool__icon">${toolIconSvg(m.id, 'help-tool__svg')}</span>
+        <span class="help-tool__text">
+          <span class="help-tool__condition" data-help-measure="${m.id}"><strong>${m.name}</strong><span>${[...new Set(m.plots.map(pl => pl.unit))].join(' · ')}</span><span>${measureMeaning[m.id]}</span></span>
+        </span>
+        <kbd class="help-key">${m.key.toUpperCase()}</kbd>
+      </li>`).join('');
+    const formationItems = FORMATION_TOOLS.map((f, i) => {
+      const entry = DISASTER_HELP.find(d => d.kind === f.kind)!;
+      return `
+      <li class="help-tool" style="--fx: var(--color-accent)">
+        <span class="help-tool__icon">${toolIconSvg(f.id, 'help-tool__svg')}</span>
+        <span class="help-tool__text">
+          <span class="help-tool__condition" data-help-formation="${f.id}"><strong>${f.name}</strong><span>${entry.conditions}</span><span>${entry.description}</span></span>
+        </span>
+        <kbd class="help-key">${FORMATION_KEYS[i].toUpperCase()}</kbd>
+      </li>`;
+    }).join('');
     const disasterItems = DISASTER_HELP.map(entry => {
       const icon = FORMATION_TOOLS.find(tool => tool.kind === entry.kind)?.icon ?? `<path d="${WEATHER_HAZARDS.downpour.iconPath}"/>`;
       return `<li class="help-disaster" data-help-disaster="${entry.kind}">
@@ -1250,8 +1286,9 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         </ol>
         <p>Open Formation for typhoons, blizzards, tornadoes, heatwaves, droughts, downpours, cold waves, hail, yellow dust and wind gusts. Tap a map spot to prepare the conditions. The seven weather phenomena begin after six model hours.</p>
         <h3 class="dialog__sub">Time</h3>
-        <p>Use the arrows to choose a speed from ×200 real time to 1 month per second. Number keys 1–9 select the same steps. Reset speed returns to ×200 without changing the world or pause state.</p>
-        <p class="fine">Above 2 days per second the weather is paused and only the seasons and the oceans keep running, so the map shows years of climate in seconds. Storms and tools end when that starts; slow down and storms can form again on the changed climate.</p>
+        <p>Use the arrows to choose a speed. Real time runs the world at the speed of the clock. ×600 is 10 minutes of world time per second, ×1.8k is 30 minutes, ×3.6k is 1 hour, ×7.2k is 2 hours and ×14.4k is 4 hours; 1d, 2d and 14d are 1, 2 and 14 days per second. Number keys 1–9 select the same nine steps, - and + step slower and faster, and the \` key (₩ on a Korean keyboard) resets the speed. Reset speed returns to ×600 without changing the world or pause state.</p>
+        <p class="fine">On a slow device the faster weather steps may not be fully reached, and the clock shows the time that was really simulated, so it can lag behind the speed you chose.</p>
+        <p class="fine">At 14d the weather is not calculated. The world runs on the fast climate calculation instead: the map, the date and the seasons keep changing, but active storms and tools end without further damage. New storms can form again after you slow down. A world that started from live weather continues on the base climate from then on. See Long-term simulation in the Climate tab.</p>
         <h3 class="dialog__sub">The map</h3>
         <ul class="help__list">
           <li>The map is a globe by default: drag to rotate it and use the wheel or pinch to zoom. Switch Globe view off in the right panel for the flat Equal Earth map.</li>
@@ -1261,11 +1298,12 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <li>Choose a nickname in the Ranking tab to appear on the online leaderboard. Nicknames are public.</li>
         </ul>
         <h3 class="dialog__sub">Without a mouse</h3>
-        <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L and ; select the formation tools in order, and Z, X, C, V, B, N, M, comma, period and slash select the measurement tools. 1–9 set the speed steps. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
+        <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L and ; select the formation tools in order, and Z, X, C, V, B, N, M, comma, period and slash select the measurement tools. 1–9 set the speed steps, - and + step it slower and faster, and \` (₩ on a Korean keyboard) resets it to ×600. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
         <p class="fine">Shortcuts work from anywhere on the page, except while you type in a field or a dialog is open; with a button or tab focused, Space and Enter press it instead of playing or pausing.</p>`,
       conditions: `
         <p>The bottom palette has seven paired condition buttons. The large icon is the selected setting; the small faded icon shows the opposite. Click or tap once to select, then again to switch, or use Q–U. Drag the large icon onto the map.</p>
         <ul class="help__tools">${toolItems}</ul>
+        <p>A condition from the palette lasts 10 days. Formation recipes and natural formation waves use shorter lives, so typhoons are as easy to make as before.</p>
         <h3 class="dialog__sub">Making a storm</h3>
         <ul class="help__list">
           <li>Formation recipe: overlap Warm water, Moisture and Low pressure on the same tropical ocean spot, ideally with Low shear. High pressure does not start a storm; it steers one.</li>
@@ -1276,6 +1314,34 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         <p>Weakening recipe: overlap Cool water, Dry air, Cold air, Downdraft and Strong shear on a storm or in its path. The more of them overlap, the faster it dissipates.</p>
         <h3 class="dialog__sub">Mergers</h3>
         <p>Nearby storms in the same hemisphere affect each other’s movement: they can rotate around each other and draw closer. They merge within 100 km once both are at least 24 model hours old with winds of 17.2 m/s or more. The stronger storm keeps its ID and wind speed. Forming lows keep their own progress. Overlapping wind areas alone do not trigger a merger.</p>`,
+      formation: `
+        <p>The Formation tab of the palette holds ten probes, one for each event you can make. Instead of placing conditions one by one, a probe works out what a spot needs and places it for you.</p>
+        <ol class="help__steps">
+          <li>Drag a Formation icon onto the map. Or select one (click it or press its key) and click or tap a spot; with the keyboard, the arrow keys move the target and Enter opens it.</li>
+          <li>A card opens for that spot. It shows the coordinates, the sea or land name, the sea temperature, air temperature, humidity, atmospheric instability, shear and pressure there, and a score compared with the level the event needs.</li>
+          <li>Below that is the recipe: the conditions that would be placed, for example Warm water ×3. A note says whether it is enough. Place recipe puts them all on the spot at once, then the card closes and the probe stays armed for the next spot. Esc puts it away.</li>
+        </ol>
+        <p>Typhoon formation needs an ocean spot; the other nine events can be tried on land or sea. Place recipe is greyed out when a recipe cannot work, for example when the upper winds are too strong to calm, when too many conditions are already active, or when the recipe is already in place.</p>
+        <ul class="help__tools">${formationItems}</ul>
+        <p class="fine">${DISASTER_HELP_TIMING}</p>
+        <p class="fine">Recipe conditions last 2 to 4 days, shorter than the 10 days of conditions from the Conditions tab, and they do not feed the climate model, so they never start an El Niño.</p>
+        <p class="fine">Natural typhoon formation in the right panel works differently: nature itself places a wave of formation conditions over warm tropical ocean every two to three days. See the Climate tab.</p>`,
+      measure: `
+        <p>The Measure tab of the palette records how the world changes at a point, as a graph. It only reads the world: it never changes the simulation and is not saved in replays.</p>
+        <ol class="help__steps">
+          <li>Drag a Measure icon onto the map. Or select one (click it or press its key) and click or tap the map.</li>
+          <li>A numbered pin appears at that spot, and a card with a graph appears in the Measure tab of the right panel. On a phone the panel stays closed so you can keep placing pins; open its Measure tab to see the graphs.</li>
+          <li>Drop the same icon at another place to add a line to that chart, with its own pin colour and number. A different icon gets its own chart.</li>
+        </ol>
+        <h3 class="dialog__sub">Reading a graph</h3>
+        <ul class="help__list">
+          <li>The horizontal axis is model time, starting at 0 when measuring began, with five labels in hours, days, months or years. Move the pointer over a graph to read its values at that time.</li>
+          <li>Each card shows its unit and the latest value of every pin. The × button removes the card, and Clear all removes every card and pin. A pin disappears when no chart uses it.</li>
+          <li>You can use up to 12 pins. Drops within a quarter of a degree of each other share one pin.</li>
+          <li>Recording runs only while time is playing. A new world or a loaded replay clears everything. Very long runs are thinned automatically so the graph stays readable.</li>
+        </ul>
+        <h3 class="dialog__sub">The ten items</h3>
+        <ul class="help__tools">${measureItems}</ul>`,
       disasters: `
         <p>${DISASTER_HELP_INTRO}</p>
         <p class="fine">${DISASTER_HELP_TIMING}</p>
@@ -1283,17 +1349,34 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       climate: `
         <h3 class="dialog__sub">Natural formation</h3>
         <p>Turn on Natural typhoon formation in the right panel and nature starts storms for you: a wave of formation conditions appears over warm tropical ocean somewhere in the world every two to three days. Use Cool water, Dry air, Cold air and Downdraft to weaken them before a depression forms, or let them grow. Turn it off to stop new waves.</p>
-        <p>Conditions placed in the tropics also push the climate. Low pressure, updrafts, warm air and unstable air heat the air above them, while high pressure, downdrafts, cold air and stable air cool it. One condition stays local; stacked in the same area they can shift the winds across the whole Pacific and start or end an El Niño.</p>
+        <h3 class="dialog__sub">The El Niño / La Niña layer</h3>
+        <p>An El Niño / La Niña climate layer runs under the weather. The ocean waves, the sea temperature and the winds of the tropical Pacific are calculated. The effects far from there, over land, in the other tropical oceans and at higher latitudes, and the wind shear everywhere, come from observed statistics: maps of how past El Niño and La Niña years changed the world. Together they change the sea temperature, air temperature, pressure, wind, humidity and wind shear, and so the typhoons.</p>
+        <h3 class="dialog__sub">Conditions and the climate</h3>
+        <p>Conditions you place within 30° of the equator also feed the climate layer. Warm water and Cool water change the sea temperature. Low pressure, Updraft, Warm air and Unstable air heat the air above them; High pressure, Downdraft, Cold air and Stable air cool it. Moisture, Dry air and the shear conditions do not feed it, and neither do formation recipes.</p>
+        <ul class="help__list">
+          <li>Low pressure or an updraft near the equator pulls in westerly wind on its west side and starts an ocean wave.</li>
+          <li>High pressure in the east Pacific with low pressure in the west strengthens the trade winds.</li>
+          <li>One condition stays local. Stacking many spreads the effect across the Pacific, and stacked warm water makes the biggest El Niño.</li>
+          <li>The ocean answers over weeks, so the Measure tab is the best way to watch it.</li>
+        </ul>
         <h3 class="dialog__sub">World climate</h3>
-        <p>World climate in the right panel changes the whole planet: Warming raises sea and air temperature, La Niña / El Niño shifts warm water and wind shear across the Pacific, and Polar temperature warms or cools the high latitudes. Low shear calms the upper winds around a storm so it can stay upright; Strong shear adds upper-level wind that tilts and tears it apart.</p>
+        <p>World climate in the right panel changes the whole planet: Warming raises sea and air temperature, La Niña / El Niño holds the Pacific in one phase, and Polar temperature warms or cools the high latitudes. Low shear calms the upper winds around a storm so it can stay upright; Strong shear adds upper-level wind that tilts and tears it apart.</p>
         <dl class="help__defs">
           <dt>Warming</dt>
           <dd>Warming runs from −2 to +4 °C. More warming makes more of the ocean warm enough to feed storms. A negative value cools the world.</dd>
           <dt>La Niña / El Niño</dt>
-          <dd>El Niño warms the central and eastern Pacific, cools the far western Pacific and adds wind shear over the western Pacific, so fewer storms form near Asia. La Niña does the reverse: warmer water and calmer winds in the west.</dd>
+          <dd>An experiment that holds Niño 3.4, the Pacific temperature index that defines El Niño and La Niña, at the value you choose, from −2 to +2 °C. The map responds at once, even when paused. El Niño warms the central and eastern Pacific and moves the typhoon formation area east; La Niña does the reverse. Setting it back to 0 releases the hold and the ocean then evolves by itself.</dd>
           <dt>Polar temperature</dt>
           <dd>Polar cooling chills the sea and air poleward of about 35° latitude, so storms that curve out of the tropics weaken sooner. Polar warming does the reverse. The effect is full strength from about 50°.</dd>
-        </dl>`,
+        </dl>
+        <h3 class="dialog__sub">Long-term simulation</h3>
+        <p>Choose 14d to watch the climate over years. At this speed one year takes about 26 seconds. The map, the date with its year, and the seasons keep changing. Individual storms are not simulated: active storms and tools end without further damage, and new storms can form again once you slow down to 2d or below.</p>
+        <p>At this speed El Niño and La Niña come and go on their own, in a cycle of roughly 2 to 3 years in this model. The real cycle is longer, and big El Niño events happen about twice as often here as in reality.</p>
+        <p>To experiment, set up conditions or the La Niña / El Niño slider, then go fast and watch with Measure pins: Niño 3.4, SOI, warm water volume, or the sea temperature at points you choose. Then slow down to see typhoons form on the changed climate.</p>
+        <p class="fine">One run allows 200 years of fast time, and a world that started from live weather continues on the base climate from then on. The Warming and Polar temperature sliders are fixed offsets for now, and greenhouse gases, sea ice and volcanoes are not simulated yet.</p>
+        <h3 class="dialog__sub">Limits</h3>
+        <p class="fine">This is a simplified teaching model, not a forecast.</p>
+        <p class="fine">Replays saved by an older version cannot be opened if they used the La Niña / El Niño slider, a Warm water, Cool water, Low pressure, High pressure, Updraft, Downdraft, Warm air, Cold air, Unstable air or Stable air condition within 30° of the equator, or a live-weather start. The new climate layer would not reproduce them.</p>`,
       historic: `
         <dl class="help__defs">
           <dt>Loading</dt>
@@ -2199,11 +2282,12 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     refreshOverlay();
   }
 
-  const TYPING = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+  /** Only text entry blocks shortcuts; a range slider, checkbox or radio keeps focus after use and must not swallow them. */
+  const TYPING = 'input:not([type="range"], [type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="color"], [type="file"], [type="image"]), textarea, select, [contenteditable]:not([contenteditable="false"])';
   /** Things Space and Enter press, so Space must not also play or pause. */
-  const PRESSABLE = 'button, a[href], summary, [role="button"], [role="switch"], [role="tab"], [role="radio"], [role="checkbox"]';
+  const PRESSABLE = 'button, a[href], summary, [role="button"], [role="switch"], [role="tab"], [role="radio"], [role="checkbox"], input[type="checkbox"], input[type="radio"]';
   /** Arrow keys belong to these (tab and radio roving, scrolling the panel) rather than to the map. */
-  const ARROW_OWNERS = '.sidebar, [role="tablist"], [role="radiogroup"], dialog';
+  const ARROW_OWNERS = '.sidebar, [role="tablist"], [role="radiogroup"], input[type="range"], dialog';
   // Shortcuts are global: they work with focus anywhere (map, sidebar, palette) except while typing or with a dialog open.
   const onKey = (ev: KeyboardEvent) => {
     if (ev.defaultPrevented || ev.ctrlKey || ev.metaKey) return;
@@ -2215,9 +2299,13 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     const formationSlot = letter ? (FORMATION_KEYS as readonly string[]).indexOf(letter) : -1;
     const measureSlot = letter ? MEASURE_KEYS.indexOf(letter) : -1;
     const dir: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
+    const speedAction = speedKey(ev);
     if (ev.key === 'Tab' && !ev.altKey && ui.latest) {
       ev.preventDefault();
       if (!ev.repeat) setSpeed(adjacentTimeSpeed(ui.speed, ev.shiftKey ? -1 : 1));
+    } else if (speedAction) {
+      ev.preventDefault();
+      if (ui.latest && !ev.repeat) setSpeed(speedAction === 'reset' ? DEFAULT_TIME_SPEED : adjacentTimeSpeed(ui.speed, speedAction === 'prev' ? -1 : 1));
     } else if (ev.key === 'Escape') {
       if (ui.tool) { ev.preventDefault(); armTool(null); }
       else if (selectedTrafficId) { ev.preventDefault(); closeTrafficPopup(); }

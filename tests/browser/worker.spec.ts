@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/__worker-test');
 });
 
-test('×200 advances 200 model seconds per real second and ×600 advances 600', async ({ page }) => {
+test('the default advances 600 model seconds per real second, ×1.8k 1800 and real time 1', async ({ page }) => {
   const result = await page.evaluate(async () => {
     const worker = new Worker('/src/worker.ts', { type: 'module' });
     const request = (message: object): Promise<any> => new Promise((resolve, reject) => {
@@ -27,27 +27,39 @@ test('×200 advances 200 model seconds per real second and ×600 advances 600', 
       await new Promise(resolve => setTimeout(resolve, 1100));
       const one = await request({ type: 'play', playing: false });
       const oneWall = performance.now() - firstWall;
-      await request({ type: 'speed', speed: 600 });
+      await request({ type: 'speed', speed: 1_800 });
       await request({ type: 'play', playing: true });
       const secondWall = performance.now();
       await new Promise(resolve => setTimeout(resolve, 1600));
       const two = await request({ type: 'play', playing: false });
       const twoWall = performance.now() - secondWall;
+      await request({ type: 'speed', speed: 1 });
+      await request({ type: 'play', playing: true });
+      const realWall = performance.now();
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      const real = await request({ type: 'play', playing: false });
+      const realMs = performance.now() - realWall;
       await request({ type: 'speed', speed: 14_400 });
       await request({ type: 'play', playing: true });
       await new Promise(resolve => setTimeout(resolve, 500));
       const twelve = await request({ type: 'play', playing: false });
-      return { initial, one, two, twelve, oneWall, twoWall };
+      return { initial, one, two, real, realMs, twelve, oneWall, twoWall };
     } finally { worker.terminate(); }
   });
   const oneSeconds = (result.one.clockHours - result.initial.clockHours) * 3600;
   const twoSeconds = (result.two.clockHours - result.one.clockHours) * 3600;
-  expect(oneSeconds / result.oneWall * 1000).toBeGreaterThan(140);
-  expect(oneSeconds / result.oneWall * 1000).toBeLessThan(260);
-  expect(twoSeconds / result.twoWall * 1000).toBeGreaterThan(450);
-  expect(twoSeconds / result.twoWall * 1000).toBeLessThan(750);
+  const realSeconds = (result.real.clockHours - result.two.clockHours) * 3600;
+  // The default step is 600 model seconds per real second.
+  expect(oneSeconds / result.oneWall * 1000).toBeGreaterThan(450);
+  expect(oneSeconds / result.oneWall * 1000).toBeLessThan(750);
+  expect(twoSeconds / result.twoWall * 1000).toBeGreaterThan(1_350);
+  expect(twoSeconds / result.twoWall * 1000).toBeLessThan(2_250);
   expect(result.two.state.tick).toBeGreaterThan(result.one.state.tick);
-  expect((result.twelve.clockHours - result.two.clockHours) * 3600).toBeGreaterThan(5_000);
+  // Real time: the clock moves one model second per real second, between whole 15-minute steps, with no new state.
+  expect(realSeconds / result.realMs * 1000).toBeGreaterThan(0.5);
+  expect(realSeconds / result.realMs * 1000).toBeLessThan(2);
+  expect(result.real.state.tick).toBeLessThanOrEqual(result.two.state.tick + 1);
+  expect((result.twelve.clockHours - result.real.clockHours) * 3600).toBeGreaterThan(5_000);
 });
 
 test('map gestures stop worker time, preserve speed, and respect an explicit pause', async ({ page }) => {

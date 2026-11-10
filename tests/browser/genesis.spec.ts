@@ -64,7 +64,7 @@ test('natural formation survives replay export and import after loading a fresh 
   await page.getByTestId('export-replay').click();
   const file = await readFile((await (await downloaded).path())!, 'utf8');
   const replay = JSON.parse(file);
-  expect(replay.formatVersion).toBe(7);
+  expect(replay.formatVersion).toBe(8);
   expect(replay).not.toHaveProperty('mode');
   expect(replay).not.toHaveProperty('typhoonId');
   expect(replay.actions[0]).toMatchObject({ type: 'genesis', on: true });
@@ -76,8 +76,8 @@ test('natural formation survives replay export and import after loading a fresh 
   await expect.poll(async () => (await snapshot()).seed).not.toBe(first.seed);
   expect((await snapshot()).genesis).toEqual({ enabled: false, waves: 0, nextSpawnTick: 0 });
   await expect(page.getByTestId('genesis-toggle')).toHaveAttribute('aria-checked', 'false');
-  await expect(page.getByTestId('speed-value')).toHaveText('×200');
-  await expect(page.getByTestId('speed-reset')).toHaveAttribute('data-tip', 'Return only the speed to ×200.');
+  await expect(page.getByTestId('speed-value')).toHaveText('×600');
+  await expect(page.getByTestId('speed-reset')).toHaveAttribute('data-tip', 'Return only the speed to ×600. Shortcut: `.');
 
   await page.getByTestId('import-replay-input').setInputFiles({ name: 'genesis.json', mimeType: 'application/json', buffer: Buffer.from(file) });
   await expect(page.getByTestId('replay-message')).toContainText(String(replay.untilTick));
