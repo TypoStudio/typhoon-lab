@@ -5,6 +5,7 @@ import {
 } from '../src/simulation/engine';
 import { buildReplay, parseReplay } from '../src/ui/storage';
 import fixtureJson from './fixtures/environment-fixture.json';
+import { nino34Of, stepClimateDay } from '../src/simulation/climate-core';
 import { atlanticShear, fullDays, skipDays } from './climate-helpers';
 
 const run = (s: GameState, hours: number) => { const until = s.tick + Math.round(hours / STEP_HOURS); while (s.tick < until) stepGame(s); };
@@ -71,9 +72,32 @@ describe('climate effects on the environment', () => {
     return [s, base];
   };
 
-  it('El Niño +2 does not jump the sea; after two months it warms the eastern equatorial Pacific, raises Atlantic and western shear, and lowers central and east Pacific shear', () => {
+  it('El Niño +2 shows at once, with no time passed: warm central and east Pacific, Darwin pressure up, Tahiti pressure down', () => {
     const quick = world({ enso: 2 }), calm = createGame(20261022);
-    expect(sample(quick, -120, 0).temperature).toBe(sample(calm, -120, 0).temperature); // the ocean has not yet responded
+    const d = (lon: number, lat: number, pick: (e: ReturnType<typeof sample>) => number) => pick(sample(quick, lon, lat)) - pick(sample(calm, lon, lat));
+    const seen = { sst150W: d(-150, 0, e => e.temperature), sst120W: d(-120, 0, e => e.temperature), darwinP: d(131, -12.4, e => e.pressure), tahitiP: d(-149.6, -17.5, e => e.pressure) };
+    console.info('[climate] El Nino +2 straight after the slider (paused), change vs neutral:', JSON.stringify(Object.fromEntries(Object.entries(seen).map(([k, v]) => [k, +v.toFixed(2)]))));
+    expect(seen.sst150W).toBeGreaterThan(1.5); // measured +1.85: the held pattern is 2 C at 190-240E and tapers west and east
+    expect(seen.sst120W).toBeGreaterThan(1.5); // measured +1.82
+    expect(seen.darwinP).toBeGreaterThan(0.5); // measured +1.88
+    expect(seen.tahitiP).toBeLessThan(-0.5);
+    expect(quick.climateLayer!.core.hold).toBe(2);
+  });
+
+  it('releasing the slider to 0 lets the ocean evolve from there and leaves no permanent offset', () => {
+    const s = world({ enso: 2 });
+    const held = sample(s, -150, 0).temperature;
+    setClimate(s, 'enso', 0);
+    expect(s.climateLayer!.core.hold).toBeNull();
+    expect(sample(s, -150, 0).temperature).toBe(held); // releasing does not jump the sea
+    const core = s.climateLayer!.core;
+    let worst = 0;
+    for (let day = 0; day < 40 * 365; day++) { stepClimateDay(core); if (day >= 39 * 365) worst = Math.max(worst, Math.abs(nino34Of(core))); }
+    console.info('[climate] El Nino +2 released, largest |Nino 3.4| in year 40 (noise-free core):', worst.toExponential(2));
+    expect(worst).toBeLessThan(0.01);
+  });
+
+  it('El Niño +2 after two months still warms the eastern equatorial Pacific, raises Atlantic and western shear, and lowers central and east Pacific shear', () => {
     const [nino, base] = enso(2);
     const d = (lon: number, lat: number, pick: (e: ReturnType<typeof sample>) => number) => pick(sample(nino, lon, lat)) - pick(sample(base, lon, lat));
     const shear = (e: ReturnType<typeof sample>) => e.shear, sst = (e: ReturnType<typeof sample>) => e.temperature;

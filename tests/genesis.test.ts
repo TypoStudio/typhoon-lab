@@ -134,23 +134,23 @@ describe('natural typhoon formation and weakening conditions', () => {
       const sampled = sampleEnvironment(s, c.lon, c.lat);
       for (const key of ['temperature', 'airTemperature', 'updraft', 'humidity'] as const) expect(c[key]).toBeCloseTo(sampled[key], 9);
     }
-    run(s, 74);
+    run(s, 242);
     expect(s.effects).toHaveLength(0);
-    const untouched = createGame(); run(untouched, 80); // the calendar has moved on 80 h, so compare with an effect-free world at the same hour
+    const untouched = createGame(); run(untouched, 248); // the calendar has moved on 248 h, so compare with an effect-free world at the same hour
     // Every tool field is back to normal. The twelve cool tools were also one merged cold SST patch (-6 C, 12 degrees wide) of the dynamic
-    // climate layer, and the sea warms back over weeks, so 80 h in (a few hours after the 72 h tools ended) the water and the air above it are
-    // still about 5 C and 3.7 C cool, with the matching weak high, drier and shearier air. Measured: -5.28 C, -3.70 C, +2.17 hPa, -0.049, +0.64 m/s (the pressure was +4.34 hPa before the Gill pressure scale HPA_PER_ND was recalibrated from 1.6 to 0.8).
+    // climate layer, and the sea warms back over weeks, so 248 h in (8 h after the 240 h tools ended; 80 h and 72 h before conditions were lengthened to 10 days) the water and the air above it are
+    // still about 5 C and 3.7 C cool, with the matching weak high, drier and shearier air. Measured at 248 h: -5.29 C, -3.70 C, +4.71 hPa, -0.098, +1.62, +0.70, -1.09 m/s (the earlier +2.17 hPa, -0.049, +0.64 m/s came before the heat patches; the pressure was +4.34 hPa before the Gill pressure scale HPA_PER_ND was recalibrated from 1.6 to 0.8).
     const gone = sampleEnvironment(s, 140, 16), clean = sampleEnvironment(untouched, 140, 16);
     for (const key of ['airHeating', 'updraft', 'instability', 'drying', 'cooling', 'land'] as const) expect(gone[key]).toEqual(clean[key]);
     const within = (value: number, expected: number, tolerance: number) => expect(Math.abs(value - expected)).toBeLessThan(tolerance);
     within(gone.temperature - clean.temperature, -5.28, 0.4);
     within(gone.airTemperature - clean.airTemperature, -3.70, 0.4);
-    within(gone.pressure - clean.pressure, 4.69, 0.5); // 2.17 before the cold-air, downdraft and stable-air tools also cooled the layer's atmosphere (12 cooling heat patches fading with the 2.4-day adjustment time)
-    within(gone.humidity - clean.humidity, -0.097, 0.015); // -0.049 before the heat patches (their rain anomaly dries the cooled column)
-    within(gone.shear - clean.shear, 1.58, 0.3); // 0.64 before the heat patches (the Gill baroclinic shear change near a patch)
-    within(gone.u - clean.u, 0.69, 0.3); // 0.51 before the heat patches
-    within(gone.v - clean.v, -1.07, 0.3); // was -0.96 before the Gill pressure recalibration (HPA_PER_ND 1.6 -> 0.8) weakened the pressure-driven wind
-  });
+    within(gone.pressure - clean.pressure, 9.20, 0.5); // 4.69 before the player heat-patch cap rose from 4 to 9 units (the 12 stacked highs now cool by 9 units); // 2.17 before the cold-air, downdraft and stable-air tools also cooled the layer's atmosphere (12 cooling heat patches fading with the 2.4-day adjustment time)
+    within(gone.humidity - clean.humidity, -0.150, 0.015); // -0.097 with the 4-unit cap; // -0.049 before the heat patches (their rain anomaly dries the cooled column)
+    within(gone.shear - clean.shear, 3.81, 0.3); // 1.58 with the 4-unit cap; // 0.64 before the heat patches (the Gill baroclinic shear change near a patch)
+    within(gone.u - clean.u, 1.36, 0.3); // 0.69 with the 4-unit cap; // 0.51 before the heat patches
+    within(gone.v - clean.v, -2.65, 0.3); // -1.07 with the 4-unit cap; // was -0.96 before the Gill pressure recalibration (HPA_PER_ND 1.6 -> 0.8) weakened the pressure-driven wind
+  }, 120_000); // 248 h of weather steps (conditions last 240 h)
 
   it('early intervention prevents the first wave from forming instead of merely hiding a storm', () => {
     const base = natural(5); const protectedWorld = natural(5);

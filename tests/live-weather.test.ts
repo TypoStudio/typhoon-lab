@@ -161,8 +161,8 @@ it('does not uncover the original low when overriding high-pressure tools expire
   const control = createGame(1, 299, initial), changed = createGame(1, 299, initial);
   for (let i = 0; i < 3; i++) expect(placeTool(changed, 'high', 141, 19).ok).toBe(true);
   let beforeExpiry = 0;
-  for (let i = 0; i < 288; i++) {
-    if (i === 287) beforeExpiry = totalPressure(changed, 141, 19);
+  for (let i = 0; i < 960; i++) { // conditions last 240 h = 960 steps (it was 288 steps for 72 h)
+    if (i === 959) beforeExpiry = totalPressure(changed, 141, 19);
     stepGame(control); stepGame(changed);
   }
   const afterExpiry = totalPressure(changed, 141, 19);
@@ -179,7 +179,7 @@ it('does not uncover the original low when overriding high-pressure tools expire
     expect(replay.ok).toBe(true);
     if (replay.ok) expect(replay.state.weather).toEqual(changed.weather);
   }
-}, 60_000);
+}, 240_000); // 960 steps of two live worlds (conditions last 240 h)
 
 it('keeps a paused field unchanged and does not create wind from rotation without a heat contrast', () => {
   const weather = uniform(); weather.u.fill(0); weather.v.fill(0);

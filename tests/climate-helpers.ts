@@ -11,12 +11,13 @@ export function fullDays(s: GameState, days: number): void {
 
 /**
  * Cheap time skip for experiments that only read the environment: the clock jumps to one tick before each day boundary and one real
- * step crosses it, which advances the climate layer by exactly one day. Tools and storms do not age, so only use it when none is
- * active (run `fullDays` first until the tools have expired).
+ * step crosses it, which advances the climate layer by exactly one day. Tools and storms do not age, so the placed tools' own fields are
+ * dropped first (a condition now lasts 10 days; the climate patches it fed keep their own 10 days in the layer) and a world with a storm throws.
  */
 export function skipDays(s: GameState, days: number): void {
   while (s.tick % TICKS_PER_DAY !== 0) stepGame(s);
-  if (s.effects.length || s.storms.length) throw new Error('skipDays needs a world without active tools or storms');
+  s.effects = [];
+  if (s.storms.length) throw new Error('skipDays needs a world without storms');
   for (let d = 0; d < days; d++) { s.tick += TICKS_PER_DAY - 1; s.hours = s.tick * STEP_HOURS; stepGame(s); }
 }
 

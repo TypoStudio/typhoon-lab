@@ -36,7 +36,7 @@ import { CITIES, LAND_POLYGONS, SCENARIO } from '../data/world';
 import { AGENCY_NAMES, typhoonById } from '../data/typhoons';
 import { fieldsAt, sampleHistoric, windowCells } from './historic';
 import { currentWeather, isLiveWeatherSnapshot, sampleLiveWeather, stepLiveWeather } from './live-weather';
-import { climateIndices, releaseToolPatches, setSstHold, stackHeatPatch, stackSstPatch, thermoclineAt, type ClimateIndices } from './climate-core';
+import { climateIndices, nino34Of, releaseToolPatches, setSstHold, stackHeatPatch, stackSstPatch, thermoclineAt, type ClimateIndices } from './climate-core';
 import {
   advanceClimateLayer, alignClimateCalendar, anomaliesFor, anomalyAt, createClimateLayer, enableClimateNoise, createLiveClimateLayer, newAnomalyPoint, rebuildAnomalies, sstUnionAdjustment, stepClimateLayer,
   type AnomalyContext, type AnomalyPoint, type AnomalySet,
@@ -79,35 +79,39 @@ export const TOOL_TYPES: readonly ToolType[] = ['warm', 'moisture', 'low', 'high
 
 // Palette order = keyboard order (1–9, 0, -, =): formation set on the first row, weakening set on the second.
 export const TOOLS: ToolDefinition[] = [
-  { type: 'warm', name: 'Warm water', radiusKm: 500, durationHours: 96,
+  { type: 'warm', name: 'Warm water', radiusKm: 500, durationHours: 240,
     description: 'Raises sea-surface temperature by up to 2 °C and forms a weak thermal low. Ocean only. Raises potential intensity.' },
-  { type: 'moisture', name: 'Moisture', radiusKm: 550, durationHours: 72,
+  { type: 'moisture', name: 'Moisture', radiusKm: 550, durationHours: 240,
     description: 'Moistens the mid-level air. Needed for genesis but cannot create a storm alone.' },
-  { type: 'low', name: 'Low pressure', radiusKm: 650, durationHours: 72,
+  { type: 'low', name: 'Low pressure', radiusKm: 650, durationHours: 240,
     description: 'Seeds a spinning disturbance. Over warm, moist, low-shear tropical ocean it can become a depression; elsewhere it bends the flow toward it.' },
-  { type: 'low-shear', name: 'Low shear', radiusKm: 400, durationHours: 48,
+  { type: 'low-shear', name: 'Low shear', radiusKm: 400, durationHours: 240,
     description: 'Calms the upper winds so a storm can stay upright. Stacking is capped at −60 m/s.' },
-  { type: 'warm-air', name: 'Warm air', radiusKm: 450, durationHours: 72,
+  { type: 'warm-air', name: 'Warm air', radiusKm: 450, durationHours: 240,
     description: 'Warms lower-level air by up to 3 °C and supports convection. Stacking is capped at +18 °C. Does not warm the ocean.' },
-  { type: 'updraft', name: 'Updraft', radiusKm: 400, durationHours: 48,
+  { type: 'updraft', name: 'Updraft', radiusKm: 400, durationHours: 240,
     description: 'Adds up to 1 m/s of rising air to help a moist disturbance organise and grow. Stacking is capped at 9 m/s. Still needs warm ocean, moisture and a low.' },
-  { type: 'cool', name: 'Cool water', radiusKm: 550, durationHours: 72,
+  { type: 'cool', name: 'Cool water', radiusKm: 550, durationHours: 240,
     description: 'Cools the ocean by up to 3 °C per placement, capped at 30 °C, and forms a weak high. Cuts the storm’s ocean energy supply. Ocean only.' },
-  { type: 'dry', name: 'Dry air', radiusKm: 550, durationHours: 72,
+  { type: 'dry', name: 'Dry air', radiusKm: 550, durationHours: 240,
     description: 'Reduces humidity and disrupts convection. Overlap with other weakening conditions to dissipate storms faster.' },
-  { type: 'high', name: 'High pressure', radiusKm: 800, durationHours: 72,
+  { type: 'high', name: 'High pressure', radiusKm: 800, durationHours: 240,
     description: 'Adds a high (clockwise north of the equator, anticlockwise south). Changes the flow that steers storms. Not within 300 km of a storm.' },
-  { type: 'cold-air', name: 'Cold air', radiusKm: 450, durationHours: 72,
+  { type: 'cold-air', name: 'Cold air', radiusKm: 450, durationHours: 240,
     description: 'Cools lower-level air by up to 3 °C, capped at 18 °C. Suppresses growth and weakens storms.' },
-  { type: 'downdraft', name: 'Downdraft', radiusKm: 400, durationHours: 48,
+  { type: 'downdraft', name: 'Downdraft', radiusKm: 400, durationHours: 240,
     description: 'Adds up to 1 m/s of descending air, capped at 9 m/s. Suppresses convection and weakens storms.' },
-  { type: 'high-shear', name: 'Strong shear', radiusKm: 400, durationHours: 48,
+  { type: 'high-shear', name: 'Strong shear', radiusKm: 400, durationHours: 240,
     description: 'Adds upper-level wind that tilts and tears a storm apart. Stacking is capped at +60 m/s.' },
-  { type: 'unstable-air', name: 'Unstable air', radiusKm: 450, durationHours: 48,
+  { type: 'unstable-air', name: 'Unstable air', radiusKm: 450, durationHours: 240,
     description: 'Increases atmospheric instability. Helps moist updrafts build thunderstorms and can intensify snowy bands.' },
-  { type: 'stable-air', name: 'Stable air', radiusKm: 450, durationHours: 48,
+  { type: 'stable-air', name: 'Stable air', radiusKm: 450, durationHours: 240,
     description: 'Stabilizes the air and suppresses convection, thunderstorms and intense snow bands.' },
 ];
+/** A player condition lasts 10 days (real westerly wind bursts last 5-20). Formation recipes and natural formation waves keep the shorter lives the recipes were balanced with. */
+const RECIPE_HOURS: Record<ToolType, number> = {
+  warm: 96, moisture: 72, low: 72, 'low-shear': 48, 'warm-air': 72, updraft: 48, cool: 72, dry: 72, high: 72, 'cold-air': 72, downdraft: 48, 'high-shear': 48, 'unstable-air': 48, 'stable-air': 48,
+};
 const TOOL_BY_TYPE = new Map(TOOLS.map(t => [t.type, t]));
 const EFFECT_STRENGTH: Record<ToolType, number> = { warm: 2.0, moisture: 0.22, low: -7, high: 7, 'warm-air': 3, updraft: 1, cool: 3, dry: 0.3, 'cold-air': -3, downdraft: -1, 'low-shear': -10, 'high-shear': 10, 'unstable-air': 1, 'stable-air': -1 };
 export const EFFECT_STACK_LIMITS = { air: 18, vertical: 9, instability: 6, cooling: 30, drying: 3, shear: 60 } as const;
@@ -1225,7 +1229,7 @@ function appendTool(state: GameState, type: ToolType, lon: number, lat: number, 
   const tag = formation ? { formation } : {};
   state.actions.push({ tick: state.tick, type, lon, lat, ...tag });
   state.effects.push({ id: state.actions.length, type, lon, lat, radiusKm: tool.radiusKm,
-    remainingHours: tool.durationHours, ageHours: 0, ...tag });
+    remainingHours: formation ? RECIPE_HOURS[type] : tool.durationHours, ageHours: 0, ...tag });
 }
 
 /** Recompute and place the whole recipe atomically in the worker's current world. */
@@ -1268,9 +1272,20 @@ export function setClimate(state: GameState, key: ClimateKey, value: number): Pl
   }
   state.actions.push({ tick: state.tick, type: 'climate', key, value: rounded });
   state.climate[key] = rounded;
-  if (key === 'enso' && (rounded !== 0 || state.climateLayer)) { // the slider holds Nino 3.4 at its value; the ocean then responds over days to weeks
-    setSstHold(ensureClimateLayer(state).core, rounded === 0 ? null : rounded);
+  if (key === 'enso' && (rounded !== 0 || state.climateLayer)) { // the slider imposes Nino 3.4 at its value at once and holds it; only the thermocline adjusts over time
+    const layer = ensureClimateLayer(state), before = state.weather ? anomalySet(state) : null;
+    const was = before && { slp: before.slp.slice(), wu: before.u.map((x, k) => x + before.ug[k]), wv: before.v.map((x, k) => x + before.vg[k]) };
+    setSstHold(layer.core, rounded === 0 ? null : rounded);
+    if (rounded !== 0) layer.nino = nino34Of(layer.core); // the remote effects follow the held value without the 45-day smoothing
     rebuildClimate(state);
+    if (was && state.weather) { // a live world's pressure and wind relax toward the anomaly over days: move them by the change now, so the map shows it at once
+      const after = anomalySet(state)!, w = state.weather;
+      for (let k = 0; k < w.pressure.length; k++) {
+        w.pressure[k] = clamp(w.pressure[k] + after.slp[k] - was.slp[k], 800, 1100);
+        w.u[k] = clamp(w.u[k] + after.u[k] + after.ug[k] - was.wu[k], -200, 200);
+        w.v[k] = clamp(w.v[k] + after.v[k] + after.vg[k] - was.wv[k], -200, 200);
+      }
+    }
   }
   refreshGrid(state);
   refreshForecasts(state);
@@ -2102,7 +2117,7 @@ function updateGenesisWaves(state: GameState): void {
   GENESIS_CONDITIONS.forEach((type, index) => {
     const tool = TOOLS.find(t => t.type === type)!;
     state.effects.push({ id: -((wave - 1) * GENESIS_CONDITIONS.length + index + 1),
-      type, lon, lat, radiusKm: tool.radiusKm, remainingHours: tool.durationHours, ageHours: 0 });
+      type, lon, lat, radiusKm: tool.radiusKm, remainingHours: RECIPE_HOURS[type], ageHours: 0 });
   });
   genesis.waves = wave;
   genesis.nextSpawnTick = state.tick + (48 + Math.floor(hash01(state.seed, 9501, wave) * 25)) * TICKS_PER_HOUR;

@@ -12,7 +12,7 @@ const note = (...a: unknown[]) => console.info('[climate-conditions]', ...a);
 type Drop = [ToolType, number, number];
 const many = (type: ToolType, n: number, lon: number, lat: number): Drop[] => Array.from({ length: n }, () => [type, lon, lat]);
 
-/** A world after the drops, `days` days later (the drops last 2-3 days). A world without drops has no layer: the control. */
+/** A world after the drops, `days` days later. A world without drops has no layer: the control. The drops' own fields (10 days) are cleared by the cheap day skip after day 4; the climate patches they fed run their full 10 days. */
 function world(drops: Drop[], days: number): GameState {
   const s = createGame(SEED, NOV_1);
   for (const [type, lon, lat] of drops) expect(placeTool(s, type, lon, lat).ok).toBe(true);
@@ -41,10 +41,10 @@ describe('heat patches in the core', () => {
     expect(back).not.toBeNull();
     expect(back!.heat).toEqual(s.heat);
     expect(back!.nHeat).toBe(2);
-    for (const bad of [{ strength: 0 }, { strength: 5 }, { lat: 45 }, { radiusDeg: 1 }, { radiusDeg: 41 }, { days: 0 }, { lonEast: NaN }]) {
+    for (const bad of [{ strength: 0 }, { strength: 10 }, { lat: 45 }, { radiusDeg: 1 }, { radiusDeg: 41 }, { days: 0 }, { lonEast: NaN }]) {
       expect(addHeatPatch(s, { lonEast: 160, lat: 0, radiusDeg: 4, strength: 1, days: 3, ...bad })).toBe(false);
     }
-    const d = serializeClimate(s); (d.heat as number[])[3] = 9;
+    const d = serializeClimate(s); (d.heat as number[])[3] = 10;
     expect(restoreClimate(d)).toBeNull();
     for (let i = 0; i < 20; i++) stepClimateDay(s);
     expect(s.nHeat).toBe(0);
@@ -95,8 +95,9 @@ describe('placed conditions drive the climate (twin worlds)', () => {
     fullDays(up, 1); fullDays(low, 1); fullDays(high, 1);
     note('layer pressure at the centre of six updrafts / lows / highs:', layerSlp(up).toFixed(3), layerSlp(low).toFixed(3), layerSlp(high).toFixed(3));
     expect(layerSlp(up)).toBeLessThan(-0.2);
-    expect(Math.abs(layerSlp(low))).toBeLessThan(0.05);
-    expect(Math.abs(layerSlp(high))).toBeLessThan(0.05);
+    // measured: -1.829 / -0.088 / +0.075 hPa (was -0.04 / +0.03 with the old 4-unit cap): six stacked lows reach the 9-unit cap, and the clamp makes the full-minus-without-own subtraction slightly inexact; still about 20 times below an updraft, hence the 0.1 bound (was 0.05)
+    expect(Math.abs(layerSlp(low))).toBeLessThan(0.1);
+    expect(Math.abs(layerSlp(high))).toBeLessThan(0.1);
   });
 
   it('moisture and dry air feed nothing; far-away conditions do not build a layer', () => {
@@ -155,9 +156,14 @@ describe('placed conditions drive the climate (twin worlds)', () => {
     expect(Math.abs(p(single, -165, 45) - p(control, -165, 45))).toBeLessThan(0.05);
     expect(Math.abs(u(single, 200) - u(control, 200))).toBeLessThan(0.2);
     const reach = (n: number) => Math.abs(u(early(many('low', n, 160, 0)), 200) - u(control, 200));
-    const sizes = [1, 2, 6, 12].map(n => nino3(world(many('low', n, 160, 0), 90)));
-    note('Nino3 on day 90 for 1, 2, 6, 12 lows:', sizes.map(v => v.toFixed(3)).join(' '), '; wind change at 200E for 1, 12:', reach(1).toFixed(2), reach(12).toFixed(2));
+    const sizes = [1, 2, 6, 12, 24, 32, 64].map(n => nino3(world(many('low', n, 160, 0), 90)));
+    note('Nino3 on day 90 for 1, 2, 6, 12, 24, 32, 64 lows:', sizes.map(v => v.toFixed(3)).join(' '), '; wind change at 200E for 1, 12:', reach(1).toFixed(2), reach(12).toFixed(2));
+    // measured with 10-day conditions and the player-patch heating cap at 9 units: 0.015 0.060 0.338 0.490 0.641 0.708 0.883 (Nino 3.4: 0.022 0.085 0.481 0.695 0.908 1.002 1.239). With the old cap of 4 units: 0.015 0.060 0.157 0.240 (12 lows) and 0.468 for 64 lows.
+    // Nino 3 >= 1 with 24 lows is not reached: the equatorial wind change already peaks near 14 m/s there (cap 16 would give 0.87 at about 25 m/s), so the El Nino is clearest in Nino 3.4 (> 0.9 from 24 lows)
     for (let i = 1; i < sizes.length; i++) expect(sizes[i]).toBeGreaterThan(sizes[i - 1]);
+    expect(sizes[3]).toBeGreaterThan(0.45);
+    expect(sizes[4]).toBeGreaterThan(0.6);
+    expect(sizes[6]).toBeGreaterThan(0.8);
     expect(reach(12)).toBeGreaterThan(reach(1) * 3);
     const highs = world(many('high', 12, 160, 0), 90);
     const off = world(many('low', 12, 160, 15), 90);

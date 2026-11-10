@@ -19,7 +19,7 @@ describe('shear conditions', () => {
     expect(TOOLS.map(t => t.type)).toEqual(['warm', 'moisture', 'low', 'low-shear', 'warm-air', 'updraft', 'cool', 'dry', 'high', 'cold-air', 'downdraft', 'high-shear', 'unstable-air', 'stable-air']);
     for (const type of SHEAR_TOOLS) {
       const tool = TOOLS.find(t => t.type === type)!;
-      expect([tool.radiusKm, tool.durationHours]).toEqual([400, 48]);
+      expect([tool.radiusKm, tool.durationHours]).toEqual([400, 240]);
     }
     expect(TOOLS.find(t => t.type === 'low-shear')!.description).toBe('Calms the upper winds so a storm can stay upright. Stacking is capped at −60 m/s.');
     expect(TOOLS.find(t => t.type === 'high-shear')!.description).toBe('Adds upper-level wind that tilts and tears a storm apart. Stacking is capped at +60 m/s.');

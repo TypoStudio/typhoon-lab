@@ -72,6 +72,8 @@ describe('the fast climate path', () => {
     advanceClimateTime(s, 1);
     expect(s.effects).toHaveLength(1);
     advanceClimateTime(s, 3);
+    expect(s.effects).toHaveLength(1); // a condition lasts 10 days (it was 3)
+    advanceClimateTime(s, 7);
     expect(s.effects).toHaveLength(0);
   });
 

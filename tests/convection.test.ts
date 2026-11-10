@@ -64,7 +64,7 @@ describe('warm air and updraft conditions', () => {
       expect(c.updraft).toBeCloseTo(env.updraft, 9);
       expect(c.humidity).toBeCloseTo(env.humidity, 9);
     }
-    run(s, 300);
+    run(s, 960); // conditions last 240 h = 960 ticks (it was 300 ticks past the 72 h)
     expect(s.effects).toHaveLength(0);
     expect(sample(s).airHeating).toBe(0); expect(sample(s).updraft).toBe(0);
     expect(s.grid.every(c => c.airHeating === 0 && c.updraft === 0)).toBe(true);

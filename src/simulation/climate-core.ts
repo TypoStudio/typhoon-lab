@@ -136,8 +136,8 @@ const MAX_PULSE_LOG = 300; // entries of the pulse log (three numbers each pulse
 export const MAX_PATCHES = 8;
 /** Atmosphere-only heating patches (placed weather conditions): they heat or cool the Gill atmosphere directly and have no ocean footprint of their own. */
 export const MAX_HEAT_PATCHES = 16;
-/** Peak heating of one (merged) patch in nondimensional Gill units (5 units = 25 mm/day of rain). It equals HEAT_MAX, so stacking cannot exceed what a column's moisture supply allows. */
-const HEAT_PATCH_MAX = HEAT_MAX;
+/** Peak heating of one (merged) player patch, and of the sum of natural and patch heating where patches act, in nondimensional Gill units (5 units = 25 mm/day of rain). Higher than HEAT_MAX, which still bounds the natural and SST-patch heating alone: a deliberate stack of conditions is a prescribed heat source, so it can reach 9 units (about 45 mm/day, the rain of an intense convective cluster) before the wind forcing (WIND_CAP), thermocline and SST bounds apply. About 12 lows reach it. */
+const HEAT_PATCH_MAX = 9;
 const PATCH_NUDGE_DAYS = 2; // days, strong nudging of the ocean strip toward the imposed anomaly
 const PATCH_EDGE = 0.05; // fraction of the peak below which a patch does not touch a cell
 const PATCH_DECAY_DAYS = 45; // days, e-folding of the off-strip (no ocean model there) anomaly after release: mixed-layer heat-flux damping
@@ -509,8 +509,11 @@ function solveGill(s: ClimateState, month: number, heat: 'all' | 'none' | 'notOw
     aF[k] = q;
   }
   if (s.nPatches > 0) addPatchHeating(s, w < 0.5 ? m0 : m1);
-  if (heat !== 'none' && s.nHeat > 0) addHeatPatches(s, heat === 'notOwn');
   for (let k = 0; k < ATM_N; k++) aF[k] = clamp(aF[k], -HEAT_MAX, HEAT_MAX);
+  if (heat !== 'none' && s.nHeat > 0) {
+    addHeatPatches(s, heat === 'notOwn');
+    for (let k = 0; k < ATM_N; k++) aF[k] = clamp(aF[k], -HEAT_PATCH_MAX, HEAT_PATCH_MAX);
+  }
   let fc = 0;
   for (let k = 32; k < 56; k++) fc += aF[k]; // 160E..280E
   fc /= 24;
@@ -721,10 +724,14 @@ export function addThermoclinePulse(s: ClimateState, p: { lonEast: number; metre
   if (s.pulses.length > MAX_PULSE_LOG) s.pulses.splice(0, s.pulses.length - MAX_PULSE_LOG);
   return true;
 }
-/** Nudges Nino 3.4 SST toward `value` (degC, 10-day timescale); null releases it. */
+/**
+ * Imposes Nino 3.4 SST `value` (degC): the equatorial SST pattern is set at once to the held target (flat across the Nino 3.4 box, Gaussian taper outside
+ * it), then kept there by a 10-day nudge while the thermocline adjusts. null releases the hold and leaves the SST to evolve from where it is.
+ */
 export function setSstHold(s: ClimateState, value: number | null): boolean {
   if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 5)) return false;
   s.hold = value;
+  if (value !== null) for (let j = 0; j < OCEAN_N; j++) s.T[j] = value * HOLD_WEIGHT[j];
   return true;
 }
 /**

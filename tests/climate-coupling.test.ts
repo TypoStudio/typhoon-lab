@@ -6,9 +6,9 @@ import { equatorNormalSst } from '../src/data/climate-normals';
 import {
   MAX_PATCHES, OCEAN_N, createClimate, restoreClimate, serializeClimate, stackSstPatch, stepClimateDay, addSstPatch, climateFields, climateIndices,
 } from '../src/simulation/climate-core';
-import { CLIMATE_SOURCE, createLiveClimateLayer } from '../src/simulation/climate-coupling';
+import { CLIMATE_SOURCE, createClimateLayer, createLiveClimateLayer, rebuildAnomalies } from '../src/simulation/climate-coupling';
 import {
-  STEP_HOURS, createGame, gridIndex, loadHistoric, placeFormation, placeTool, replayGame, sampleEnvironment, setClimate, setHistoricEnvironment, setSeason, stepGame, totalPressure, totalWind,
+  STEP_HOURS, climateAnomalyContext, createGame, gridIndex, loadHistoric, placeFormation, placeTool, replayGame, sampleEnvironment, setClimate, setHistoricEnvironment, setSeason, stepGame, totalPressure, totalWind,
 } from '../src/simulation/engine';
 import { windowCells } from '../src/simulation/historic';
 import type { GameState, HistoricEnvironment, LiveWeatherSnapshot } from '../src/types';
@@ -98,8 +98,9 @@ describe('a layer that nothing drives', () => {
     const f = climateFields(createClimate(1, 213, 2000, false));
     for (const key of ['sst', 'slp', 'u', 'v', 'precip'] as const) expect(f[key].every(x => x === 0), key).toBe(true);
     const w = createGame(SEED), c = createGame(SEED);
-    setClimate(w, 'enso', 1); setClimate(w, 'enso', 0);
-    const an = w.climateLayer!.anomalies!;
+    setClimate(w, 'enso', 0); // 0 on a world that never held anything makes no layer and changes nothing
+    expect(w.climateLayer).toBeNull();
+    const an = rebuildAnomalies(createClimateLayer(SEED, 213), climateAnomalyContext());
     for (const key of ['sst', 'air', 'hum', 'slp', 'u', 'v', 'ug', 'vg', 'shear'] as const) expect(an[key].every(x => x === 0), key).toBe(true);
     expect(sampleEnvironment(w, 13, -23)).toEqual(sampleEnvironment(c, 13, -23)); // Benguela: normal SST below 18 C
     fullDays(w, 2); fullDays(c, 2);
@@ -109,11 +110,12 @@ describe('a layer that nothing drives', () => {
   it('stays quiet for months: a base-world layer is deterministic, so a tool or a released slider starts no random ENSO event', () => {
     const w = createGame(SEED, AUG_1);
     expect(w.climateLayer).toBeNull();
-    setClimate(w, 'enso', 1); setClimate(w, 'enso', 0);
+    setClimate(w, 'enso', 1); setClimate(w, 'enso', 0); // the slider set the sea at once; releasing it leaves the ocean to evolve from there
     expect(w.climateLayer!.core.stochastic).toBe(false);
     fullDays(w, 3); skipDays(w, 177);
-    expect(Math.max(...Array.from(w.climateLayer!.core.T, Math.abs))).toBeLessThan(1e-9);
-    expect(Math.abs(climateIndices(w.climateLayer!.core).nino34)).toBeLessThan(1e-9);
+    const n34 = Math.abs(climateIndices(w.climateLayer!.core).nino34);
+    note('slider +1 released at day 0: |Nino 3.4| after 180 days', n34.toFixed(3));
+    expect(n34).toBeLessThan(1); // decaying, not growing: no natural event feeds it
     expect(w.climateLayer!.core.burstCount).toBe(0);
     expect(createGame(SEED, AUG_1, neutralSnapshot()).climateLayer!.core.stochastic).toBe(true); // a live world keeps the natural noise
   });
@@ -216,7 +218,7 @@ describe('B. cause and effect through the weather layer (twin worlds, same seed)
     expect(patch.nPatches).toBe(1);
     expect(patch.patches[3]).toBe(6);
     expect(patch.patches[2]).toBeGreaterThan(10);
-    expect(patch.patches[5]).toBe(4); // twelve simultaneous tools hold for one tool's duration, not twelve
+    expect(patch.patches[5]).toBe(10); // twelve simultaneous tools hold for one tool's duration (10 days), not twelve
     skipDays(a, 55); skipDays(b, 55);
     const day60 = { east: delta(a, b, [-130, 0], sst), darwin: delta(a, b, DARWIN, press), tahiti: delta(a, b, TAHITI, press), trades: delta(a, b, [175, 0], uWind), warmPool: delta(a, b, [150, 0], sst), np: delta(a, b, NP, press), n34: climateIndices(a.climateLayer!.core).nino34 };
     note('12 warm tools, day 60:', JSON.stringify(Object.fromEntries(Object.entries(day60).map(([k, v]) => [k, +v.toFixed(2)]))));
@@ -377,7 +379,7 @@ describe('E. replays reproduce the climate layer from seed and actions', () => {
     }
     const restored = restoreClimate(JSON.parse(JSON.stringify(serializeClimate(s.climateLayer!.core))));
     expect(restored).not.toBeNull();
-    expect(serializeClimate(restored!)).toEqual(serializeClimate(s.climateLayer!.core));
+    expect(JSON.parse(JSON.stringify(serializeClimate(restored!)))).toEqual(JSON.parse(JSON.stringify(serializeClimate(s.climateLayer!.core)))); // through JSON, which writes the diagnostic tAdv[0] = -0 as 0
   });
 });
 
