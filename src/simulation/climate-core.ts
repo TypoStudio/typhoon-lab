@@ -133,6 +133,8 @@ const RED_NOISE_LON = 170; // deg E, centre of its Gaussian envelope (sigma 40)
 const PULSE_WINDOW_DAYS = 30;
 const MAX_RECENT_PULSES = 4; // thermocline pulses a player may apply within PULSE_WINDOW_DAYS
 const MAX_PULSE_LOG = 300; // entries of the pulse log (three numbers each pulse)
+export const MAX_SCRIPT = 64; // scripted forcing entries of a scenario (five numbers each)
+const SCRIPT_MAX_DAY = 20 * 365;
 export const MAX_PATCHES = 8;
 /** Atmosphere-only heating patches (placed weather conditions): they heat or cool the Gill atmosphere directly and have no ocean footprint of their own. */
 export const MAX_HEAT_PATCHES = 16;
@@ -180,6 +182,8 @@ export interface ClimateState {
   heatOwn: Float64Array;
   nHeat: number;
   pulses: number[]; // log of [day, lonEast, metres] triples
+  /** Scripted forcing of a climate scenario: entries of [day, kind, a, b, c]; kind 0 = wind burst (a = lonEast, b = m/s, westerly +, c = days), kind 1 = trade-wind anomaly set to a (m/s, easterly +). Empty outside scenarios. */
+  script: number[];
 }
 
 export interface ClimateIndices {
@@ -355,6 +359,7 @@ export function createClimate(seed: number, startDayOfYear = 1, startYear = 2000
     heatOwn: new Float64Array(MAX_HEAT_PATCHES),
     nHeat: 0,
     pulses: [],
+    script: [],
   };
   Object.defineProperty(state, 'stochastic', { value: stochastic, writable: false, enumerable: true }); // the mode cannot be flipped mid-run
   return state;
@@ -365,7 +370,7 @@ const ARRAY_KEYS = ['K', 'R', 'R3', 'T', 'tAdv', 'tTh', 'tDamp', 'tForce', 'burs
 export function serializeClimate(s: ClimateState): Record<string, unknown> {
   const o: Record<string, unknown> = {
     day: s.day, seed: s.seed, stochastic: s.stochastic, startDayOfYear: s.startDayOfYear, startYear: s.startYear, redNoise: s.redNoise,
-    nBursts: s.nBursts, burstCount: s.burstCount, tradeAnomaly: s.tradeAnomaly, hold: s.hold, nPatches: s.nPatches, nHeat: s.nHeat, pulses: s.pulses.slice(),
+    nBursts: s.nBursts, burstCount: s.burstCount, tradeAnomaly: s.tradeAnomaly, hold: s.hold, nPatches: s.nPatches, nHeat: s.nHeat, pulses: s.pulses.slice(), script: s.script.slice(),
   };
   for (const k of ARRAY_KEYS) o[k] = Array.from(s[k]);
   return o;
@@ -381,6 +386,9 @@ export function restoreClimate(data: unknown): ClimateState | null {
   if (!Array.isArray(d.pulses) || !d.pulses.every(num) || d.pulses.length % 3 !== 0 || d.pulses.length > MAX_PULSE_LOG) return null;
   for (let i = 0; i < d.pulses.length; i += 3) if (d.pulses[i] < 0 || d.pulses[i + 1] < OCEAN_LON0 || d.pulses[i + 1] > 280 || Math.abs(d.pulses[i + 2]) > 60) return null;
   if (typeof d.stochastic !== 'boolean') return null;
+  const script = d.script === undefined ? [] : d.script; // states serialised before scenarios have none
+  if (!Array.isArray(script) || !script.every(num) || script.length % 5 !== 0 || script.length > MAX_SCRIPT * 5) return null;
+  for (let i = 0; i < script.length; i += 5) if (!isValidScriptEntry(script[i], script[i + 1], script[i + 2], script[i + 3], script[i + 4])) return null;
   const s = createClimate(d.seed, d.startDayOfYear, d.startYear, d.stochastic);
   for (const k of ARRAY_KEYS) {
     const a = d[k];
@@ -407,6 +415,7 @@ export function restoreClimate(data: unknown): ClimateState | null {
   s.nPatches = Math.floor(d.nPatches);
   s.nHeat = Math.floor(d.nHeat);
   s.pulses = d.pulses.slice();
+  s.script = script.slice();
   return s;
 }
 
@@ -567,6 +576,7 @@ export function stepClimateDay(s: ClimateState): void {
   const m1 = (m0 + 1) % 12;
   const mw = mf - Math.floor(mf);
   const day = s.day;
+  if (s.script.length) applyScript(s);
 
   const T = s.T;
   if (s.stochastic) warmPoolState(T);
@@ -683,6 +693,37 @@ export function stepClimateDay(s: ClimateState): void {
     s.burstCount++;
   }
   s.day = day + 1;
+}
+
+// ---- Scripted forcing (climate scenarios) ----
+function isValidScriptEntry(day: number, kind: number, a: number, b: number, c: number): boolean {
+  if (!Number.isInteger(day) || day < 0 || day > SCRIPT_MAX_DAY) return false;
+  if (kind === 0) return isValidBurst({ lonEast: a, speed: b, days: c });
+  return kind === 1 && isValidTradeWind(a) && b === 0 && c === 0;
+}
+/** Replaces the scripted forcing with `entries` ([day, kind, a, b, c] each, see ClimateState.script). Returns false and changes nothing when an entry is invalid. */
+export function setClimateScript(s: ClimateState, entries: readonly number[]): boolean {
+  if (entries.length % 5 !== 0 || entries.length > MAX_SCRIPT * 5) return false;
+  for (let i = 0; i < entries.length; i += 5) if (!isValidScriptEntry(entries[i], entries[i + 1], entries[i + 2], entries[i + 3], entries[i + 4])) return false;
+  s.script = entries.slice();
+  return true;
+}
+/** Last model day the scripted forcing is active (a burst's last day, a trade-wind change's day); -1 without a script. */
+export function scriptEndDay(s: ClimateState): number {
+  let end = -1;
+  for (let i = 0; i < s.script.length; i += 5) end = Math.max(end, s.script[i] + (s.script[i + 1] === 0 ? Math.ceil(s.script[i + 4]) : 0));
+  return end;
+}
+/** Starts the scripted entries due today. Scripted bursts do not count against the player's burst limit, only against the 24 slots. */
+function applyScript(s: ClimateState): void {
+  for (let i = 0; i < s.script.length; i += 5) {
+    if (s.script[i] !== s.day) continue;
+    if (s.script[i + 1] === 1) { s.tradeAnomaly = s.script[i + 2]; continue; }
+    if (s.nBursts >= MAX_BURSTS) continue;
+    const o = s.nBursts * 4;
+    s.bursts[o] = s.script[i + 2]; s.bursts[o + 1] = s.script[i + 3]; s.bursts[o + 2] = s.script[i + 4]; s.bursts[o + 3] = s.day;
+    s.nBursts++;
+  }
 }
 
 // ---- Player causes ----

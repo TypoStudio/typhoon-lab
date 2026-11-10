@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/__worker-test');
 });
 
-test('the default advances 600 model seconds per real second, ×1.8k 1800 and real time 1', async ({ page }) => {
+test('the default advances 600 model seconds per real second, 30m/s 1800 and real time 1', async ({ page }) => {
   const result = await page.evaluate(async () => {
     const worker = new Worker('/src/worker.ts', { type: 'module' });
     const request = (message: object): Promise<any> => new Promise((resolve, reject) => {

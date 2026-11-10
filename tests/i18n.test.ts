@@ -108,13 +108,13 @@ describe('locale registry', () => {
 
   it('translates a few strings per locale', () => {
     const expected: Record<string, [string, string, string]> = {
-      ja: ['台風ラボ', '過去の台風', '言語'],
-      'zh-CN': ['台风实验室', '历史台风', '语言'],
-      'zh-TW': ['颱風實驗室', '歷史颱風', '語言'],
+      ja: ['台風ラボ', '台風体験', '言語'],
+      'zh-CN': ['台风实验室', '台风体验', '语言'],
+      'zh-TW': ['颱風實驗室', '颱風體驗', '語言'],
     };
     for (const [code, values] of Object.entries(expected)) {
       setLanguage(code as Language);
-      expect(['Typhoon Lab', 'Past typhoon', 'Language'].map(s => t(s)), code).toEqual(values);
+      expect(['Typhoon Lab', 'Typhoon experience', 'Language'].map(s => t(s)), code).toEqual(values);
     }
   });
 

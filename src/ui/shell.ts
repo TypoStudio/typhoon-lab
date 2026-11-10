@@ -61,11 +61,13 @@ export const FORMATION_TOOLS = [
 export const FORMATION_KEYS = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';'] as const;
 export type FormationToolId = (typeof FORMATION_TOOLS)[number]['id'];
 
-export const PALETTE_TABS = [
+export const PALETTE_TABS: readonly { id: string; label: string; short?: string }[] = [
   { id: 'conditions', label: 'Conditions' },
   { id: 'formation', label: 'Formation' },
   { id: 'measure', label: 'Measure' },
-] as const;
+  { id: 'typhoons', label: 'Typhoon experience', short: 'Typhoons' },
+  { id: 'climate', label: 'Climate experience', short: 'Climate' },
+];
 
 /** Measurement icons, same 24 px stroke style as the other tools. */
 const MEASURE_ICON: Record<MeasureId, string> = {
@@ -203,7 +205,7 @@ export function shellHtml(): string {
     </button>`).join('');
   const paletteTabs = PALETTE_TABS.map((t, i) => `
     <button type="button" role="tab" class="palette__tab" id="palette-tab-${t.id}" data-palette-tab="${t.id}" data-testid="palette-tab-${t.id}"
-      aria-selected="${i === 0}" aria-controls="palette-panel-${t.id}" tabindex="${i === 0 ? 0 : -1}">${t.label}</button>`).join('');
+      aria-selected="${i === 0}" aria-controls="palette-panel-${t.id}" tabindex="${i === 0 ? 0 : -1}"${t.short ? ` aria-label="${t.label}" data-short="${t.short}"` : ''}>${t.label}</button>`).join('');
   const overlays = MAP_OVERLAY_OPTIONS.map(l => `
     <button type="button" class="overlay-toggle" data-overlay="${l.id}" data-testid="layer-${l.id}"
       aria-pressed="true" aria-label="${l.label}" data-tip-title="${l.label}" data-tip="${l.tip}">${mapIconSvg(l.id)}</button>`).join('')
@@ -230,7 +232,7 @@ export function shellHtml(): string {
     <button type="button" class="speed__opt" data-speed-action="prev" data-testid="speed-prev" aria-label="Slower" aria-keyshortcuts="- Shift+Tab" data-tip-title="Slower" data-tip="Select the previous speed. Shortcut: - or Shift+Tab."><span class="key-hint" aria-hidden="true">-</span>
       <svg class="speed__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m11 6-6 6 6 6M19 6l-6 6 6 6"/></svg>
     </button>
-    <output class="speed__value" data-ref="speedValue" data-testid="speed-value" aria-live="polite" aria-label="10 minutes per second" data-tip-title="10 minutes per second" data-tip="Model time that passes in each second of real time. Change it with the arrows or the 1–9 keys.">×600</output>
+    <output class="speed__value" data-ref="speedValue" data-testid="speed-value" aria-live="polite" aria-label="10 minutes per second" data-tip-title="10 minutes per second" data-tip="Model time that passes in each second of real time. Change it with the arrows or the 1–9 keys.">10m/s</output>
     <span class="key-hint key-hint--steps" aria-hidden="true">1–9</span>
     <button type="button" class="speed__opt" data-speed-action="next" data-testid="speed-next" aria-label="Faster" aria-keyshortcuts="+ Tab" data-tip-title="Faster" data-tip="Select the next speed. Shortcut: + or Tab."><span class="key-hint" aria-hidden="true">+</span>
       <svg class="speed__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 6 6 6-6 6M13 6l6 6-6 6"/></svg>
@@ -252,7 +254,7 @@ export function shellHtml(): string {
       tabindex="0" role="group" aria-roledescription="map" aria-label="World weather map" aria-describedby="map-help">
       <div class="stage__veil" data-ref="veil" data-testid="map-veil"><p data-ref="veilText">Starting the world…</p></div>
     </main>
-    <p id="map-help" class="sr-only">Map controls. With a weather tool armed, arrow keys move the placement target one degree, Shift five degrees, Alt a quarter degree, and Enter places it. Without a tool, arrow keys pan the map. Keys Q to U cycle paired conditions. Keys A, S, D, F, G, H, J, K, L and semicolon select a formation tool. Keys Z, X, C, V, B, N, M, comma, period and slash select a measurement tool. Number keys 1–9 set the speed steps, minus and plus step it slower and faster, and the backtick key resets it to ×600. Shift plus and Shift minus zoom. Space plays or pauses, Escape disarms.</p>
+    <p id="map-help" class="sr-only">Map controls. With a weather tool armed, arrow keys move the placement target one degree, Shift five degrees, Alt a quarter degree, and Enter places it. Without a tool, arrow keys pan the map. Keys Q to U cycle paired conditions. Keys A, S, D, F, G, H, J, K, L and semicolon select a formation tool. Keys Z, X, C, V, B, N, M, comma, period and slash select a measurement tool. Number keys 1–9 set the speed steps, minus and plus step it slower and faster, and the backtick key resets it to 10m/s. Shift plus and Shift minus zoom. Space plays or pauses, Escape disarms.</p>
 
     <header class="brandbar">
       <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor" fill-rule="evenodd"><path d="${CYCLONE_PATH}"/></svg>
@@ -291,7 +293,7 @@ export function shellHtml(): string {
     <div class="clockbar" role="group" aria-label="Time controls">
       <button type="button" class="btn btn--float btn--play" data-ref="play" data-testid="play-toggle" aria-label="Pause" aria-keyshortcuts="Space" data-tip-title="Pause" data-tip="Stop or resume time. Shortcut: Space."><span class="key-hint" aria-hidden="true">Space</span>Pause</button>
       <div class="speed" role="group" aria-label="Simulation speed" data-ref="speedGroup">${speeds}</div>
-      <button type="button" class="btn btn--float" data-ref="speedReset" data-testid="speed-reset" aria-label="Reset speed" aria-keyshortcuts="\`" data-tip-title="Reset speed" data-tip="Return only the speed to ×600. Shortcut: \`."><span class="key-hint key-hint--tick" aria-hidden="true">\`</span><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/></svg><span class="btn__label">Reset speed</span></button>
+      <button type="button" class="btn btn--float" data-ref="speedReset" data-testid="speed-reset" aria-label="Reset speed" aria-keyshortcuts="\`" data-tip-title="Reset speed" data-tip="Return only the speed to 10m/s. Shortcut: \`."><span class="key-hint key-hint--tick" aria-hidden="true">\`</span><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/></svg><span class="btn__label">Reset speed</span></button>
       <p class="clock__text" data-ref="clockText" data-testid="clock" data-short="D1 00:00">Day 1 · 00:00:00</p>
     </div>
 
@@ -305,10 +307,16 @@ export function shellHtml(): string {
       <div class="palette__head">
         <div class="palette__tabs" role="tablist" aria-label="Palette sections" data-ref="paletteTabs">${paletteTabs}</div>
         <p class="palette__label">Drag onto the map</p>
+        <div class="palette__pager" data-ref="palettePager" data-testid="palette-pager" hidden>
+          <button type="button" class="palette__page" data-page="-1" data-testid="palette-prev" aria-label="Previous page"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5-7 7 7 7"/></svg></button>
+          <button type="button" class="palette__page" data-page="1" data-testid="palette-next" aria-label="Next page"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></svg></button>
+        </div>
       </div>
       <div class="palette__tools" role="tabpanel" id="palette-panel-conditions" aria-labelledby="palette-tab-conditions" data-palette-panel="conditions">${tools}</div>
       <div class="palette__tools" role="tabpanel" id="palette-panel-formation" aria-labelledby="palette-tab-formation" data-palette-panel="formation" hidden>${formationTools}</div>
       <div class="palette__tools" role="tabpanel" id="palette-panel-measure" aria-labelledby="palette-tab-measure" data-palette-panel="measure" hidden>${measureTools}</div>
+      <div class="palette__tools" role="tabpanel" id="palette-panel-typhoons" aria-labelledby="palette-tab-typhoons" data-palette-panel="typhoons" data-ref="experienceTyphoons" data-testid="experience-typhoons" hidden></div>
+      <div class="palette__tools" role="tabpanel" id="palette-panel-climate" aria-labelledby="palette-tab-climate" data-palette-panel="climate" data-ref="experienceClimate" data-testid="experience-climate" hidden></div>
     </nav>
     </div>
 
@@ -318,7 +326,6 @@ export function shellHtml(): string {
 
       <div class="settings-panel" role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" data-panel="settings" tabindex="0" hidden>
       <div class="settings" role="group" aria-label="World settings">
-        <div class="setting"><label class="setting__label" for="historic-select">Past typhoon</label><select id="historic-select" data-ref="historicSelect" data-testid="historic-select"></select><button type="button" class="btn btn--small" data-ref="historicLoad" data-testid="historic-load">Load</button></div>
         <label class="setting"><span class="setting__label">Globe view</span><button type="button" class="switch" role="switch" aria-checked="true" data-ref="globeToggle" data-testid="globe-toggle" data-tip-title="Globe view" data-tip="Switch between the 3D globe and the flat Equal Earth map.">On</button></label>
         <div class="settings__group" role="group" aria-label="World climate">
           <div class="settings__head">

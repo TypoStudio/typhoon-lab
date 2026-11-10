@@ -76,8 +76,8 @@ test('natural formation survives replay export and import after loading a fresh 
   await expect.poll(async () => (await snapshot()).seed).not.toBe(first.seed);
   expect((await snapshot()).genesis).toEqual({ enabled: false, waves: 0, nextSpawnTick: 0 });
   await expect(page.getByTestId('genesis-toggle')).toHaveAttribute('aria-checked', 'false');
-  await expect(page.getByTestId('speed-value')).toHaveText('×600');
-  await expect(page.getByTestId('speed-reset')).toHaveAttribute('data-tip', 'Return only the speed to ×600. Shortcut: `.');
+  await expect(page.getByTestId('speed-value')).toHaveText('10m/s');
+  await expect(page.getByTestId('speed-reset')).toHaveAttribute('data-tip', 'Return only the speed to 10m/s. Shortcut: `.');
 
   await page.getByTestId('import-replay-input').setInputFiles({ name: 'genesis.json', mimeType: 'application/json', buffer: Buffer.from(file) });
   await expect(page.getByTestId('replay-message')).toContainText(String(replay.untilTick));
@@ -127,7 +127,7 @@ test('world controls fit narrow and desktop viewports without captures', async (
     if (width < 768) await page.getByTestId('tab-settings').click();
     const sidebar = (await page.getByTestId('sidebar').boundingBox())!;
     expect(sidebar.x + sidebar.width).toBeLessThanOrEqual(width + 1);
-    for (const id of ['genesis-toggle', 'historic-select', 'historic-load', 'recorded-path-toggle', 'climate-reset']) {
+    for (const id of ['genesis-toggle', 'recorded-path-toggle', 'climate-reset']) {
       await expect(page.getByTestId(id)).toBeVisible();
       const r = (await page.getByTestId(id).boundingBox())!;
       expect(r.x).toBeGreaterThanOrEqual(sidebar.x);

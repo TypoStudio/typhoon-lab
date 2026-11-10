@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Builds the ENSO climate data from NOAA ERSST v5 monthly 2 degree SST.
 //   src/data/generated/climate-normals.json   1991-2020 monthly SST climatology on a global 5 degree grid (shipped)
-//   tests/fixtures/enso-observed.json         observed Nino-3.4 index 1950-2024 and equatorial El Nino profiles (tests only)
+//   src/data/generated/nino34-observed.json   observed Nino-3.4 index 1950-2024, monthly (shipped: the Measure chart draws it beside a climate scenario)
+//   tests/fixtures/enso-observed.json         the same index and the equatorial El Nino profiles (tests only)
 // Usage: node scripts/prepare-climate.mjs   (needs network on first run; raw responses are cached in .cache/climate/)
 // Source: NOAA PSL OPeNDAP ASCII responses, one year per request. Output is deterministic for a given cache.
 
@@ -14,6 +15,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CACHE_DIR = resolve(ROOT, '.cache/climate');
 const OUT_NORMALS = resolve(ROOT, 'src/data/generated/climate-normals.json');
 const OUT_FIXTURE = resolve(ROOT, 'tests/fixtures/enso-observed.json');
+const OUT_NINO34 = resolve(ROOT, 'src/data/generated/nino34-observed.json');
 
 const ERSST_URL = 'https://psl.noaa.gov/thredds/dodsC/Datasets/noaa.ersst.v5/sst.mnmean.nc';
 const NLAT = 89; // lat 88..-88
@@ -261,5 +263,15 @@ const fixture = {
 await mkdir(dirname(OUT_FIXTURE), { recursive: true });
 await writeFile(OUT_FIXTURE, JSON.stringify(fixture, null, 1) + '\n');
 
+await writeFile(
+  OUT_NINO34,
+  JSON.stringify({
+    source: 'NOAA ERSST v5 monthly SST (NOAA PSL); Nino 3.4 (5S-5N, 170W-120W) anomaly relative to the 1991-2020 monthly climatology of the same data',
+    start: `${YEAR_MIN}-01`,
+    nino34,
+  }) + '\n',
+);
+
 console.log(`wrote ${OUT_NORMALS}`);
+console.log(`wrote ${OUT_NINO34}`);
 console.log(`wrote ${OUT_FIXTURE}`);

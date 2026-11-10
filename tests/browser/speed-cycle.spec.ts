@@ -54,11 +54,11 @@ test('number keys 1 through 9 set the time speeds and 0 does nothing', async ({ 
   await page.keyboard.press('8');
   await expect(value).toHaveText(timeSpeedLabel(TIME_SPEEDS[7]));
   await page.keyboard.press('7');
-  await expect(value).toHaveText('1d');
+  await expect(value).toHaveText('1d/s');
   await page.keyboard.press('9');
-  await expect(value).toHaveText('14d');
+  await expect(value).toHaveText('7d/s');
   await page.keyboard.press('0');
-  await expect(value).toHaveText('14d');
+  await expect(value).toHaveText('7d/s');
   await page.keyboard.press('4');
   await expect(value).toHaveText(timeSpeedLabel(TIME_SPEEDS[3]));
 });

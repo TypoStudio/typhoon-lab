@@ -21,6 +21,8 @@ export type WeatherHazardKind = 'heatwave' | 'drought' | 'downpour' | 'coldwave'
 export type FormationKind = 'typhoon' | 'blizzard' | 'tornado' | WeatherHazardKind;
 export interface WeatherHazard extends GeoPoint {
   id: number; kind: WeatherHazardKind; radiusKm: number; ageHours: number; durationHours: number; intensity: number; directionRad: number;
+  /** Started by the climate (climate-events.ts) rather than by a placed recipe; set only while a climate scenario is loaded. */
+  climate?: true;
 }
 export type DisasterKind = WeatherHazardKind | 'blizzard' | 'tornado' | 'thunderstorm';
 export interface DisasterSample {
@@ -111,7 +113,7 @@ export interface GenesisCandidate extends GeoPoint { id: number; progressHours: 
 export interface CityImpact { id: string; score: number; damage: number; exposedPopulation: number; maxWind: number; blizzardHours: number }
 /** Cumulative fictional city estimates at this bulletin's time; not additional losses. */
 export interface DamageReport { displaced: number; missing: number; deaths: number; floodedHomes: number; lossUsd: number; area: string }
-export interface NewsItem { id: string; hour: number; kind: 'formation' | 'intensity' | 'landfall' | 'city' | 'ended' | 'merger' | 'blizzard' | 'tornado' | 'recovery' | 'info' | 'transport' | 'weather'; title: string; text: string; phenomenon?: WeatherHazardKind; damage?: DamageReport; transport?: TransportReport; cityId?: string; absorbedId?: number; mergedIntoId?: number }
+export interface NewsItem { id: string; hour: number; kind: 'formation' | 'intensity' | 'landfall' | 'city' | 'ended' | 'merger' | 'blizzard' | 'tornado' | 'recovery' | 'info' | 'transport' | 'weather'; title: string; text: string; phenomenon?: WeatherHazardKind; damage?: DamageReport; transport?: TransportReport; cityId?: string; absorbedId?: number; mergedIntoId?: number; lon?: number; lat?: number; serial?: number }
 export interface PlaceAction extends GeoPoint { tick: number; type: ToolType; formation?: FormationKind }
 export interface GenesisAction { tick: number; type: 'genesis'; on: boolean }
 export interface HistoricAction { tick: number; type: 'historic'; typhoonId: string }
@@ -125,7 +127,31 @@ export interface SeasonAction { tick: number; type: 'season'; dayOfYear: number 
 export interface ClimateModeAction { tick: number; type: 'climate-mode'; on: boolean }
 /** Whole model days of climate time that passed while in climate mode. Consecutive records at the same tick are merged. */
 export interface ClimateAdvanceAction { tick: number; type: 'climate-advance'; days: number }
-export type ActionRecord = PlaceAction | GenesisAction | HistoricAction | ClimateAction | SeasonAction | ClimateModeAction | ClimateAdvanceAction;
+/** Loads a historic climate scenario (see climate-scenarios.ts): a new noise-free ENSO layer with scripted forcing, on 1 January of the scenario's first year. */
+export interface ClimateScenarioAction { tick: number; type: 'climate-scenario'; scenarioId: string }
+/** Switches the loaded climate scenario off: the world goes back to the normal climate (see `endClimateScenarioNow`). */
+export interface ClimateScenarioOffAction { tick: number; type: 'climate-scenario-off' }
+export type ActionRecord = PlaceAction | GenesisAction | HistoricAction | ClimateAction | SeasonAction | ClimateModeAction | ClimateAdvanceAction | ClimateScenarioAction | ClimateScenarioOffAction;
+/** The climate scenario that last started the world: its calendar year, for the clock. */
+export interface ClimateScenarioInfo {
+  id: string;
+  /** Number of scenario loads in this world so far (this one included), so loading the same scenario twice is told apart. */
+  loads: number;
+  /** Calendar year shown on the scenario's start date. */
+  year: number;
+  /** Whole days (unwrapped `startDayOfYear + hours / 24 + calendarOffsetDays`) at the 1 January that begins that year. */
+  yearStartDay: number;
+  /** Model days since the world began (hours / 24 plus the days the fast path added) when it was loaded. */
+  elapsedDays: number;
+  /** Natural typhoon formation as the player had it before the load; restored when the scenario ends. */
+  priorGenesis: boolean;
+  /** Climate-driven events started so far in this load (climate-events.ts). */
+  eventSeq: number;
+  /** Model day of the last climate-driven event of each region of the table, or null. */
+  eventLast: (number | null)[];
+  /** Date serial (year * 400 + day of the year) up to which the historic record has been posted. */
+  recordSerial: number;
+}
 /** Bookkeeping of the fast climate path (the weather engine is paused while `active`). */
 export interface ClimateTime {
   active: boolean;
@@ -190,6 +216,8 @@ export interface GameState {
   climateTime: ClimateTime | null;
   /** Days the fast climate path has added to the calendar: `dayOfYear(state)` is (startDayOfYear + hours / 24 + calendarOffsetDays) mod the year. */
   calendarOffsetDays: number;
+  /** Set once a historic climate scenario has been loaded; absent in every other world. */
+  climateScenario?: ClimateScenarioInfo;
   historic: HistoricLoad[]; nextStormId: number;
   scenarioId: string; version: string; seed: number; tick: number; hours: number;
   /** Calendar: day of the year (0..365.25, fractional) at hour 0; moved by season actions. `dayOfYear(state)` is today's date. */
@@ -217,6 +245,8 @@ export type WorkerRequest =
   | { type: 'genesis'; on: boolean }
   | { type: 'historic'; typhoonId: string }
   | { type: 'climate'; key: ClimateKey; value: number }
+  | { type: 'climate-scenario'; scenarioId: string }
+  | { type: 'climate-scenario-off' }
   | { type: 'season'; dayOfYear: number }
   | { type: 'replay'; seed: number; actions: ActionRecord[]; untilTick: number; startDayOfYear: number; trafficDispatches?: TrafficDispatch[]; initialWeather?: LiveWeatherSnapshot };
 export type WorkerResponse =

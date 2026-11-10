@@ -3,7 +3,7 @@ import { CITIES, SCENARIO } from '../data/world';
 import { WEATHER_HAZARDS, isWeatherHazardKind } from '../data/weather-hazards';
 import { TRAFFIC_DEPARTURES } from '../data/traffic';
 import { isLake } from '../data/lakes';
-import { TYPHOONS, typhoonById } from '../data/typhoons';
+import { typhoonById } from '../data/typhoons';
 import { layerLegend, type LayerLegend } from '../render/fields';
 import { tickPosition } from './legend-scale';
 import { MapRenderer } from '../render/map';
@@ -22,13 +22,17 @@ import type {
 import { stageChanges, stormGradeLabel, stormOutcome } from '../storm-info';
 import { estimateCityDamage, stormTotalLossUsd } from '../simulation/damage-news';
 import { disasterDamage, disasterName } from '../simulation/disasters';
+import { climateScenarioById, type ClimateScenarioId } from '../simulation/climate-scenarios';
 import { newsArt } from './art';
+import { freshNews } from './news-fresh';
 import { DISASTER_HELP, DISASTER_HELP_INTRO, DISASTER_HELP_TIMING } from './disaster-help';
 import { el, svgEl, fmtClock, fmtClockLive, fmtClockShort, fmtCoord, fmtInt, fmtMoney, fmtPop, fmtUtc, rovingKeys } from './dom';
-import { SEASONS, fmtDateWithYear, fmtMonthDay, parseStartParam, realTimeOfYear, seasonIdOf, showsYear, worldDay } from './calendar';
-import { DEFAULT_TIME_SPEED, TIME_SPEEDS, adjacentTimeSpeed, isTimeSpeed, timeSpeedDescription, timeSpeedLabel, type TimeSpeed } from '../time';
+import { SEASONS, fmtDateWithYear, fmtSerialDate, fmtMonthDay, parseStartParam, realTimeOfYear, seasonIdOf, showsYear, worldDay } from './calendar';
+import { DEFAULT_TIME_SPEED, SCENARIO_TIME_SPEED, TIME_SPEEDS, adjacentTimeSpeed, isTimeSpeed, timeSpeedDescription, timeSpeedLabel, type TimeSpeed } from '../time';
 import { attachMapInput } from './input';
 import { attachPalette } from './palette';
+import { SCENARIO_PROBES } from './scenario-probes';
+import { EXPERIENCE_ITEMS, SCENARIO_ICON, TYPHOON_ICON, activeExperienceKeys, typhoonTipSource } from './experience';
 import { attachTooltips } from './tooltip';
 import { createTutorial, shouldAutoStart } from './tutorial';
 import { initialiseLocation } from './initial-location';
@@ -119,20 +123,10 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     return width >= window.innerWidth - 8 ? 0 : width; // a full-width phone overlay hides the whole map, so nothing is worth keeping clear
   };
   const toolButtons = new Map<ArmedTool, HTMLButtonElement>();
+  const experienceButtons = new Map<string, HTMLButtonElement>();
   root.querySelectorAll<HTMLButtonElement>('[data-tool]').forEach(b => toolButtons.set(b.dataset.tool as ArmedTool, b));
   const overlayButtons = [...root.querySelectorAll<HTMLButtonElement>('[data-overlay]')];
   const speedButtons = [...root.querySelectorAll<HTMLButtonElement>('[data-speed-action]')];
-  const historicSelect = ref<HTMLSelectElement>('historicSelect');
-  /** Typhoon names are data, so options are labelled here instead of through the translation tables. */
-  function labelHistoricOptions(): void {
-    const selected = historicSelect.value;
-    historicSelect.replaceChildren(...TYPHOONS.map(h => el('option', { value: h.id, title: `${h.peakPressure} hPa`, text: `${typhoonName(h)} (${h.year}) · ${t(h.basin)}` })));
-    historicSelect.value = selected || TYPHOONS[0].id;
-    showHistoricPeak();
-  }
-  function showHistoricPeak(): void {
-    historicSelect.title = `${typhoonById(historicSelect.value)?.peakPressure ?? ''} hPa`;
-  }
   const tabButtons = [...root.querySelectorAll<HTMLButtonElement>('[data-tab]')];
   const panels = [...root.querySelectorAll<HTMLElement>('[data-panel]')];
   const helpDialog = ref<HTMLDialogElement>('helpDialog');
@@ -169,12 +163,17 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     expectSig: '',
     expectTrafficSig: '',
     newsKey: '',
-    newsSeen: 0,
+    /** Id of the newest news item already announced (items are evicted at the cap, so a count cannot say what is new). */
+    newsLastId: null as string | null,
     tab: 'storms',
     /** True once "Show all" has revealed the older ended storms. */
     archiveOpen: false,
     placementQueue: [] as ((r: PlacementResult) => void)[],
     lastPlacementAt: 0,
+    /** Set when a scenario was just loaded or switched off here: the next state that shows it adds or removes the starter Measure charts. */
+    scenarioProbes: null as 'apply' | 'remove' | null,
+    /** A scenario load or switch-off is posted and its result has not come back: a second request waits (the state a click sees is stale until then). */
+    scenarioPending: false,
     rankMetric: 'lossUsd' as RankingMetric,
     lbWindow: 'live' as LbWindow,
     lbView: null as LbView | null,
@@ -1063,15 +1062,16 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   function notifyNews(): void {
     const s = ui.state;
     if (!s) return;
-    if (s.news.length > ui.newsSeen) {
-      const fresh = s.news.slice(ui.newsSeen);
-      const item = fresh[fresh.length - 1];
-      if (ui.newsSeen > 0 || fresh.length <= 2) {
+    const last = s.news[s.news.length - 1];
+    if (last && last.id !== ui.newsLastId) {
+      const fresh = freshNews(s.news, ui.newsLastId);
+      const item = last;
+      if (ui.newsLastId !== null || fresh.length <= 2) {
         announce(`${t('News')}: ${t(item.title)}. ${t(item.text)}`);
         if (performance.now() - ui.lastPlacementAt > 2000 && item.kind !== 'info') toast(item.title, 'info', 4500);
       }
-      ui.newsSeen = s.news.length;
-    } else if (s.news.length < ui.newsSeen) ui.newsSeen = s.news.length;
+      ui.newsLastId = last.id;
+    } else if (!last) ui.newsLastId = null;
   }
 
   const signed = (n: number): string => `${n > 0 ? '+' : n < 0 ? '\u2212' : ''}${Number(Math.abs(n).toFixed(1))}`;
@@ -1090,6 +1090,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   function syncClimateDisabled(): void {
     for (const { input } of climateInputs.values()) input.disabled = ui.expect === 'replay';
     for (const b of seasonButtons) b.disabled = ui.expect === 'replay';
+    for (const [key, b] of experienceButtons) if (key.startsWith('scenario:')) b.setAttribute('aria-disabled', String(ui.expect === 'replay'));
     syncClimateReset();
   }
   /** Reset is only useful while at least one slider is away from 0 and the climate can still be changed. */
@@ -1135,6 +1136,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   }
   function renderWorld(state: GameState): void {
     renderClimate(state);
+    renderExperienceActive(state);
     const on = state.genesis.enabled;
     ref('genesisToggle').setAttribute('aria-checked', String(on));
     setText(ref('genesisState'), on ? 'On' : 'Off');
@@ -1168,10 +1170,10 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   }
 
   function newsRow(n: NewsItem): HTMLElement {
-    return el('li', { class: `news news--${n.kind}` }, [
+    const row = el('li', { class: `news news--${n.kind}${n.lon !== undefined ? ' news--place' : ''}` }, [
       el('div', { class: 'news__art' }, [newsArt(n)]),
       el('div', { class: 'news__body' }, [
-        el('p', { class: 'news__meta', text: `${fmtClock(n.hour + clockOffset(ui.latest!))} · ${kindLabel(n.kind)}` }),
+        el('p', { class: 'news__meta', text: `${n.serial !== undefined ? fmtSerialDate(n.serial, getLanguage()) : fmtClock(n.hour + clockOffset(ui.latest!))} · ${kindLabel(n.kind)}` }),
         el('h3', { class: 'news__title', text: n.title }),
         el('p', { class: 'news__text', text: n.text }),
         n.transport && n.transport.lossUsd > 0 ? el('dl', { class: 'news__damage', testid: 'transport-damage' }, [
@@ -1192,6 +1194,14 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         n.damage ? el('p', { class: 'news__meta', text: 'Cumulative city estimate; replaces earlier figures.' }) : null,
       ]),
     ]);
+    if (n.lon !== undefined && n.lat !== undefined) { // a climate-driven event or a recorded real event: a click shows the place
+      const { lon, lat } = n;
+      row.tabIndex = 0;
+      row.title = t('Show the place on the map');
+      row.addEventListener('click', () => renderer?.view.centerOn(lon, lat));
+      row.addEventListener('keydown', ev => { if (ev.key === 'Enter') renderer?.view.centerOn(lon, lat); });
+    }
+    return row;
   }
   const kindLabel = (k: NewsItem['kind']): string => ({ formation: 'Formation', intensity: 'Intensity', landfall: 'Landfall', city: 'City', ended: 'Dissipated', merger: 'Merger', blizzard: 'Blizzard', tornado: 'Tornado', recovery: 'Recovery', info: 'Watch', transport: 'Transport', weather: 'Weather' })[k];
 
@@ -1285,10 +1295,11 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <li>Young depressions strengthen and their circulation grows. <strong>High pressure</strong> changes the flow around them and steers them.</li>
         </ol>
         <p>Open Formation for typhoons, blizzards, tornadoes, heatwaves, droughts, downpours, cold waves, hail, yellow dust and wind gusts. Tap a map spot to prepare the conditions. The seven weather phenomena begin after six model hours.</p>
+        <p>Open Typhoon experience or Climate experience in the palette to start a past typhoon or a climate scenario with one click, or drag its tile onto the map.</p>
         <h3 class="dialog__sub">Time</h3>
-        <p>Use the arrows to choose a speed. Real time runs the world at the speed of the clock. ×600 is 10 minutes of world time per second, ×1.8k is 30 minutes, ×3.6k is 1 hour, ×7.2k is 2 hours and ×14.4k is 4 hours; 1d, 2d and 14d are 1, 2 and 14 days per second. Number keys 1–9 select the same nine steps, - and + step slower and faster, and the \` key (₩ on a Korean keyboard) resets the speed. Reset speed returns to ×600 without changing the world or pause state.</p>
+        <p>Use the arrows to choose a speed. Real time runs the world at the speed of the clock. 10m/s is 10 minutes of world time per second, 30m/s is 30 minutes, 1h/s is 1 hour, 2h/s is 2 hours and 4h/s is 4 hours; 1d/s, 2d/s and 7d/s are 1, 2 and 7 days per second. Number keys 1–9 select the same nine steps, - and + step slower and faster, and the \` key (₩ on a Korean keyboard) resets the speed. Reset speed returns to 10m/s without changing the world or pause state.</p>
         <p class="fine">On a slow device the faster weather steps may not be fully reached, and the clock shows the time that was really simulated, so it can lag behind the speed you chose.</p>
-        <p class="fine">At 14d the weather is not calculated. The world runs on the fast climate calculation instead: the map, the date and the seasons keep changing, but active storms and tools end without further damage. New storms can form again after you slow down. A world that started from live weather continues on the base climate from then on. See Long-term simulation in the Climate tab.</p>
+        <p class="fine">At 7d/s the weather is not calculated. The world runs on the fast climate calculation instead: the map, the date and the seasons keep changing, but active storms and tools end without further damage. New storms can form again after you slow down. A world that started from live weather continues on the base climate from then on. See Long-term simulation in the Climate tab.</p>
         <h3 class="dialog__sub">The map</h3>
         <ul class="help__list">
           <li>The map is a globe by default: drag to rotate it and use the wheel or pinch to zoom. Switch Globe view off in the right panel for the flat Equal Earth map.</li>
@@ -1298,7 +1309,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <li>Choose a nickname in the Ranking tab to appear on the online leaderboard. Nicknames are public.</li>
         </ul>
         <h3 class="dialog__sub">Without a mouse</h3>
-        <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L and ; select the formation tools in order, and Z, X, C, V, B, N, M, comma, period and slash select the measurement tools. 1–9 set the speed steps, - and + step it slower and faster, and \` (₩ on a Korean keyboard) resets it to ×600. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
+        <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L and ; select the formation tools in order, and Z, X, C, V, B, N, M, comma, period and slash select the measurement tools. 1–9 set the speed steps, - and + step it slower and faster, and \` (₩ on a Korean keyboard) resets it to 10m/s. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
         <p class="fine">Shortcuts work from anywhere on the page, except while you type in a field or a dialog is open; with a button or tab focused, Space and Enter press it instead of playing or pausing.</p>`,
       conditions: `
         <p>The bottom palette has seven paired condition buttons. The large icon is the selected setting; the small faded icon shows the opposite. Click or tap once to select, then again to switch, or use Q–U. Drag the large icon onto the map.</p>
@@ -1369,8 +1380,15 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <dt>Polar temperature</dt>
           <dd>Polar cooling chills the sea and air poleward of about 35° latitude, so storms that curve out of the tropics weaken sooner. Polar warming does the reverse. The effect is full strength from about 50°.</dd>
         </dl>
+        <h3 class="dialog__sub">Scenarios</h3>
+        <p>The Climate experience tab of the palette loads a historic El Niño or La Niña: press a tile, or drag it onto the map. The world jumps to 1 January of that year, storms, weather hazards and tools already running carry on as they are, and the Pacific starts in the ocean state of the time, with the winds that drove the event added by date. The speed is set to 1d/s so that the weather runs, and Natural typhoon formation is on while the scenario is loaded. Watch it on the map and in the Measure tab. You can change the speed afterwards: at 7d/s the weather is not calculated, so storms and the events below do not form, but the record of real events still appears.</p>
+        <p>While a scenario is loaded the model starts weather disasters by itself where its own climate calls for them. During an El Niño these are heavy rain on coastal Peru and Ecuador, in East Africa and in the southern United States, and drought or heat in Indonesia, Australia, India and southern Africa. A La Niña brings the opposite pattern: heavy rain in eastern Australia, Indonesia, South Asia and Colombia, and drought in the Horn of Africa and the southwestern United States. Each event follows the sea temperature, air temperature or humidity of its place, so it stops when the anomaly does. The News tab marks it as El Niño or La Niña, and its damage is counted like any other disaster. A place rests for several weeks after an event, and at most four run at once.</p>
+        <p>The News tab also posts real events of the period on their dates, marked as a historical record. They are not model results, cause no damage here and appear at every speed. Click such an item to see its place on the map.</p>
+        <p>The Niño 3.4 chart draws the real monthly values of the same months as a dashed line labelled Observed, so you can compare. The slider and your conditions still work on a running scenario, and the model goes on by itself once the script ends.</p>
+        <p>Press the tile of the loaded scenario again to switch it off: the world returns to the normal climate at once, and storms that already formed keep running. Changing the season ends a scenario too.</p>
+        <p class="fine">This is a simplified model that reproduces the causes of the event, not the exact event. Dates and strengths of the winds are approximate, and the years after the script will not match history.</p>
         <h3 class="dialog__sub">Long-term simulation</h3>
-        <p>Choose 14d to watch the climate over years. At this speed one year takes about 26 seconds. The map, the date with its year, and the seasons keep changing. Individual storms are not simulated: active storms and tools end without further damage, and new storms can form again once you slow down to 2d or below.</p>
+        <p>Choose 7d/s to watch the climate over years. At this speed one year takes about 52 seconds. The map, the date with its year, and the seasons keep changing. Individual storms are not simulated: active storms and tools end without further damage, and new storms can form again once you slow down to 2d/s or below.</p>
         <p>At this speed El Niño and La Niña come and go on their own, in a cycle of roughly 2 to 3 years in this model. The real cycle is longer, and big El Niño events happen about twice as often here as in reality.</p>
         <p>To experiment, set up conditions or the La Niña / El Niño slider, then go fast and watch with Measure pins: Niño 3.4, SOI, warm water volume, or the sea temperature at points you choose. Then slow down to see typhoons form on the changed climate.</p>
         <p class="fine">One run allows 200 years of fast time, and a world that started from live weather continues on the base climate from then on. The Warming and Polar temperature sliders are fixed offsets for now, and greenhouse gases, sea ice and volcanoes are not simulated yet.</p>
@@ -1380,7 +1398,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       historic: `
         <dl class="help__defs">
           <dt>Loading</dt>
-          <dd>Pick a Past typhoon in the right panel and press Load to bring a recorded one into the world (best tracks from JMA RSMC Tokyo, NOAA NHC HURDAT2 and NOAA IBTrACS: 6-hourly positions, pressure and wind).</dd>
+          <dd>Open the Typhoon experience tab of the palette and press a tile, or drag it onto the map, to bring a recorded typhoon into the world (best tracks from JMA RSMC Tokyo, NOAA NHC HURDAT2 and NOAA IBTrACS: 6-hourly positions, pressure and wind).</dd>
           <dt>Recorded path</dt>
           <dd>Its path follows the record. You can load several. Show recorded paths draws each full path as a dashed line.</dd>
           <dt>Environment data</dt>
@@ -1632,6 +1650,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       if (!accept(msg.state)) return;
       // Probes read the newest state as it arrives, even while a gesture holds back the drawn one; paused time adds no samples.
       ensureHistoricEnvironment(msg.state);
+      if (ui.scenarioProbes) applyScenarioProbes(msg.state);
       if (probes.size && ui.playing && historicEnvironmentReady(msg.state)) probes.sample(msg.state);
       measurePanel.refresh();
       ui.clockHours = msg.clockHours;
@@ -1676,7 +1695,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     closeSpot();
     renderTools();
     ui.newsKey = '';
-    ui.newsSeen = 0;
+    ui.newsLastId = null;
     ui.selectedStormId = null;
     ui.selectedDisasterId = null;
     ui.cursor = null;
@@ -1750,7 +1769,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     setLanguage(LOCALES.find(l => l.code === languageSelect.value)?.code ?? 'en');
     localizeTree(root);
     syncPrivacyLinks();
-    labelHistoricOptions();
+    labelExperience();
     // Money strings are formatted per language, so rebuild everything that shows them.
     ui.newsKey = '';
     if (ui.state) renderWorld(ui.state);
@@ -1794,11 +1813,150 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       if (on && focus) b.focus();
     }
     for (const p of palettePanels) p.hidden = p.dataset.palettePanel !== id;
+    if (focus || id !== undefined) paletteTabButtons.find(b => b.dataset.paletteTab === id)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    syncPager();
     try { localStorage.setItem(PALETTE_TAB_KEY, id); } catch { /* storage is optional */ }
   }
   for (const b of paletteTabButtons) b.addEventListener('click', () => setPaletteTab(b.dataset.paletteTab!));
+  // Previous / next page buttons for whichever row overflows. They are plain buttons outside the tool maps, so they never arm or drag anything.
+  const pager = ref('palettePager');
+  const pageButtons = [...pager.querySelectorAll<HTMLButtonElement>('[data-page]')];
+  const visibleRow = () => palettePanels.find(p => !p.hidden)!;
+  function syncPager(): void {
+    const row = visibleRow();
+    if (!row) return;
+    const over = row.scrollWidth > row.clientWidth + 1;
+    pager.hidden = !over;
+    const [prev, next] = pageButtons;
+    prev.disabled = row.scrollLeft <= 1;
+    next.disabled = row.scrollLeft + row.clientWidth >= row.scrollWidth - 1;
+  }
+  /** One page = the tiles that fit; the new first tile is always whole (never cut at the left edge). */
+  function pageRow(dir: 1 | -1): void {
+    const row = visibleRow();
+    const pad = parseFloat(getComputedStyle(row).paddingLeft) || 0;
+    const room = row.clientWidth - 2 * pad;
+    const base = row.getBoundingClientRect().left;
+    const tiles = [...row.children].map(c => { const r = c.getBoundingClientRect(); return { left: r.left - base + row.scrollLeft - pad, width: r.width }; });
+    let target = row.scrollLeft;
+    if (dir > 0) target = tiles.find(x => x.left + x.width > row.scrollLeft + room + 1)?.left ?? row.scrollWidth;
+    else target = tiles.find(x => x.left >= row.scrollLeft - room - 1)?.left ?? 0;
+    row.scrollTo({ left: Math.max(0, target), behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  }
+  for (const b of pageButtons) b.addEventListener('click', () => pageRow(Number(b.dataset.page) > 0 ? 1 : -1));
+  const pagerResize = new ResizeObserver(syncPager);
+  for (const p of palettePanels) { p.addEventListener('scroll', syncPager, { passive: true }); pagerResize.observe(p); }
   rovingKeys(ref('paletteTabs'), b => setPaletteTab(b.dataset.paletteTab!, true));
   setPaletteTab(storedPaletteTab());
+
+  // ---- experience tabs ---------------------------------------------------------------------
+  /** English source of each tab's short phone label (translated into data-short), so a language change can translate it again. */
+  const shortTabSource = new Map(PALETTE_TABS.flatMap(tab => tab.short ? [[tab.id, tab.short] as const] : []));
+  const experienceRows = [ref('experienceTyphoons'), ref('experienceClimate')];
+  for (const item of EXPERIENCE_ITEMS) {
+    const scenario = item.kind === 'scenario';
+    const b = el('button', { type: 'button', class: `tool tool--experience${scenario ? ' tool--wide' : ''}`, 'data-experience': item.key, 'data-testid': `experience-${item.key.replace(':', '-')}`, 'aria-pressed': 'false' }) as HTMLButtonElement;
+    b.innerHTML = scenario
+      ? `${SCENARIO_ICON[item.id]}<span class="tool__text"><span class="tool__name"></span><span class="tool__desc"></span></span>`
+      : `${TYPHOON_ICON}<span class="tool__name"></span><span class="tool__sub"></span>`;
+    experienceButtons.set(item.key, b);
+    experienceRows[scenario ? 1 : 0].append(b);
+  }
+  /** Names, labels and tooltips come from data, so they are set here and again when the language changes. */
+  function labelExperience(): void {
+    for (const b of paletteTabButtons) if (b.dataset.short) b.dataset.short = t(shortTabSource.get(b.dataset.paletteTab!)!);
+    for (const item of EXPERIENCE_ITEMS) {
+      const b = experienceButtons.get(item.key)!;
+      let name: string, tip: string, sub = '';
+      if (item.kind === 'scenario') {
+        const scenario = climateScenarioById(item.id as ClimateScenarioId);
+        name = t(scenario.name); tip = scenario.description;
+        b.querySelector('.tool__desc')!.textContent = t(scenario.description);
+      } else {
+        const typhoon = typhoonById(item.id)!;
+        name = typhoonName(typhoon); sub = String(typhoon.year); tip = typhoonTipSource(typhoon);
+        b.querySelector('.tool__sub')!.textContent = sub;
+      }
+      b.querySelector('.tool__name')!.textContent = name;
+      b.setAttribute('aria-label', `${name}${sub ? ` (${sub})` : ''}: ${t('click to load, or drag onto the map')}`);
+      b.dataset.tipTitle = sub ? `${name} (${sub})` : name;
+      b.dataset.tip = tip;
+    }
+  }
+  for (const row of experienceRows) {
+    const tiles = () => [...row.querySelectorAll<HTMLButtonElement>('[data-experience]')];
+    /** Only one tile per row is a Tab stop; the arrow keys, Home and End move through the rest. */
+    const setStop = (stop: HTMLElement) => { for (const b of tiles()) b.tabIndex = b === stop ? 0 : -1; };
+    setStop(tiles()[0]);
+    row.addEventListener('focusin', ev => { if (ev.target instanceof HTMLButtonElement && ev.target.dataset.experience) setStop(ev.target); });
+    row.addEventListener('keydown', ev => {
+      const step = ev.key === 'ArrowRight' ? 1 : ev.key === 'ArrowLeft' ? -1 : 0;
+      const all = tiles();
+      const at = all.indexOf(document.activeElement as HTMLButtonElement);
+      if (at < 0 || !(step || ev.key === 'Home' || ev.key === 'End')) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      all[ev.key === 'Home' ? 0 : ev.key === 'End' ? all.length - 1 : Math.max(0, Math.min(all.length - 1, at + step))].focus();
+    });
+    // A mouse wheel scrolls the row sideways, and fades mark the side that has more.
+    const syncEdges = () => {
+      row.dataset.moreStart = String(row.scrollLeft > 1);
+      row.dataset.moreEnd = String(row.scrollLeft + row.clientWidth < row.scrollWidth - 1);
+    };
+    row.addEventListener('scroll', syncEdges, { passive: true });
+    row.addEventListener('wheel', ev => {
+      if (!ev.deltaY || Math.abs(ev.deltaX) > Math.abs(ev.deltaY) || ev.ctrlKey) return;
+      const max = row.scrollWidth - row.clientWidth;
+      if ((ev.deltaY < 0 && row.scrollLeft <= 0) || (ev.deltaY > 0 && row.scrollLeft >= max)) return;
+      ev.preventDefault();
+      row.scrollLeft += ev.deltaY * (ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? row.clientWidth : 1); // lines are about 16 px, a page is the row's width
+    }, { passive: false });
+    new ResizeObserver(syncEdges).observe(row);
+  }
+  /** Loads the tile's scenario or typhoon. Armed tools stay as they are. */
+  function startExperience(key: string, dropped = false): void {
+    const item = EXPERIENCE_ITEMS.find(i => i.key === key);
+    if (!item) return;
+    if (item.kind === 'scenario') {
+      if (ui.expect === 'replay') { toast('A replay is playing. Climate scenarios cannot be loaded or switched off until it ends.', 'error', 3500); return; }
+      if (ui.scenarioPending) return;
+      // A click on the loaded tile switches it off; a drop only ever loads.
+      if (!dropped && ui.latest?.climateScenario?.id === item.id) switchScenarioOff(item.id as ClimateScenarioId); else loadScenario(item.id as ClimateScenarioId);
+    }
+    else loadTyphoon(item.id);
+  }
+  let experienceSig = '';
+  function renderExperienceActive(state: GameState): void {
+    const live = activeExperienceKeys(state);
+    const sig = [...live].join(',');
+    if (sig === experienceSig) return;
+    experienceSig = sig;
+    for (const [key, b] of experienceButtons) {
+      const on = live.has(key);
+      b.classList.toggle('is-live', on);
+      if (key.startsWith('scenario:')) b.setAttribute('aria-pressed', String(on));
+      if (on) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
+    }
+  }
+  for (const [key, b] of experienceButtons) b.addEventListener('click', () => startExperience(key));
+  labelExperience();
+  syncClimateDisabled();
+  attachPalette(experienceButtons, {
+    mapPoint: (cx, cy) => {
+      const r = renderer;
+      if (!r || document.elementFromPoint(cx, cy) !== r.overlayCanvas) return null;
+      const box = r.overlayCanvas.getBoundingClientRect();
+      const at = r.view.pxToLonLat(cx - box.left, cy - box.top);
+      return at ? { lon: at[0], lat: at[1] } : null;
+    },
+    onDragStart: () => {},
+    onDragMove: () => {},
+    onDrop: (key, point) => {
+      if (point) startExperience(key, true);
+      else toast('Dropped outside the map. Drag the icon onto the map to place it.', 'error', 3500);
+    },
+    onCancel: () => {},
+  });
 
   // ---- measure tab -------------------------------------------------------------------------
   const measurePanel = createMeasurePanel({
@@ -1846,6 +2004,18 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     measurePanel.refresh();
   }
   /** Opens the sidebar on the Measure tab without moving focus, so play and the map keys carry on. On a phone it only selects the tab. */
+  /** A loaded scenario brings a starter set of Measure charts and pins; switching it off or loading another one replaces them. UI only: nothing is posted or recorded. */
+  function applyScenarioProbes(state: GameState): void {
+    const mode = ui.scenarioProbes;
+    if (!mode || (mode === 'apply') !== !!state.climateScenario) return; // an older state is still in flight
+    ui.scenarioProbes = null;
+    probes.removeAuto();
+    if (mode === 'apply') probes.addSet(SCENARIO_PROBES);
+    if (historicEnvironmentReady(state)) probes.sample(state);
+    if (mode === 'apply') showMeasureTab();
+    refreshOverlay();
+    measurePanel.refresh();
+  }
   function showMeasureTab(): void {
     if (!sidebarBesideMap.matches) { if (ui.tab !== 'measure') activateTab('measure'); return; } // phones: the sidebar covers the screen, so it stays closed
     if (sidebar.hidden) setSidebar(true);
@@ -1855,8 +2025,17 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
 
   ref('play').addEventListener('click', togglePlay);
   ref('speedReset').addEventListener('click', () => setSpeed(DEFAULT_TIME_SPEED));
-  labelHistoricOptions();
-  historicSelect.addEventListener('change', showHistoricPeak);
+    function loadScenario(id: ClimateScenarioId): void {
+    const scenario = climateScenarioById(id);
+    setSpeed(SCENARIO_TIME_SPEED); // weather has to run for storms and climate-driven events to form on the changed climate; the player may change the speed afterwards
+    ui.scenarioPending = true;
+    ui.placementQueue.push(result => {
+      ui.scenarioPending = false;
+      if (result.ok) { ui.scenarioProbes = 'apply'; toast(`${scenario.name} loaded. The Pacific starts in its state of that January; watch it in Measure.`, 'ok'); }
+      else toast(result.reason ?? `${scenario.name} could not be loaded.`, 'error');
+    });
+    post({ type: 'climate-scenario', scenarioId: scenario.id });
+  }
   ref('genesisToggle').addEventListener('click', () => {
     ui.placementQueue.push(result => { if (!result.ok) toast(result.reason ?? 'Natural formation could not be changed.', 'error'); });
     post({ type: 'genesis', on: ref('genesisToggle').getAttribute('aria-checked') !== 'true' });
@@ -1886,8 +2065,19 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     // The button disables itself now, so hand keyboard focus to the first slider instead of dropping it.
     climateInputs.get('warming')!.input.focus({ preventScroll: true });
   });
-  ref('historicLoad').addEventListener('click', () => {
-    const typhoon = typhoonById(historicSelect.value);
+    /** Pressing the loaded scenario's tile again: the climate goes back to normal at once. */
+  function switchScenarioOff(id: ClimateScenarioId): void {
+    const scenario = climateScenarioById(id);
+    ui.scenarioPending = true;
+    ui.placementQueue.push(result => {
+      ui.scenarioPending = false;
+      if (result.ok) { ui.scenarioProbes = 'remove'; toast(`${scenario.name} switched off. The climate is back to normal.`, 'ok'); }
+      else toast(result.reason ?? `${scenario.name} could not be switched off.`, 'error');
+    });
+    post({ type: 'climate-scenario-off' });
+  }
+  function loadTyphoon(id: string): void {
+    const typhoon = typhoonById(id);
     if (!typhoon) return;
     ui.lastPlacementAt = performance.now();
     ui.placementQueue.push(result => {
@@ -1895,7 +2085,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       else toast(result.reason ?? `${typhoon.name} could not be loaded.`, 'error');
     });
     post({ type: 'historic', typhoonId: typhoon.id });
-  });
+  }
   const pathToggle = ref('pathToggle');
   function renderPathToggle(): void {
     pathToggle.setAttribute('aria-checked', String(ui.showRecordedPaths));

@@ -1,9 +1,10 @@
 import { teleconnectionInto } from '../data/climate-teleconnections';
 import {
-  FIELD_COLS, FIELD_ROWS, OCEAN_DLON, OCEAN_LON0, OCEAN_N, climateFields, climateIndices, climateMonth, heatSourceActive, nino34Of, patchAmplitude, createClimate, initialiseFromSstAnomaly, restoreClimate, serializeClimate, stepClimateDay,
+  scriptEndDay, FIELD_COLS, FIELD_ROWS, OCEAN_DLON, OCEAN_LON0, OCEAN_N, climateFields, climateIndices, climateMonth, heatSourceActive, nino34Of, patchAmplitude, createClimate, initialiseFromSstAnomaly, restoreClimate, serializeClimate, stepClimateDay,
   type ClimateFields, type ClimateState,
 } from './climate-core';
 import { equatorNormalSst } from '../data/climate-normals';
+import { createScenarioCore, type ClimateScenarioId } from './climate-scenarios';
 import { clamp, smoothstep } from './geo';
 import { sampleLiveWeather } from './live-weather';
 import type { WeatherField } from '../types';
@@ -94,6 +95,15 @@ export function createClimateLayer(seed: number, startDayOfYear: number, startYe
 }
 
 /**
+ * A layer for a historic climate scenario: noise-free, its ocean start state and scripted forcing from climate-scenarios.ts, nothing
+ * else driving it. Its smoothed Nino 3.4 starts at the core's own value, so a warm start shows its remote effects from the first day.
+ */
+export function createScenarioLayer(seed: number, id: ClimateScenarioId): ClimateLayer {
+  const core = createScenarioCore(seed, id);
+  return { core, nino: nino34Of(core), nino0: 0, base: null, live: false, anomalies: null };
+}
+
+/**
  * A layer for a live game: the equatorial SST anomaly of the analysis (analysis minus the ERSST normal, smoothed over five
  * cells) and the thermocline that balances it start the core, so the real ENSO state carries on from the first day.
  */
@@ -128,16 +138,20 @@ export function stepClimateLayer(layer: ClimateLayer): void {
 
 /** Advances the layer by whole model days without building anomaly fields (the caller rebuilds once at the end) and without allocating. */
 export function advanceClimateLayer(layer: ClimateLayer, days: number): void {
-  for (let d = 0; d < days; d++) stepClimateLayer(layer);
+  for (let d = 0; d < days; d++) {
+    // A scenario's script is over: natural variability starts on the first day after it, whatever the chunking (a function of the core's day only).
+    if (!layer.core.stochastic && layer.core.script.length && layer.core.day > scriptEndDay(layer.core)) enableClimateNoise(layer);
+    stepClimateLayer(layer);
+  }
 }
 
 /**
  * Switches a layer to natural variability (westerly wind bursts, background wind and SST noise). A core's `stochastic` flag is
  * fixed for its lifetime, so the core is rebuilt through serialisation with the flag set; every other field carries over. Returns
- * false (and changes nothing) when the core cannot be restored. A layer that is already stochastic is left untouched.
+ * false (and changes nothing) when the core cannot be restored. A layer that is already stochastic, or whose scenario script is still running, is left untouched.
  */
 export function enableClimateNoise(layer: ClimateLayer): boolean {
-  if (layer.core.stochastic) return true;
+  if (layer.core.stochastic || layer.core.day <= scriptEndDay(layer.core)) return true; // a scenario's story stays noise-free until its script is over: random bursts would change it
   const data = serializeClimate(layer.core);
   data.stochastic = true;
   const core = restoreClimate(data);

@@ -2,7 +2,8 @@ import { GENESIS_THRESHOLD, readClimateIndices, readClimatePoint, readThermoclin
 import { OCEAN_LON0, thermoclineMeanDepth } from '../simulation/climate-core';
 import { wrapLon } from '../render/view';
 import type { GameState } from '../types';
-import { addSample, createSeries, isDue, lastValue, type Series } from './measure-store';
+import { observedNino34From } from '../data/climate-observed';
+import { DAYS_PER_YEAR, addSample, createSeries, isDue, lastValue, type Series } from './measure-store';
 
 /** One graph inside a card (a card stacks one or two). */
 export interface MeasurePlot {
@@ -105,13 +106,17 @@ export const pinStyle = (n: number): { color: string; dashed: boolean; ink: stri
   return { color, dashed: n > PIN_COLORS.length, ink: luminance(color) > 0.2 ? '#0b0b0b' : '#ffffff' };
 };
 
-export interface Pin { n: number; lon: number; lat: number }
+/** `label` is an English place name (translated for display) on pins a scenario's starter set placed. */
+export interface Pin { n: number; lon: number; lat: number; label?: string }
 export type AddResult =
   | { ok: true; pin: Pin | null; item: MeasureItem; isNewChart: boolean }
   | { ok: false; reason: 'duplicate' | 'pins' | 'strip'; item: MeasureItem };
 
 /** Model days since the world began; keeps growing when the fast climate path jumps the calendar ahead. */
 export const elapsedDays = (state: { hours: number; calendarOffsetDays?: number }): number => state.hours / 24 + (state.calendarOffsetDays ?? 0);
+
+/** Months of observed Niño 3.4 drawn beside a climate scenario. */
+const OBSERVED_MONTHS = 48;
 
 const seriesKey = (item: string, plot: number, pin: number): string => `${item}|${plot}|${pin}`;
 
@@ -127,6 +132,12 @@ export class ProbeBook {
   layoutRev = 0;
   private seed: number | null = null;
   private lastT = -Infinity;
+  /** The climate scenario the recorded lines belong to: its first year and the elapsed day it was loaded on. Null in any other world. */
+  scenario: { id: string; loads: number; year: number; origin: number } | null = null;
+  /** Lines (chart, pin; null for a basin chart) that `addSet` put there, so a scenario's starter set can be replaced as a group. A line the player adds again is theirs. */
+  private auto: { item: string; pin: number | null }[] = [];
+  /** Observed Niño 3.4 for the scenario's months, one point per month at mid-month; null without a scenario. */
+  observed: Series | null = null;
 
   get size(): number { return this.charts.size; }
 
@@ -134,9 +145,31 @@ export class ProbeBook {
   latest(item: string, plot: number, pin: number): number { return lastValue(this.seriesOf(item, plot, pin)); }
 
   clear(): void {
-    if (!this.charts.size && !this.pins.length) { this.seed = null; this.lastT = -Infinity; return; }
+    if (!this.charts.size && !this.pins.length) { this.seed = null; this.lastT = -Infinity; this.auto = []; return; }
+    this.auto = [];
     this.pins.length = 0; this.charts.clear(); this.series.clear();
     this.seed = null; this.lastT = -Infinity;
+    this.rev++; this.layoutRev++;
+  }
+
+  /** A new scenario starts a new climate: the recorded lines are dropped (the charts stay) and the observed months are laid out from its start. */
+  private followScenario(state: GameState): void {
+    const info = state.climateScenario;
+    if (info?.id === this.scenario?.id && info?.loads === this.scenario?.loads) return;
+    if (!info && this.scenario) { // switched off: the Observed line goes, the recording carries on
+      this.scenario = null; this.observed = null;
+      this.rev++; this.layoutRev++;
+      return;
+    }
+    if (this.scenario || this.series.size) this.series.clear();
+    this.scenario = info ? { id: info.id, loads: info.loads, year: info.year, origin: info.elapsedDays } : null;
+    this.observed = null;
+    if (this.scenario) {
+      const v = observedNino34From(this.scenario.year, OBSERVED_MONTHS);
+      const month = DAYS_PER_YEAR / 12;
+      this.observed = { t: v.map((_, k) => this.scenario!.origin + (k + 0.5) * month), v, stride: month };
+    }
+    this.lastT = -Infinity;
     this.rev++; this.layoutRev++;
   }
 
@@ -145,31 +178,67 @@ export class ProbeBook {
   }
 
   /** Adds a probe. A basin index ignores the point and is added once; a point item reuses a pin at the same place. */
-  add(itemId: string, lon: number, lat: number): AddResult {
+  add(itemId: string, lon: number, lat: number, label?: string): AddResult {
     const item = MEASURE_BY_ID.get(itemId)!;
     if (item.basin) {
-      if (this.charts.has(item.id)) return { ok: false, reason: 'duplicate', item };
+      if (this.charts.has(item.id)) { this.claim(item.id, null); return { ok: false, reason: 'duplicate', item }; }
       this.charts.set(item.id, new Set());
+      this.claim(item.id, null); // a chart the player adds is theirs, whatever an earlier starter set left
       this.rev++; this.layoutRev++;
       return { ok: true, pin: null, item, isNewChart: true };
     }
     lon = wrapLon(lon);
     if (item.id === 'measure-thermocline' && !inThermoclineStrip(lon)) return { ok: false, reason: 'strip', item };
     let pin = this.pinNear(lon, lat);
-    if (pin && this.charts.get(item.id)?.has(pin.n)) return { ok: false, reason: 'duplicate', item };
+    if (pin && this.charts.get(item.id)?.has(pin.n)) { this.claim(item.id, pin.n); return { ok: false, reason: 'duplicate', item }; }
     if (!pin) {
       if (this.pins.length >= MAX_PINS) return { ok: false, reason: 'pins', item };
       let n = 1;
       while (this.pins.some(p => p.n === n)) n++;
-      pin = { n, lon: Math.round(lon * 100) / 100, lat: Math.round(lat * 100) / 100 };
+      pin = { n, lon: Math.round(lon * 100) / 100, lat: Math.round(lat * 100) / 100, ...(label ? { label } : {}) };
       this.pins.push(pin);
     }
     const isNewChart = !this.charts.has(item.id);
     const lines = this.charts.get(item.id) ?? new Set<number>();
     lines.add(pin.n);
     this.charts.set(item.id, lines);
+    this.claim(item.id, pin.n);
     this.rev++; this.layoutRev++;
     return { ok: true, pin, item, isNewChart };
+  }
+
+  private claim(item: string, pin: number | null): void {
+    this.auto = this.auto.filter(a => a.item !== item || a.pin !== pin);
+  }
+
+  /** Adds a starter set of probes, each only if it fits (the 12-pin cap) and is not there already. Returns how many lines were added. */
+  addSet(set: readonly { item: string; lon: number; lat: number; label?: string }[]): number {
+    let added = 0;
+    for (const p of set) {
+      const r = this.add(p.item, p.lon, p.lat, p.label);
+      if (r.ok) { this.auto.push({ item: p.item, pin: r.pin?.n ?? null }); added++; }
+    }
+    return added;
+  }
+
+  /** Removes the lines `addSet` added and nobody claimed; charts and pins the player also uses stay. */
+  removeAuto(): void {
+    const list = this.auto;
+    this.auto = [];
+    for (const { item, pin } of list) {
+      const lines = this.charts.get(item);
+      if (!lines) continue;
+      if (pin !== null) {
+        lines.delete(pin);
+        for (const key of [...this.series.keys()]) if (key.startsWith(`${item}|`) && key.endsWith(`|${pin}`)) this.series.delete(key);
+      }
+      if (pin === null || !lines.size) {
+        this.charts.delete(item);
+        for (const key of [...this.series.keys()]) if (key.startsWith(`${item}|`)) this.series.delete(key);
+      }
+    }
+    for (let i = this.pins.length - 1; i >= 0; i--) if (![...this.charts.values()].some(l => l.has(this.pins[i].n))) this.pins.splice(i, 1);
+    this.rev++; this.layoutRev++;
   }
 
   /** Removes a chart and the pins no other chart plots. */
@@ -177,6 +246,7 @@ export class ProbeBook {
     const lines = this.charts.get(itemId);
     if (!lines) return;
     this.charts.delete(itemId);
+    this.auto = this.auto.filter(a => a.item !== itemId); // the lines are gone, so a pin number that is reused later is not the starter set's
     for (const key of [...this.series.keys()]) if (key.startsWith(`${itemId}|`)) this.series.delete(key);
     for (const n of lines) if (![...this.charts.values()].some(l => l.has(n))) this.pins.splice(this.pins.findIndex(p => p.n === n), 1);
     this.rev++; this.layoutRev++;
@@ -188,6 +258,7 @@ export class ProbeBook {
    */
   sample(state: GameState): boolean {
     const t = elapsedDays(state);
+    this.followScenario(state);
     if (this.seed !== null && (state.seed !== this.seed || t < this.lastT - 1e-9)) this.clear();
     this.seed = state.seed; this.lastT = t;
     let changed = false;

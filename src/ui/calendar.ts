@@ -62,6 +62,15 @@ export function seasonIdOf(doy: number): SeasonId {
   return month >= 2 && month <= 4 ? 'spring' : month >= 5 && month <= 7 ? 'summer' : month >= 8 && month <= 10 ? 'autumn' : 'winter';
 }
 
+/** A scenario news date (`year * 400 + day of the year`, see climate-events.ts) as `Sep 15, 1997`, in the browser's wording for the language. */
+export function fmtSerialDate(serial: number, language: string): string {
+  const year = Math.floor(serial / 400), { month, day } = monthDayOf(serial - year * 400);
+  const date = new Date(Date.UTC(2000, month, day));
+  date.setUTCFullYear(year);
+  try { return new Intl.DateTimeFormat(language, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(date); }
+  catch { return `${MONTH_ABBR[month]} ${day}, ${year}`; }
+}
+
 /** `Oct 26` */
 export function fmtMonthDay(doy: number): string {
   const { month, day } = monthDayOf(doy);
@@ -73,18 +82,20 @@ export function worldDay(state: { startDayOfYear: number; calendarOffsetDays?: n
   return state.startDayOfYear + hours / 24 + (state.calendarOffsetDays ?? 0);
 }
 
-interface DateState { startDayOfYear: number; initialStartDayOfYear?: number; calendarOffsetDays?: number; climateTime?: { active: boolean } | null; initialWeather?: { modelRun: string } }
+interface DateState { startDayOfYear: number; initialStartDayOfYear?: number; calendarOffsetDays?: number; climateTime?: { active: boolean } | null; initialWeather?: { modelRun: string }; climateScenario?: { year: number; yearStartDay: number } }
 
 /** Model days since the world began: model hours plus the days the fast climate path has added. */
 const elapsedDays = (state: DateState, hours: number): number => hours / 24 + (state.calendarOffsetDays ?? 0);
 
-/** The calendar year is shown once a year of model time has passed, and always on the fast climate path where the date moves too quickly for a day to mean anything. */
+/** The calendar year is shown once a year of model time has passed, and always on the fast climate path where the date moves too quickly for a day to mean anything, and after a climate scenario has set it. */
 export function showsYear(state: DateState, hours: number): boolean {
-  return !!state.climateTime?.active || elapsedDays(state, hours) >= 365;
+  return !!state.climateTime?.active || !!state.climateScenario || elapsedDays(state, hours) >= 365;
 }
 
 /** Calendar year of the world's date: the year of the starting analysis (or this year, for a plain start) plus the 365-day years that have passed since. The real clock is read here, never in the engine. */
 export function worldYear(state: DateState, hours: number, now: Date = new Date()): number {
+  // A climate scenario names its own year: counted from the 1 January it started on, in the clock's own day count.
+  if (state.climateScenario) return state.climateScenario.year + Math.floor((Math.floor(worldDay(state, hours)) - state.climateScenario.yearStartDay) / 365);
   const analysis = state.initialWeather ? new Date(state.initialWeather.modelRun).getUTCFullYear() : NaN;
   const base = Number.isFinite(analysis) ? analysis : now.getUTCFullYear();
   return base + Math.floor((Math.floor((state.initialStartDayOfYear ?? state.startDayOfYear) + elapsedDays(state, hours)) - 1) / 365);

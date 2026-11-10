@@ -1,11 +1,13 @@
 /** Model seconds advanced per real second at each displayed setting. */
-export const TIME_SPEEDS = [1, 600, 1_800, 3_600, 7_200, 14_400, 86_400, 172_800, 1_209_600] as const;
+export const TIME_SPEEDS = [1, 600, 1_800, 3_600, 7_200, 14_400, 86_400, 172_800, 604_800] as const;
 export type TimeSpeed = (typeof TIME_SPEEDS)[number];
 /** Real time is too slow to watch a storm; 10 model minutes per second is the default and the reset target. */
 export const DEFAULT_TIME_SPEED: TimeSpeed = 600;
 export const MIN_TIME_SPEED = TIME_SPEEDS[0];
 /** Fastest step the tutorial asks for; the day-per-second steps can outrun the CPU. */
 export const TUTORIAL_TIME_SPEED: TimeSpeed = 14_400;
+/** A loaded climate scenario sets this speed (1 day per second), so that the weather runs and storms and climate-driven events form. */
+export const SCENARIO_TIME_SPEED: TimeSpeed = 86_400;
 export const MAX_TIME_SPEED = TIME_SPEEDS[TIME_SPEEDS.length - 1];
 
 export function isTimeSpeed(value: unknown): value is TimeSpeed {
@@ -18,7 +20,7 @@ export const isFastClimateSpeed = (speed: number): boolean => speed > MAX_WEATHE
 
 export function timeSpeedLabel(speed: TimeSpeed): string {
   if (speed === 1) return 'Real time';
-  return speed >= 86_400 ? `${speed / 86_400}d` : speed >= 1_000 ? `×${speed / 1_000}k` : `×${speed}`;
+  return speed >= 86_400 ? `${speed / 86_400}d/s` : speed >= 3_600 ? `${speed / 3_600}h/s` : `${speed / 60}m/s`;
 }
 
 /** The speed in words, for tooltips and accessible names. */

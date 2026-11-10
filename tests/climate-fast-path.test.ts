@@ -25,7 +25,7 @@ function busyWorld(): GameState {
 describe('the fast climate path', () => {
   it('is taken above 2 days per second only', () => {
     expect([172_800, 86_400, 600, 1].some(isFastClimateSpeed)).toBe(false);
-    expect(isFastClimateSpeed(1_209_600)).toBe(true);
+    expect(isFastClimateSpeed(604_800)).toBe(true);
   });
 
   it('entering and leaving at once changes nothing', () => {

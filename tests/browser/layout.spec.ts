@@ -142,7 +142,7 @@ for (const width of [1440, 768, 414, 375, 320]) {
     // The only panel must open from the right, including on narrow screens.
     if (!(await sidebar.isVisible())) await page.getByTestId('sidebar-toggle').click();
     await expect(sidebar).toBeVisible();
-    for (const id of ['genesis-toggle', 'historic-select', 'historic-load', 'recorded-path-toggle']) await expect(page.getByTestId(id)).toBeVisible();
+    for (const id of ['genesis-toggle', 'recorded-path-toggle']) await expect(page.getByTestId(id)).toBeVisible();
     await expect(page.getByTestId('genesis-toggle')).toHaveAttribute('aria-checked', 'false');
     await expect(page.getByTestId('recorded-path-toggle')).toHaveAttribute('aria-checked', 'true');
     const panelBox = (await sidebar.boundingBox())!;

@@ -40,6 +40,8 @@ interface Card {
   cursor: number | null;
   tipPlot: number;
   values: HTMLElement[][];
+  /** Value of the observed line in the legend, when the chart has one. */
+  observedValue: HTMLElement | null;
   /** Scrolled into view; cards out of view are not drawn until they come back. */
   onscreen: boolean;
 }
@@ -103,8 +105,11 @@ export function createMeasurePanel(o: MeasurePanelOptions): MeasurePanel {
   function lineName(item: MeasureItem, n: number): string {
     if (item.basin) return t('Pacific basin');
     const pin = o.book.pins.find(p => p.n === n)!;
-    return t(`#${n} ${fmtCoord(pin.lon, pin.lat)}`);
+    return pin.label ? `#${n} ${t(pin.label)} · ${t(fmtCoord(pin.lon, pin.lat))}` : t(`#${n} ${fmtCoord(pin.lon, pin.lat)}`);
   }
+
+  /** The observed Niño 3.4 of the loaded climate scenario, drawn only on the Niño 3.4 chart. */
+  const observedOf = (card: Card): Series | null => (card.item.id === 'measure-nino34' ? o.book.observed : null);
 
   function buildLines(card: Card): void {
     const { item } = card;
@@ -125,6 +130,14 @@ export function createMeasurePanel(o: MeasurePanelOptions): MeasurePanel {
       card.linesList.append(el('li', { class: 'measure-line', 'data-pin': line.n }, [key, el('span', { class: 'measure-line__name', text: line.name }), values]));
       return spans;
     });
+    card.observedValue = null;
+    if (observedOf(card)) {
+      const key = el('span', { class: 'measure-key', 'aria-hidden': 'true' });
+      key.style.setProperty('--line', colors.ink);
+      key.dataset.dashed = 'true';
+      card.observedValue = el('span', { class: 'measure-line__value' });
+      card.linesList.append(el('li', { class: 'measure-line', 'data-observed': 'true', 'data-testid': 'measure-observed' }, [key, el('span', { class: 'measure-line__name', text: t('Observed') }), el('span', { class: 'measure-line__values' }, [card.observedValue])]));
+    }
   }
 
   function buildCard(item: MeasureItem): Card {
@@ -135,7 +148,7 @@ export function createMeasurePanel(o: MeasurePanelOptions): MeasurePanel {
     const unit = el('span', { class: 'measure-card__unit', text: plotUnits(item) });
     const linesList = el('ul', { class: 'measure-lines' });
     const plotsBox = el('div', { class: 'measure-plots' });
-    const card: Card = { item, root: null as unknown as HTMLElement, linesList, note: el('p', { class: 'fine measure-note', hidden: true, text: 'No ENSO climate layer is running, so this shows the long-term average and the anomalies are zero. Move the ENSO slider or place a warm or cool condition in the tropics to start it.' }), plots: [], lines: [], cursor: null, tipPlot: 0, values: [], onscreen: true };
+    const card: Card = { item, root: null as unknown as HTMLElement, linesList, note: el('p', { class: 'fine measure-note', hidden: true, text: 'No ENSO climate layer is running, so this shows the long-term average and the anomalies are zero. Move the ENSO slider or place a warm or cool condition in the tropics to start it.' }), plots: [], lines: [], cursor: null, tipPlot: 0, values: [], observedValue: null, onscreen: true };
     item.plots.forEach((plot, i) => {
       const canvas = el('canvas', { class: 'measure-plot__canvas', tabindex: 0, role: 'img', 'data-testid': `measure-plot-${item.id}-${i}` });
       const tip = el('div', { class: 'measure-tip', hidden: true, 'aria-hidden': 'true' });
@@ -207,12 +220,20 @@ export function createMeasurePanel(o: MeasurePanelOptions): MeasurePanel {
       const v = lastFinite(card.lines[li].series[pi]);
       span.textContent = `${fmtMeasure(v, plot.digits)} ${unitText(plot.unit)}`;
     }));
+    const obs = observedOf(card);
+    if (card.observedValue && obs) {
+      const model = card.lines[0]?.series[0];
+      const at = model?.t.length ? model.t[model.t.length - 1] : t0;
+      const k = nearestIndex(obs, at);
+      // Past the last observed month there is nothing to compare with: the value is blank, not frozen.
+      card.observedValue.textContent = at > obs.t[obs.t.length - 1] + obs.stride / 2 ? '' : `${fmtMeasure(obs.v[k], 2)} ${unitText('°C')}`;
+    }
     const note = !!card.item.needsLayer && !o.hasLayer();
     card.note.hidden = !note;
     // A text alternative with the current values for every line, kept in step with the picture.
     card.plots.forEach((p, i) => {
       const plot = card.item.plots[i];
-      const alt = `${t(plot.label)}: ${card.lines.map(l => `${l.name} ${fmtMeasure(lastFinite(l.series[i]), plot.digits)} ${unitText(plot.unit)}`).join('; ')}`;
+      const alt = `${t(plot.label)}: ${card.lines.map(l => `${l.name} ${fmtMeasure(lastFinite(l.series[i]), plot.digits)} ${unitText(plot.unit)}`).join('; ')}${card.observedValue?.textContent ? `; ${t('Observed')} ${card.observedValue.textContent}` : ''}`;
       if (alt !== p.alt) { p.alt = alt; p.canvas.setAttribute('aria-label', alt); }
     });
   }
@@ -243,6 +264,8 @@ export function createMeasurePanel(o: MeasurePanelOptions): MeasurePanel {
       const s = line.series[index];
       if (s) for (const v of s.v) if (!Number.isNaN(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
     }
+    const obs = observedOf(card);
+    if (obs) for (let k = 0; k < obs.t.length; k++) if (obs.t[k] >= t0 && obs.t[k] <= t1) { lo = Math.min(lo, obs.v[k]); hi = Math.max(hi, obs.v[k]); }
     if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
     if (plot.zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
     for (const g of plot.guides ?? []) { lo = Math.min(lo, g.value); hi = Math.max(hi, g.value); }
@@ -286,6 +309,16 @@ export function createMeasurePanel(o: MeasurePanelOptions): MeasurePanel {
     for (const g of plot.guides ?? []) ctx.fillText(t(g.label), x1 - 2, Math.round(Y(g.value)) - 2);
 
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    if (obs) { // observed months: a dashed line in the text ink, clipped to the plot, so it never relies on colour alone
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x0, yTop, x1 - x0, yBottom - yTop); ctx.clip();
+      ctx.strokeStyle = colors.ink; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      obs.t.forEach((time, k) => { if (k) ctx.lineTo(X(time), Y(obs.v[k])); else ctx.moveTo(X(time), Y(obs.v[k])); });
+      ctx.stroke();
+      ctx.restore();
+      ctx.setLineDash([]);
+    }
     for (const line of card.lines) {
       const s = line.series[index];
       if (!s?.t.length) continue;
@@ -342,6 +375,18 @@ export function createMeasurePanel(o: MeasurePanelOptions): MeasurePanel {
       value.textContent = `${fmtMeasure(s.v[k], plot.digits)} ${unitText(plot.unit)}`;
       const name = el('span', { class: 'measure-tip__name' });
       name.textContent = line.short;
+      rows.push(el('p', { class: 'measure-tip__row' }, [key, value, name]));
+    }
+    const obs = observedOf(card);
+    if (obs && index === 0 && card.cursor <= obs.t[obs.t.length - 1] + obs.stride / 2) {
+      const k = nearestIndex(obs, card.cursor);
+      const key = el('span', { class: 'measure-key', 'aria-hidden': 'true' });
+      key.style.setProperty('--line', colors.ink);
+      key.dataset.dashed = 'true';
+      const value = el('strong', { class: 'measure-tip__value' });
+      value.textContent = `${fmtMeasure(obs.v[k], plot.digits)} ${unitText(plot.unit)}`;
+      const name = el('span', { class: 'measure-tip__name' });
+      name.textContent = t('Observed');
       rows.push(el('p', { class: 'measure-tip__row' }, [key, value, name]));
     }
     p.tip.replaceChildren(...rows);

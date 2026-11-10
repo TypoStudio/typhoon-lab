@@ -8,15 +8,15 @@ it('cycles through every speed in both directions', () => {
   }
 });
 
-it('has exactly the nine steps, labels sub-day steps as real-time multiples and day steps as 1d, 2d and 14d', () => {
-  expect([...TIME_SPEEDS]).toEqual([1, 600, 1_800, 3_600, 7_200, 14_400, 86_400, 172_800, 1_209_600]);
-  expect(TIME_SPEEDS.map(timeSpeedLabel)).toEqual(['Real time', '×600', '×1.8k', '×3.6k', '×7.2k', '×14.4k', '1d', '2d', '14d']);
+it('has exactly the nine steps, labels the steps as model time per second: 10m/s ... 4h/s, 1d/s, 2d/s and 7d/s', () => {
+  expect([...TIME_SPEEDS]).toEqual([1, 600, 1_800, 3_600, 7_200, 14_400, 86_400, 172_800, 604_800]);
+  expect(TIME_SPEEDS.map(timeSpeedLabel)).toEqual(['Real time', '10m/s', '30m/s', '1h/s', '2h/s', '4h/s', '1d/s', '2d/s', '7d/s']);
 });
 
 it('describes every step in words', () => {
   expect(TIME_SPEEDS.map(timeSpeedDescription)).toEqual([
     'Real time: 1 second per second', '10 minutes per second', '30 minutes per second', '1 hour per second', '2 hours per second',
-    '4 hours per second', '1 day per second', '2 days per second', '14 days per second',
+    '4 hours per second', '1 day per second', '2 days per second', '7 days per second',
   ]);
 });
 

@@ -18,16 +18,21 @@ test('loading a past typhoon adds its recorded storm, keeps the palette and show
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
   await expect(page.getByTestId('historic-hud')).toBeHidden();
-  await expect(page.getByTestId('historic-select').locator('option')).not.toHaveCount(0);
-  await expect(page.getByTestId('historic-select').locator('option[value="maemi-2003"]')).toHaveText('Maemi (2003) · Western North Pacific');
-  await page.getByTestId('historic-select').selectOption('maemi-2003');
-  // Choosing does not load anything; only the button does.
+  await page.getByTestId('palette-tab-typhoons').click();
+  await expect(page.locator('[data-experience^="typhoon:"]')).toHaveCount(40);
+  const maemi = page.getByTestId('experience-typhoon-maemi-2003');
+  await expect(maemi).toContainText('Maemi');
+  await expect(maemi).toContainText('2003');
+  // Looking at a tile does not load anything; pressing it does.
+  await maemi.hover();
+  await expect(page.locator('#tip')).toContainText(/Western North Pacific · Peak pressure \d+ hPa/);
   expect(await page.evaluate(() => (window as any).__typhoonLab.state.historic)).toEqual([]);
-  await page.getByTestId('historic-load').click();
+  await maemi.click();
   await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.historic.map((h: any) => h.typhoonId))).toEqual(['maemi-2003']);
   await expect(page.getByTestId('status')).toContainText('Maemi (2003) loaded. Its path is recorded; conditions change its strength.');
   await checkWeatherData(page, /Maemi \(2003\) · 2003-09-0[45] \d\d:\d\d UTC · (NCEP\/NCAR R1 \+ ERSST v5|base climate)$/);
   await expect(page.getByTestId('weather-palette')).toBeVisible();
+  await page.getByTestId('palette-tab-conditions').click();
   for (const tool of ALL_TOOLS) await expect(page.getByTestId(`tool-${tool}`)).toBeVisible();
   await expect(page.getByTestId('storm-list')).toContainText('Maemi');
 
@@ -45,13 +50,16 @@ test('Korean labels follow the language and the toast names the typhoon in Korea
   await page.goto('/?renderer=canvas&lang=ko&help=0&start=2026-08-01');
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
-  await expect(page.getByTestId('historic-select').locator('option[value="maemi-2003"]')).toHaveText('매미 (2003) · 서북태평양');
-  await page.getByTestId('historic-select').selectOption('maemi-2003');
-  await page.getByTestId('historic-load').click();
+  await page.getByTestId('palette-tab-typhoons').click();
+  await expect(page.getByTestId('palette-tab-typhoons')).toHaveText('태풍체험');
+  await expect(page.getByTestId('experience-typhoon-maemi-2003')).toContainText('매미');
+  await page.getByTestId('experience-typhoon-maemi-2003').hover();
+  await expect(page.locator('#tip')).toContainText('서북태평양');
+  await page.getByTestId('experience-typhoon-maemi-2003').click();
   await expect(page.getByTestId('status')).toContainText('매미 (2003) 태풍을 불러왔습니다. 경로는 기록을 따르며 조건은 세기만 바꿉니다.');
   await checkWeatherData(page, '매미 (2003)');
   await page.getByTestId('language-select').selectOption('en');
-  await expect(page.getByTestId('historic-select').locator('option[value="maemi-2003"]')).toHaveText('Maemi (2003) · Western North Pacific');
+  await expect(page.getByTestId('experience-typhoon-maemi-2003')).toContainText('Maemi');
   await checkWeatherData(page, 'Maemi (2003)');
 });
 
@@ -80,8 +88,8 @@ test('a loaded typhoon survives a replay export and import', async ({ page }) =>
   await page.goto('/?renderer=canvas&lang=en&help=0&start=2026-08-01');
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
-  await page.getByTestId('historic-select').selectOption('maemi-2003');
-  await page.getByTestId('historic-load').click();
+  await page.getByTestId('palette-tab-typhoons').click();
+  await page.getByTestId('experience-typhoon-maemi-2003').click();
   await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.historic.length)).toBe(1);
   await setSpeed(page, 14400);
   await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.hours), { timeout: 30_000 }).toBeGreaterThanOrEqual(12);
@@ -91,7 +99,7 @@ test('a loaded typhoon survives a replay export and import', async ({ page }) =>
   await page.getByTestId('export-replay').click();
   const file = await readFile((await (await downloaded).path())!, 'utf8');
   const replay = JSON.parse(file);
-  expect(replay.formatVersion).toBe(7);
+  expect(replay.formatVersion).toBe(8);
   expect(replay).not.toHaveProperty('mode');
   expect(replay.actions).toEqual([expect.objectContaining({ type: 'historic', typhoonId: 'maemi-2003' })]);
   const snapshot = () => page.evaluate(() => {

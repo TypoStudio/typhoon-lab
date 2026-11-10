@@ -208,8 +208,10 @@ svg { display: block; }
 .historic-hud p + p { margin-top: var(--space-2xs); }
 /* Weather palette */
 .palette { left: 50%; right: auto; bottom: var(--space-sm); transform: translateX(-50%); width: max-content; max-width: calc(100% - 1rem); padding: var(--space-xs); }
-.palette__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); padding-bottom: var(--space-2xs); }
-.palette__tabs { display: flex; gap: 2px; }
+.palette__head { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); padding-bottom: var(--space-2xs); }
+.palette__tabs { display: flex; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.palette__tabs::-webkit-scrollbar { display: none; }
+.palette__tab { flex: none; }
 .palette__tab {
   height: 1.5rem; padding: 0 0.6rem; border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer;
   font-size: var(--text-xs); font-weight: 600; color: var(--color-muted); white-space: nowrap; -webkit-tap-highlight-color: transparent;
@@ -218,14 +220,43 @@ svg { display: block; }
 .palette__tab[aria-selected="true"] { background: var(--color-paper-4); color: var(--color-ink); box-shadow: inset 0 -2px 0 var(--color-accent); }
 .palette__label { margin: 0; font-size: var(--text-xs); color: var(--color-muted); white-space: nowrap; }
 @media (max-width: 30rem) { .palette__label { display: none; } }
-.palette:has([data-palette-panel="formation"]:not([hidden]), [data-palette-panel="measure"]:not([hidden])) .palette__label { display: none; }
-.palette__tools[data-palette-panel="formation"], .palette__tools[data-palette-panel="measure"] { display: flex; gap: var(--space-xs); overflow-x: auto; padding-bottom: 2px; }
-.palette__tools[data-palette-panel="formation"] .tool, .palette__tools[data-palette-panel="measure"] .tool { flex: 0 0 5rem; }
+/* Page buttons: shown only while the visible row overflows. Same height as a tab, so the box never grows; on phones the tap area reaches 44 px. */
+.palette__pager { position: relative; z-index: 2; display: flex; flex: none; gap: 2px; margin-inline-start: auto; }
+.palette__pager[hidden] { display: none; }
+.palette__page { position: relative; display: grid; place-items: center; width: 1.75rem; height: 1.5rem; padding: 0; border: var(--rule-width) solid var(--color-rule); border-radius: var(--radius-sm); background: var(--color-paper-3); color: var(--color-ink); cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.palette__page svg { width: 1rem; height: 1rem; pointer-events: none; }
+.palette__page:hover:not(:disabled) { background: var(--color-paper-4); }
+.palette__page:disabled { opacity: 0.35; cursor: default; }
+.palette__page::after { content: ""; position: absolute; inset: -0.5rem -0.125rem; }
+.palette:has([data-palette-panel="formation"]:not([hidden]), [data-palette-panel="measure"]:not([hidden]), [data-palette-panel="typhoons"]:not([hidden]), [data-palette-panel="climate"]:not([hidden])) .palette__label { display: none; }
+.palette__tools[data-palette-panel="formation"], .palette__tools[data-palette-panel="measure"], .palette__tools[data-palette-panel="typhoons"], .palette__tools[data-palette-panel="climate"] { display: flex; gap: var(--space-xs); overflow-x: auto; padding-bottom: 2px; }
+.palette__tools[data-palette-panel="formation"] .tool, .palette__tools[data-palette-panel="measure"] .tool, .palette__tools[data-palette-panel="typhoons"] .tool, .palette__tools[data-palette-panel="climate"] .tool { flex: 0 0 5rem; }
 /* Desktop: the Conditions row is as wide and as tall as the Formation and Measure rows (ten 5rem cells, same bottom padding), so the box does not move between tabs. */
 @media (min-width: 48rem) and (min-height: 30.0625rem) {
-  .palette__tools[data-palette-panel="conditions"] { width: calc(10 * 5rem + 9 * var(--space-xs)); max-width: 100%; padding-bottom: 2px; }
+  .palette__tools[data-palette-panel="conditions"], .palette__tools[data-palette-panel="typhoons"], .palette__tools[data-palette-panel="climate"] { width: calc(10 * 5rem + 9 * var(--space-xs)); max-width: 100%; padding-bottom: 2px; }
 }
 .tool[data-measure] .tool__icon { color: var(--color-wind); }
+/* Experience tabs: 40 typhoons, or 2 scenarios, in one sideways row. The scrollbar is hidden (it would make the box taller than the other tabs); fades mark the side that has more. */
+.palette__tools[data-palette-panel="typhoons"], .palette__tools[data-palette-panel="climate"] { scrollbar-width: none; overscroll-behavior-x: contain; --fade-start: 0px; --fade-end: 0px;
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent); }
+.palette__tools[data-palette-panel="typhoons"]::-webkit-scrollbar, .palette__tools[data-palette-panel="climate"]::-webkit-scrollbar { display: none; }
+.palette__tools[data-more-start="true"] { --fade-start: 1.5rem; }
+.palette__tools[data-more-end="true"] { --fade-end: 1.5rem; }
+.tool--experience .tool__icon { color: var(--color-storm); }
+.tool--experience[data-experience^="scenario:"] .tool__icon { color: var(--color-wind); }
+.tool--experience[data-experience^="scenario:"] { border-style: dashed; }
+.tool--experience { cursor: pointer; }
+.tool--experience .tool__name { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+/* Climate tiles are wide: the icon beside the name and the start of the description (the whole text is in the tooltip). */
+.palette__tools[data-palette-panel="climate"] .tool--wide { flex: 1 1 0; min-width: 15rem; grid-template-columns: auto minmax(0, 1fr); justify-items: start; column-gap: var(--space-sm); padding-inline: var(--space-sm); text-align: left; }
+.tool--wide .tool__text { display: grid; gap: 2px; min-width: 0; text-align: left; pointer-events: none; }
+.tool--wide .tool__name { text-align: left; }
+.tool--wide .tool__desc { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; font-size: 0.7rem; line-height: 1.25; color: var(--color-muted); word-break: keep-all; overflow-wrap: break-word; }
+.tool__sub { font-family: var(--font-mono); font-size: 0.65rem; line-height: 1; color: var(--color-muted); pointer-events: none; }
+.tool--experience.is-live { background: var(--color-paper-4); border-color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
+.tool--experience.is-live::after { content: ""; position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }
+.tool--experience[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 .palette__tools { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--space-xs); }
 .tool {
   position: relative; display: grid; justify-items: center; align-content: center; gap: var(--space-2xs);
@@ -772,7 +803,7 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
   /* Bottom strip: tabs on the left of the header row, then 12 cells in one sideways-scrolling row. */
   .palette {
     left: 0; right: 0; bottom: 0; transform: none; width: auto; max-width: none; height: var(--palette-h);
-    display: grid; grid-template-rows: 1.75rem minmax(0, 1fr);
+    display: grid; grid-template-rows: 1.75rem minmax(0, 1fr); grid-template-columns: minmax(0, 1fr);
     padding: 0 0 env(safe-area-inset-bottom, 0px);
     background: var(--color-paper-2); border-width: var(--rule-width) 0 0; border-radius: 0;
   }
@@ -909,3 +940,32 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
 @media (max-width: 47.9375rem), (max-height: 30rem) {
   .tutorial { bottom: calc(var(--palette-h) + var(--space-xs)); max-height: 45dvh; padding: var(--space-xs) var(--space-sm); font-size: var(--text-xs); }
 }
+
+/* Experience tiles on phones and short landscape screens: the same 3rem cells; climate tiles are a screen wide, scrolling sideways. */
+@media (max-width: 47.9375rem), (max-height: 30rem) {
+  .palette__tools[data-palette-panel="typhoons"] .tool, .palette__tools[data-palette-panel="climate"] .tool { gap: 0; }
+  .tool--experience .tool__icon { width: 18px; height: 18px; }
+  .tool--experience .tool__name { font-size: 0.625rem; line-height: 1.1; }
+  .tool__sub { font-size: 0.6rem; }
+  .palette__tools[data-palette-panel="climate"] .tool--wide { flex: 0 0 min(78vw, 18rem); min-width: 0; }
+  .tool--wide .tool__desc { -webkit-line-clamp: 2; line-clamp: 2; font-size: 0.6rem; line-height: 1.2; }
+}
+
+@media (max-width: 47.9375rem), (max-height: 30rem) {
+  .palette__page { width: 1.75rem; height: 1.5rem; }
+  .palette__page::after { inset: -0.125rem -0.75rem -0.8rem; } /* a tap area of about 40 x 40 px that reaches down over the tiles' top edge (the palette's own top edge limits it upward); the pair's inner edges meet */
+  .palette__page[data-page="-1"]::after { inset-inline-end: -0.0625rem; }
+  .palette__page[data-page="1"]::after { inset-inline-start: -0.0625rem; }
+}
+
+/* Phones: five palette tabs plus the page buttons must share one row, so the two long tabs show a one-word label (the full name stays the accessible name). */
+@media (max-width: 47.9375rem), (max-height: 30rem) {
+  .palette__tabs { gap: 0; }
+  .palette__head { padding-inline: 0.5rem; }
+  .palette__tab { padding: 0 0.25rem; font-size: 0.625rem; }
+  .palette__tab[data-short] { font-size: 0; }
+  .palette__tab[data-short]::after { content: attr(data-short); font-size: 0.625rem; }
+}
+
+.news--place { cursor: pointer; }
+.news--place:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }

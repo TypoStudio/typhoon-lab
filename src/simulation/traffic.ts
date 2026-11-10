@@ -1,3 +1,4 @@
+import { trimNews } from './climate-events';
 import { TRAFFIC_DEPARTURES, TRAFFIC_ROUTES, type TrafficRoute } from '../data/traffic';
 import preparedSeaRoutes from '../data/generated/traffic-routes.json';
 import { hash01 } from './geo';
@@ -187,7 +188,7 @@ function report(state: TrafficWorld, v: TrafficVehicle, event: TransportReport['
     text: `${subject} route: ${v.homeName} → ${v.destinationName}.`,
     transport: { vehicleId: v.id, kind: v.kind, event, from: v.homeName, to: v.destinationName, windMs, lossUsd },
   });
-  if (state.news.length > MAX_NEWS) state.news.splice(0, state.news.length - MAX_NEWS);
+  trimNews(state.news, MAX_NEWS);
 }
 
 function setRoute(v: TrafficVehicle, route: GeoPoint[]): void {

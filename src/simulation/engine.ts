@@ -22,7 +22,7 @@
  * include every storm. sampleEnvironment() returns the storm-free environment.
  */
 import type {
-  ActionRecord, City, ClimateKey, ClimateState, EnvironmentCell, Effect, FormationKind, GameState, GenesisCandidate, GeoPoint, HistoricEnvironment, HistoricPoint, HistoricTyphoon, NewsItem,
+  ActionRecord, City, ClimateKey, ClimateScenarioInfo, ClimateState, EnvironmentCell, Effect, FormationKind, GameState, GenesisCandidate, GeoPoint, HistoricEnvironment, HistoricPoint, HistoricTyphoon, NewsItem,
   LiveWeatherSnapshot, PlacementResult, Storm, StormRecord, Thunderstorm, ToolDefinition, ToolType, WeatherField,
 } from '../types';
 import { CITY_DAMAGE_LEVELS, cityDamageBulletin, estimateCityDamage } from './damage-news';
@@ -38,9 +38,11 @@ import { fieldsAt, sampleHistoric, windowCells } from './historic';
 import { currentWeather, isLiveWeatherSnapshot, sampleLiveWeather, stepLiveWeather } from './live-weather';
 import { climateIndices, nino34Of, releaseToolPatches, setSstHold, stackHeatPatch, stackSstPatch, thermoclineAt, type ClimateIndices } from './climate-core';
 import {
-  advanceClimateLayer, alignClimateCalendar, anomaliesFor, anomalyAt, createClimateLayer, enableClimateNoise, createLiveClimateLayer, newAnomalyPoint, rebuildAnomalies, sstUnionAdjustment, stepClimateLayer,
+  advanceClimateLayer, alignClimateCalendar, anomaliesFor, anomalyAt, createClimateLayer, createScenarioLayer, enableClimateNoise, createLiveClimateLayer, newAnomalyPoint, rebuildAnomalies, sstUnionAdjustment, stepClimateLayer,
   type AnomalyContext, type AnomalyPoint, type AnomalySet,
 } from './climate-coupling';
+import { climateScenarioById, isClimateScenarioId, type ClimateScenarioId } from './climate-scenarios';
+import { dateSerial, postHistoricRecord, stepClimateEvents, trimNews } from './climate-events';
 import { LandIndex, clamp, cosLat, distanceKm, hash01, moveKm, offsetKm, smoothstep, wrapLon } from './geo';
 
 export const SIMULATION_VERSION = '0.8.0';
@@ -1165,7 +1167,7 @@ function fmt(lon: number, lat: number): string {
 /** Rolling event feed. Event ids are unique by construction (storm/effect ids, crossing detection). */
 function addNews(state: GameState, item: Omit<NewsItem, 'hour'>): void {
   state.news.push({ ...item, hour: state.hours });
-  if (state.news.length > MAX_NEWS) state.news.splice(0, state.news.length - MAX_NEWS);
+  trimNews(state.news, MAX_NEWS);
 }
 
 export function placeTool(state: GameState, type: ToolType, lon: number, lat: number, formation?: FormationKind): PlacementResult {
@@ -1209,10 +1211,10 @@ export const HEAT_PER_TOOL: Partial<Record<ToolType, number>> = {
 };
 
 /** A condition placed in the tropics (within 30 degrees) also drives the climate layer: warm and cool water as SST patches, the pressure, air and vertical-motion conditions as atmosphere heating. Overlapping patches of one sign merge, so stacked tools escalate. Formation recipes are local and stay out. */
-function feedClimate(state: GameState, type: ToolType, lon: number, lat: number): void {
+function feedClimate(state: GameState, type: ToolType, lon: number, lat: number, lifeDays?: number): void {
   const tool = TOOL_BY_TYPE.get(type)!;
   const sigmaKm = tool.radiusKm / 2; // the tool's Gaussian exp(-d²/2σ²) is the patch's exp(-(d/r)²) with r = σ√2
-  const radiusDeg = Math.max(2, (sigmaKm * Math.SQRT2) / 111.32), lonEast = (wrapLon(lon) + 360) % 360, days = tool.durationHours / 24;
+  const radiusDeg = Math.max(2, (sigmaKm * Math.SQRT2) / 111.32), lonEast = (wrapLon(lon) + 360) % 360, days = lifeDays ?? tool.durationHours / 24;
   if (type === 'warm' || type === 'cool') {
     stackSstPatch(ensureClimateLayer(state).core, { lonEast, lat, radiusDeg, deltaC: type === 'warm' ? EFFECT_STRENGTH.warm : -EFFECT_STRENGTH.cool, days });
   } else {
@@ -1254,6 +1256,7 @@ export function setGenesis(state: GameState, on: boolean): PlacementResult {
   const wasOn = state.genesis.enabled;
   state.actions.push({ tick: state.tick, type: 'genesis', on });
   state.genesis.enabled = on;
+  if (state.climateScenario) state.climateScenario.priorGenesis = on; // the player's own choice during a scenario is the setting that stays when it ends
   if (on && !wasOn) {
     state.genesis.nextSpawnTick = state.tick;
     updateGenesisWaves(state);
@@ -1298,8 +1301,106 @@ export function setSeason(state: GameState, day: number): PlacementResult {
   state.actions.push({ tick: state.tick, type: 'season', dayOfYear: day });
   state.startDayOfYear = (((day - state.hours / 24 - state.calendarOffsetDays) % YEAR_DAYS) + YEAR_DAYS) % YEAR_DAYS;
   if (state.climateLayer) { alignClimateCalendar(state.climateLayer, Math.max(1, Math.floor(dayOfYear(state)))); rebuildClimate(state); }
+  if (state.climateScenario) endClimateScenario(state);
   refreshGrid(state);
   refreshForecasts(state);
+  return { ok: true };
+}
+
+/** A scenario's calendar and script no longer match once the date is moved, so it ends: the script and its trade-wind anomaly go, the ocean keeps its state, and the clock returns to its normal format. */
+function endClimateScenario(state: GameState): void {
+  const layer = state.climateLayer!;
+  layer.core.script = [];
+  layer.core.tradeAnomaly = 0;
+  const loads = state.climateScenario!.loads;
+  state.genesis.enabled = state.climateScenario!.priorGenesis;
+  delete state.climateScenario;
+  addNews(state, { id: `climate-scenario-ended-${state.tick}-${loads}`, kind: 'info', title: 'Climate scenario ended', text: 'Changing the season ended the scenario. The ocean carries on from where it is.' });
+}
+
+// ---- Historic climate scenarios ----
+/** The scenario's calendar date as a serial (see climate-events.ts): the clock's own year and day of the year. */
+function scenarioSerial(state: GameState & { climateScenario: ClimateScenarioInfo }): number {
+  const info = state.climateScenario;
+  const year = info.year + Math.floor((Math.floor(state.startDayOfYear + state.hours / 24 + state.calendarOffsetDays) - info.yearStartDay) / 365);
+  return dateSerial(year, dayOfYear(state));
+}
+/** Posts the real events of the scenario that are dated up to now: news only, at any speed. */
+function postScenarioRecord(state: GameState & { climateScenario: ClimateScenarioInfo }): void {
+  postHistoricRecord(state.climateScenario, scenarioSerial(state), n => addNews(state, { ...n, kind: 'info' }));
+}
+/** Once per model day while a scenario is loaded and the weather runs: the climate-driven disasters, and the record's news. */
+function climateScenarioDay(state: GameState & { climateScenario: ClimateScenarioInfo }): void {
+  postScenarioRecord(state);
+  stepClimateEvents(state, {
+    nino: state.climateLayer ? state.climateLayer.nino : null,
+    probe: (lon, lat) => climateAnomalyAt(state, lon, lat),
+    sample: point => state.grid[gridIndex(point.lon, point.lat)],
+    day: Math.floor(state.hours / 24 + state.calendarOffsetDays + 1e-6), doy: dayOfYear(state),
+  }, n => addNews(state, { ...n, kind: 'weather', serial: scenarioSerial(state) }));
+}
+
+
+/**
+ * Loads a historic climate scenario (climate-scenarios.ts). Only the climate changes: storms (recorded ones too), remnants, forming lows, thunderstorms,
+ * hazards, their damage accounting and the placed tools keep running (the date jump moves only the seasonal climate; ages, records and wave timing run on
+ * model hours and ticks). A live analysis is dropped; the ENSO layer is replaced by a noise-free one with the scenario's ocean start state and scripted
+ * forcing, the placed tropical conditions are fed into it with their remaining life (as `endClimateScenarioNow` does), the ENSO slider returns to 0, and
+ * the calendar moves to 1 January of the scenario's first year (the same mechanism as `setSeason`). The world then runs on at any speed. Recorded like any other action.
+ */
+export function loadClimateScenario(state: GameState, scenarioId: string): PlacementResult {
+  if (!isClimateScenarioId(scenarioId)) return { ok: false, reason: 'Unknown climate scenario.' };
+  const def = climateScenarioById(scenarioId as ClimateScenarioId);
+  state.actions.push({ tick: state.tick, type: 'climate-scenario', scenarioId });
+  if (state.weather && !state.liveEnded) { state.weather = undefined; state.liveEnded = true; }
+  state.climate.enso = 0;
+  state.climateLayer = createScenarioLayer(state.seed, scenarioId as ClimateScenarioId);
+  const elapsed = state.hours / 24 + state.calendarOffsetDays;
+  state.startDayOfYear = (((1 + 1e-6 - elapsed) % YEAR_DAYS) + YEAR_DAYS) % YEAR_DAYS; // a hair past midnight, so rounding cannot show 31 December
+  const shown = Math.floor(state.startDayOfYear + elapsed); // the clock's own day count (calendar.ts worldDay), whole days
+  const priorGenesis = state.climateScenario ? state.climateScenario.priorGenesis : state.genesis.enabled; // loading over a loaded scenario keeps the setting from before the first
+  state.climateScenario = { id: scenarioId, loads: state.actions.filter(a => a.type === 'climate-scenario').length, year: def.year, yearStartDay: shown - ((((shown - 1) % 365) + 365) % 365), elapsedDays: elapsed,
+    priorGenesis, eventSeq: 0, eventLast: [], recordSerial: dateSerial(def.year, 0) };
+  for (const e of state.effects) { // the new layer starts empty, so each tropical condition is fed once
+    if (e.id >= 0 && !e.formation && Math.abs(e.lat) <= 30 && isLayerTool(e.type)) feedClimate(state, e.type, e.lon, e.lat, Math.max(1, e.remainingHours / 24));
+  }
+  rebuildClimate(state);
+  if (!state.genesis.enabled) { // typhoons form on the changed climate: natural formation is part of the load (no action of its own); its first wave comes with the first step
+    state.genesis.enabled = true;
+    state.genesis.nextSpawnTick = state.tick;
+  }
+  refreshGrid(state);
+  syncDisasters(state, point => state.grid[gridIndex(point.lon, point.lat)]);
+  refreshForecasts(state);
+  addNews(state, { id: `climate-scenario-${state.tick}-${state.climateScenario.loads}`, kind: 'info', title: def.name, text: 'The Pacific starts in its state of that January. Storms and tools already running carry on.' });
+  return { ok: true };
+}
+
+/**
+ * Switches the loaded scenario off at once (a recorded action, rejected when none is loaded): the scenario clock, its script and trade-wind
+ * anomaly and its ocean state go, and the layer starts again from a neutral ocean on the same date. The layer comes back only when something
+ * else needs it: the ENSO slider (held at its value), natural variability on the fast path, or placed tropical conditions (re-fed with their remaining life).
+ * Storms already formed keep running; only the climate changes.
+ */
+export function endClimateScenarioNow(state: GameState): PlacementResult {
+  if (!state.climateScenario) return { ok: false, reason: 'No climate scenario is loaded.' };
+  state.actions.push({ tick: state.tick, type: 'climate-scenario-off' });
+  const loads = state.climateScenario.loads;
+  state.genesis.enabled = state.climateScenario.priorGenesis;
+  delete state.climateScenario;
+  const tools = state.effects.filter(e => e.id >= 0 && !e.formation && Math.abs(e.lat) <= 30 && isLayerTool(e.type));
+  if (state.climate.enso === 0 && !tools.length && !state.climateTime?.active) state.climateLayer = null;
+  else {
+    const layer = state.climateLayer = createClimateLayer(state.seed, Math.max(1, Math.floor(dayOfYear(state))));
+    if (state.climateTime?.active) enableClimateNoise(layer);
+    if (state.climate.enso !== 0) { setSstHold(layer.core, state.climate.enso); layer.nino = nino34Of(layer.core); }
+    for (const e of tools) feedClimate(state, e.type, e.lon, e.lat, Math.max(1, e.remainingHours / 24));
+    rebuildClimate(state);
+  }
+  refreshGrid(state);
+  syncDisasters(state, point => state.grid[gridIndex(point.lon, point.lat)]);
+  refreshForecasts(state);
+  addNews(state, { id: `climate-scenario-off-${state.tick}-${loads}`, kind: 'info', title: 'Climate scenario ended', text: 'The scenario was switched off. The climate is back to normal and storms that already formed keep running.' });
   return { ok: true };
 }
 
@@ -1312,12 +1413,15 @@ export const CLIMATE_MAX_DAYS = 200 * 365;
  * historic typhoons are finished. Nothing is damaged by this; ended storms go to the archive.
  */
 function endWeatherAfterClimateTime(state: GameState): void {
+  endActiveWeather(state);
+  addNews(state, { id: `climate-time-${state.tick}-${state.climateTime?.total ?? 0}`, kind: 'info', title: 'Time has passed',
+    text: 'Earlier storms and tools are over.' });
+}
+function endActiveWeather(state: GameState): void {
   for (const storm of state.storms) archiveStorm(state, storm, 'dissipated');
   state.storms = []; state.remnants = []; state.candidates = []; state.effects = []; state.thunderstorms = []; state.weatherHazards = [];
   for (const load of state.historic) load.finished = true;
   state.phase = 'seeding';
-  addNews(state, { id: `climate-time-${state.tick}-${state.climateTime?.total ?? 0}`, kind: 'info', title: 'Time has passed',
-    text: 'Earlier storms and tools are over.' });
 }
 
 /**
@@ -1399,6 +1503,7 @@ export function advanceClimateTime(state: GameState, days: number): PlacementRes
   time.sinceEntry += days;
   time.total += days;
   state.calendarOffsetDays = (time.total * YEAR_DAYS) / 365;
+  if (state.climateScenario) postScenarioRecord(state as GameState & { climateScenario: ClimateScenarioInfo }); // the weather does not run here, but the record of real events still appears on its date
   const last = state.actions[state.actions.length - 1];
   if (last?.type === 'climate-advance' && last.tick === state.tick) last.days += days;
   else state.actions.push({ tick: state.tick, type: 'climate-advance', days });
@@ -2342,6 +2447,7 @@ export function stepGame(state: GameState): void {
   state.tick += 1;
   state.hours = state.tick * STEP_HOURS;
   if (state.climateLayer && state.tick % CLIMATE_DAY_TICKS === 0) { stepClimateLayer(state.climateLayer); rebuildClimate(state); } // one climate day per 96 steps
+  if (state.climateScenario && state.tick % CLIMATE_DAY_TICKS === 0) climateScenarioDay(state as GameState & { climateScenario: ClimateScenarioInfo });
 
   stepWeatherHazards(state, dt, point => state.grid[gridIndex(point.lon, point.lat)], item => addNews(state, item));
   let systems = allSystems(state);
@@ -2442,7 +2548,7 @@ const isLayerTool = (type: string): boolean => type === 'warm' || type === 'cool
 export function replayActivatesClimateLayer(actions: readonly ActionRecord[], initialWeather?: unknown): boolean {
   if (initialWeather !== undefined) return true;
   return actions.some(a => (a.type === 'climate' && a.key === 'enso' && a.value !== 0)
-    || a.type === 'climate-mode' || a.type === 'climate-advance'
+    || a.type === 'climate-mode' || a.type === 'climate-advance' || a.type === 'climate-scenario'
     || (isLayerTool(a.type) && !(a as { formation?: unknown }).formation && Math.abs((a as { lat: number }).lat) <= 30));
 }
 
@@ -2477,6 +2583,12 @@ export function validateActions(actions: unknown, untilTick: number = REPLAY_MAX
       climateDays += days;
       if (climateDays > CLIMATE_MAX_DAYS) return { ok: false, reason: `Replay advances climate time by more than ${CLIMATE_MAX_DAYS / 365} model years.` };
       clean.push({ tick, type, days });
+    } else if (type === 'climate-scenario') {
+      const scenarioId = (a as Record<string, unknown>).scenarioId;
+      if (!isClimateScenarioId(scenarioId)) return { ok: false, reason: `Action ${k + 1} names an unknown climate scenario.` };
+      clean.push({ tick, type, scenarioId });
+    } else if (type === 'climate-scenario-off') {
+      clean.push({ tick, type });
     } else if (type === 'season') {
       if (!isValidDayOfYear(day)) return { ok: false, reason: `Action ${k + 1} needs a day of the year between 0 and 366.` };
       clean.push({ tick, type, dayOfYear: day });
@@ -2520,6 +2632,8 @@ export function replayGame(seed: unknown, actions: unknown, untilTick: unknown, 
         : a.type === 'season' ? setSeason(state, a.dayOfYear)
         : a.type === 'climate-mode' ? setClimateMode(state, a.on)
         : a.type === 'climate-advance' ? advanceClimateTime(state, a.days)
+        : a.type === 'climate-scenario' ? loadClimateScenario(state, a.scenarioId)
+        : a.type === 'climate-scenario-off' ? endClimateScenarioNow(state)
         : a.type === 'historic' ? loadHistoric(state, a.typhoonId)
         : placeTool(state, a.type, a.lon, a.lat, a.formation);
       if (!r.ok) return `Action ${k + 1} was rejected at hour ${state.hours}: ${r.reason}`;
