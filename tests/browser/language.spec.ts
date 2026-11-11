@@ -21,7 +21,7 @@ test('Korean controls, help, errors and live language changes preserve the world
   await expect(page.getByTestId('palette-tab-typhoons')).toHaveText('태풍체험');
   await expect(page.getByTestId('palette-tab-climate')).toHaveText('기후체험');
   await expect(page.getByTestId('climate-reset')).toHaveAccessibleName('기후 초기화');
-  await expect(page.getByTestId('climate-reset')).toHaveAttribute('data-tip', 'Set ocean warming, ENSO and polar temperature back to 0');
+  await expect(page.getByTestId('climate-reset')).toHaveAttribute('data-tip', 'The climate is already normal.');
   await expect(page.getByTestId('storm-active-title')).toHaveText('진행 중인 재난 · 0');
   await expect(page.getByTestId('storm-ended-title')).toHaveText('종료된 재난 · 0');
   await expect(page.getByTestId('genesis-toggle')).toHaveAccessibleName('태풍 자연 발생');

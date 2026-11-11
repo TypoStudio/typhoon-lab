@@ -1411,6 +1411,47 @@ export function endClimateScenarioNow(state: GameState): PlacementResult {
   return { ok: true };
 }
 
+/**
+ * Whether the climate is already normal: the sliders at 0, no scenario, and no layer, or only a neutral one (no natural variability, no script, no
+ * trade-wind anomaly, no held Nino 3.4, and a near-neutral Nino 3.4 unless placed tropical conditions are what warm it).
+ */
+export function climateIsNormal(state: GameState): boolean {
+  const { warming, enso, polar } = state.climate;
+  if (warming !== 0 || enso !== 0 || polar !== 0 || state.climateScenario) return false;
+  const core = state.climateLayer?.core;
+  if (!core) return true;
+  if (core.stochastic || core.tradeAnomaly !== 0 || core.script.length || core.hold !== null) return false;
+  return state.effects.some(e => e.id >= 0 && !e.formation && Math.abs(e.lat) <= 30 && isLayerTool(e.type)) || Math.abs(nino34Of(core)) < 0.3;
+}
+
+/**
+ * Returns the whole climate to normal at once (a recorded action, rejected when it already is): the three sliders go to 0, a loaded scenario is
+ * switched off (natural formation returns to its earlier setting), and the ENSO layer starts again from a neutral ocean and atmosphere with no natural
+ * variability and no trade-wind anomaly. The layer stays only for what else needs it (the fast path, or placed tropical conditions, re-fed with their
+ * remaining life). Storms, fine dust and the other disasters are not climate and keep running.
+ */
+export function resetClimateNow(state: GameState): PlacementResult {
+  if (climateIsNormal(state)) return { ok: false, reason: 'The climate is already normal.' };
+  state.actions.push({ tick: state.tick, type: 'climate-reset' });
+  state.climate = { warming: 0, enso: 0, polar: 0 };
+  if (state.climateScenario) {
+    state.genesis.enabled = state.climateScenario.priorGenesis;
+    delete state.climateScenario;
+  }
+  const tools = state.effects.filter(e => e.id >= 0 && !e.formation && Math.abs(e.lat) <= 30 && isLayerTool(e.type));
+  if (!tools.length && !state.climateTime?.active) state.climateLayer = null;
+  else {
+    state.climateLayer = createClimateLayer(state.seed, Math.max(1, Math.floor(dayOfYear(state))));
+    for (const e of tools) feedClimate(state, e.type, e.lon, e.lat, Math.max(1, e.remainingHours / 24));
+    rebuildClimate(state);
+  }
+  refreshGrid(state);
+  syncDisasters(state, point => state.grid[gridIndex(point.lon, point.lat)]);
+  refreshForecasts(state);
+  addNews(state, { id: `climate-reset-${state.tick}-${state.actions.length}`, kind: 'info', title: 'Climate reset', text: 'The climate is back to normal. Storms that already formed keep running.' });
+  return { ok: true };
+}
+
 // ---- Fast climate path ----
 /** Total fast-path time one run may spend (model days, 200 years); validateActions enforces it on replays. */
 export const CLIMATE_MAX_DAYS = 200 * 365;
@@ -2572,7 +2613,7 @@ const isLayerTool = (type: string): boolean => type === 'warm' || type === 'cool
 export function replayActivatesClimateLayer(actions: readonly ActionRecord[], initialWeather?: unknown): boolean {
   if (initialWeather !== undefined) return true;
   return actions.some(a => (a.type === 'climate' && a.key === 'enso' && a.value !== 0)
-    || a.type === 'climate-mode' || a.type === 'climate-advance' || a.type === 'climate-scenario'
+    || a.type === 'climate-mode' || a.type === 'climate-advance' || a.type === 'climate-scenario' || a.type === 'climate-reset'
     || (isLayerTool(a.type) && !(a as { formation?: unknown }).formation && Math.abs((a as { lat: number }).lat) <= 30));
 }
 
@@ -2612,6 +2653,8 @@ export function validateActions(actions: unknown, untilTick: number = REPLAY_MAX
       if (!isClimateScenarioId(scenarioId)) return { ok: false, reason: `Action ${k + 1} names an unknown climate scenario.` };
       clean.push({ tick, type, scenarioId });
     } else if (type === 'climate-scenario-off') {
+      clean.push({ tick, type });
+    } else if (type === 'climate-reset') {
       clean.push({ tick, type });
     } else if (type === 'season') {
       if (!isValidDayOfYear(day)) return { ok: false, reason: `Action ${k + 1} needs a day of the year between 0 and 366.` };
@@ -2658,6 +2701,7 @@ export function replayGame(seed: unknown, actions: unknown, untilTick: unknown, 
         : a.type === 'climate-advance' ? advanceClimateTime(state, a.days)
         : a.type === 'climate-scenario' ? loadClimateScenario(state, a.scenarioId)
         : a.type === 'climate-scenario-off' ? endClimateScenarioNow(state)
+        : a.type === 'climate-reset' ? resetClimateNow(state)
         : a.type === 'historic' ? loadHistoric(state, a.typhoonId)
         : placeTool(state, a.type, a.lon, a.lat, a.formation);
       if (!r.ok) return `Action ${k + 1} was rejected at hour ${state.hours}: ${r.reason}`;

@@ -133,7 +133,9 @@ export interface ClimateAdvanceAction { tick: number; type: 'climate-advance'; d
 export interface ClimateScenarioAction { tick: number; type: 'climate-scenario'; scenarioId: string }
 /** Switches the loaded climate scenario off: the world goes back to the normal climate (see `endClimateScenarioNow`). */
 export interface ClimateScenarioOffAction { tick: number; type: 'climate-scenario-off' }
-export type ActionRecord = PlaceAction | GenesisAction | HistoricAction | ClimateAction | SeasonAction | ClimateModeAction | ClimateAdvanceAction | ClimateScenarioAction | ClimateScenarioOffAction;
+/** Returns the whole climate to normal: sliders at 0, scenario off, ENSO layer neutral (see `resetClimateNow`). */
+export interface ClimateResetAction { tick: number; type: 'climate-reset' }
+export type ActionRecord = PlaceAction | GenesisAction | HistoricAction | ClimateAction | SeasonAction | ClimateModeAction | ClimateAdvanceAction | ClimateScenarioAction | ClimateScenarioOffAction | ClimateResetAction;
 /** The climate scenario that last started the world: its calendar year, for the clock. */
 export interface ClimateScenarioInfo {
   id: string;
@@ -251,6 +253,7 @@ export type WorkerRequest =
   | { type: 'climate'; key: ClimateKey; value: number }
   | { type: 'climate-scenario'; scenarioId: string }
   | { type: 'climate-scenario-off' }
+  | { type: 'climate-reset' }
   | { type: 'season'; dayOfYear: number }
   | { type: 'replay'; seed: number; actions: ActionRecord[]; untilTick: number; startDayOfYear: number; trafficDispatches?: TrafficDispatch[]; initialWeather?: LiveWeatherSnapshot };
 export type WorkerResponse =

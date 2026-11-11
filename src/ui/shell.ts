@@ -303,7 +303,7 @@ export function shellHtml(): string {
       <div class="speed" role="group" aria-label="Simulation speed" data-ref="speedGroup">${speeds}</div>
       <button type="button" class="btn btn--float" data-ref="speedReset" data-testid="speed-reset" aria-label="Reset speed" aria-keyshortcuts="\`" data-tip-title="Reset speed" data-tip="Return only the speed to 10m/s. Shortcut: \`."><span class="key-hint key-hint--tick" aria-hidden="true">\`</span><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/></svg><span class="btn__label">Reset speed</span></button>
       <p class="clock__text" data-ref="clockText" data-testid="clock" data-short="D1 00:00">Day 1 · 00:00:00</p>
-      <button type="button" class="btn btn--float" data-ref="climateReset" data-testid="climate-reset" aria-label="Reset climate" data-tip-title="Reset climate" data-tip="Set ocean warming, ENSO and polar temperature back to 0" disabled><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14V5.5a2 2 0 0 1 4 0V14a3.5 3.5 0 1 1-4 0Z"/><path d="M16.5 4.5a5 5 0 0 1 3.2 4.6M20 5v4.2h-4.2"/></svg><span class="btn__label">Reset climate</span></button>
+      <button type="button" class="btn btn--float" data-ref="climateReset" data-testid="climate-reset" aria-label="Reset climate" data-tip-title="Reset climate" data-tip="The climate is already normal." disabled><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14V5.5a2 2 0 0 1 4 0V14a3.5 3.5 0 1 1-4 0Z"/><path d="M16.5 4.5a5 5 0 0 1 3.2 4.6M20 5v4.2h-4.2"/></svg><span class="btn__label">Reset climate</span></button>
     </div>
 
     <div class="notes">
@@ -337,9 +337,6 @@ export function shellHtml(): string {
       <div class="settings" role="group" aria-label="World settings">
         <div class="setting setting--overlays"><span class="setting__label">Map mode</span><div class="map-overlays" role="group" aria-label="Map mode" data-ref="mapOverlays">${overlays}</div></div>
         <div class="settings__group" role="group" aria-label="World climate">
-          <div class="settings__head">
-            <p class="settings__title">World climate</p>
-          </div>
           <div class="settings__season">
             <div class="setting"><span class="setting__label">Season</span><div class="season-row" role="radiogroup" aria-label="Season" data-ref="seasonRow">${seasonButtons}</div></div>
             <p class="fine">Changing the season shifts the calendar; the world keeps running.</p>

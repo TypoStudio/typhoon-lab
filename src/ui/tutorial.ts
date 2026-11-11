@@ -68,7 +68,7 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
   },
   {
     id: 'done', title: 'You did it',
-    body: 'Watch the wind drop. Try seasons, world climate, and the past-storm library in the settings. You can reopen this tutorial from Help.',
+    body: 'Watch the wind drop. Try seasons, the climate sliders, and the past-storm library in the settings. You can reopen this tutorial from Help.',
   },
 ];
 

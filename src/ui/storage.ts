@@ -54,7 +54,7 @@ export function actionKey(a: ActionRecord): unknown[] {
     case 'climate-mode': return [a.tick, a.type, a.on];
     case 'climate-advance': return [a.tick, a.type, a.days];
     case 'climate-scenario': return [a.tick, a.type, a.scenarioId];
-    case 'climate-scenario-off': return [a.tick, a.type];
+    case 'climate-scenario-off': case 'climate-reset': return [a.tick, a.type];
     default: return [a.tick, a.type, a.lon, a.lat, ...(a.formation ? [a.formation] : [])];
   }
 }
@@ -69,7 +69,7 @@ function cleanAction(a: ActionRecord): ActionRecord {
     case 'climate-mode': return { tick: a.tick, type: a.type, on: a.on };
     case 'climate-advance': return { tick: a.tick, type: a.type, days: a.days };
     case 'climate-scenario': return { tick: a.tick, type: a.type, scenarioId: a.scenarioId };
-    case 'climate-scenario-off': return { tick: a.tick, type: a.type };
+    case 'climate-scenario-off': case 'climate-reset': return { tick: a.tick, type: a.type };
     default: return { tick: a.tick, type: a.type, lon: a.lon, lat: a.lat, ...(a.formation ? { formation: a.formation } : {}) };
   }
 }

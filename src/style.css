@@ -332,11 +332,10 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
 /* The season row and its sentence read as their own section: a rule above and below. */
 .settings__season { margin-block: var(--space-xs); border-block: var(--rule-width) solid var(--color-rule); }
 .settings__season .setting { border-bottom: 0; }
+/* The map mode group's bottom rule would double the season row's top rule; keep the season's. */
+.settings .setting--overlays { border-bottom: 0; }
 .settings__season .fine { margin: 0; padding-bottom: var(--space-xs); }
 .overlay-toggle[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
-.settings__title { padding-top: var(--space-xs); font-size: var(--text-xs); font-weight: 600; color: var(--color-muted); }
-.settings__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); padding-top: var(--space-xs); }
-.settings__head .settings__title { padding-top: 0; }
 .setting--range { display: grid; min-width: 0; gap: var(--space-2xs); padding-block: var(--space-xs); }
 .setting__range-head { display: flex; align-items: baseline; gap: var(--space-sm); min-width: 0; }
 .setting--range .setting__label { flex: 0 1 auto; }

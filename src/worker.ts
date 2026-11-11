@@ -7,7 +7,7 @@ import { loadLiveWeather } from './data/live-weather';
 import { focusTraffic } from './simulation/traffic';
 import {
   DEFAULT_START_DOY, REPLAY_MAX_TICKS, STEP_HOURS, CLIMATE_MAX_DAYS, advanceClimateTime, createGame, fastDaysLeft, isValidDayOfYear, isValidSeed, loadHistoric, placeFormation, placeTool, refreshClimateView, replayGame, setClimate, setClimateMode,
-  loadClimateScenario, endClimateScenarioNow, setGenesis, setHistoricEnvironment, setSeason, stepGame, validateActions,
+  loadClimateScenario, endClimateScenarioNow, resetClimateNow, setGenesis, setHistoricEnvironment, setSeason, stepGame, validateActions,
 } from './simulation/engine';
 import { DEFAULT_TIME_SPEED, MAX_WEATHER_SPEED, TIME_SPEEDS, isFastClimateSpeed, isTimeSpeed, takeSteps } from './time';
 
@@ -208,6 +208,11 @@ async function handle(msg: WorkerRequest): Promise<void> {
     }
     case 'climate-scenario-off': {
       const result = endClimateScenarioNow(state);
+      post({ type: 'placement', result });
+      return postState();
+    }
+    case 'climate-reset': {
+      const result = resetClimateNow(state);
       post({ type: 'placement', result });
       return postState();
     }

@@ -12,7 +12,7 @@ import type { MapOverlay } from '../render/overlay';
 import { wrapLon } from '../render/view';
 import { RESET_WAIT, replayWait, waitVerdict } from './replay-wait';
 import { SEAS, seaName } from '../data/seas';
-import { GENESIS_HOURS, GENESIS_THRESHOLD, TICKS_PER_HOUR, TOOLS, dayOfYear, historicEnvironmentReady, setHistoricEnvironment } from '../simulation/engine';
+import { GENESIS_HOURS, GENESIS_THRESHOLD, climateIsNormal, TICKS_PER_HOUR, TOOLS, dayOfYear, historicEnvironmentReady, setHistoricEnvironment } from '../simulation/engine';
 import { pm25Band } from '../simulation/fine-dust';
 import { loadEnvironment } from '../data/environment';
 import { distanceKm } from '../simulation/geo';
@@ -1126,9 +1126,13 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     for (const [key, b] of experienceButtons) if (key.startsWith('scenario:')) b.setAttribute('aria-disabled', String(ui.expect === 'replay'));
     syncClimateReset();
   }
-  /** Reset is only useful while at least one slider is away from 0 and the climate can still be changed. */
+  /** Reset is only useful while anything climate-related differs from normal (a slider, a scenario, the ENSO layer) and the climate can still be changed. */
   function syncClimateReset(): void {
-    ref<HTMLButtonElement>('climateReset').disabled = ui.expect === 'replay' || [...climateInputs.values()].every(({ input }) => Number(input.value) === 0);
+    const btn = ref<HTMLButtonElement>('climateReset');
+    const replay = ui.expect === 'replay';
+    const normal = (ui.latest ? climateIsNormal(ui.latest) : true) && [...climateInputs.values()].every(({ input }) => Number(input.value) === 0);
+    btn.disabled = replay || normal;
+    btn.dataset.tip = replay ? 'The climate cannot be reset while a replay plays.' : normal ? 'The climate is already normal.' : 'Return the whole climate to normal: sliders, scenario and El Niño / La Niña';
   }
   function renderClimate(state: GameState): void {
     const { warming, enso, polar } = state.climate;
@@ -1405,7 +1409,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <li>The ocean answers over weeks, so the Measure tab is the best way to watch it.</li>
         </ul>
         <h3 class="dialog__sub">World climate</h3>
-        <p>World climate in the right panel changes the whole planet: Warming raises sea and air temperature, La Niña / El Niño holds the Pacific in one phase, and Polar temperature warms or cools the high latitudes. Low shear calms the upper winds around a storm so it can stay upright; Strong shear adds upper-level wind that tilts and tears it apart.</p>
+        <p>The Warming, La Niña / El Niño and Polar temperature sliders in the right panel change the whole planet: Warming raises sea and air temperature, La Niña / El Niño holds the Pacific in one phase, and Polar temperature warms or cools the high latitudes. Low shear calms the upper winds around a storm so it can stay upright; Strong shear adds upper-level wind that tilts and tears it apart.</p>
         <dl class="help__defs">
           <dt>Warming</dt>
           <dd>Warming runs from −2 to +4 °C. More warming makes more of the ocean warm enough to feed storms. A negative value cools the world.</dd>
@@ -1414,6 +1418,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <dt>Polar temperature</dt>
           <dd>Polar cooling chills the sea and air poleward of about 35° latitude, so storms that curve out of the tropics weaken sooner. Polar warming does the reverse. The effect is full strength from about 50°.</dd>
         </dl>
+        <p>Reset climate in the speed bar returns the whole climate to normal at once: the three sliders go to 0, a loaded scenario switches off, and the El Niño / La Niña layer starts again from a neutral ocean. Storms, fine dust and other disasters keep running.</p>
         <h3 class="dialog__sub">Scenarios</h3>
         <p>The Climate experience tab of the palette loads a historic El Niño or La Niña: press a tile, or drag it onto the map. The world jumps to 1 January of that year, storms, weather hazards and tools already running carry on as they are, and the Pacific starts in the ocean state of the time, with the winds that drove the event added by date. The speed is set to 4h/s so that the weather runs, and Natural typhoon formation is on while the scenario is loaded. Watch it on the map and in the Measure tab. You can change the speed afterwards: at 7d/s the weather is not calculated, so storms and the events below do not form, but the record of real events still appears.</p>
         <p>While a scenario is loaded the model starts weather disasters by itself where its own climate calls for them. During an El Niño these are heavy rain on coastal Peru and Ecuador, in East Africa and in the southern United States, and drought or heat in Indonesia, Australia, India and southern Africa. A La Niña brings the opposite pattern: heavy rain in eastern Australia, Indonesia, South Asia and Colombia, and drought in the Horn of Africa and the southwestern United States. Each event follows the sea temperature, air temperature or humidity of its place, so it stops when the anomaly does. The News tab marks it as El Niño or La Niña, and its damage is counted like any other disaster. A place rests for several weeks after an event, and at most four run at once.</p>
@@ -2176,13 +2181,16 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   });
   ref('climateReset').addEventListener('click', () => {
     for (const [key, { input }] of climateInputs) {
-      if (Number(input.value) === 0 && (ui.latest?.climate[key] ?? 0) === 0) continue;
       input.value = '0';
       climateDirty.delete(key);
       showClimateValue(key, 0);
-      ui.placementQueue.push(result => { if (!result.ok) toast(result.reason ?? 'The climate could not be changed.', 'error'); });
-      post({ type: 'climate', key, value: 0 });
     }
+    const hadScenario = !!ui.latest?.climateScenario;
+    ui.placementQueue.push(result => {
+      if (result.ok) { if (hadScenario) ui.scenarioProbes = 'remove'; toast('Climate reset to normal.', 'ok'); }
+      else toast(result.reason ?? 'The climate could not be reset.', 'error');
+    });
+    post({ type: 'climate-reset' });
     // The button disables itself now, so hand keyboard focus to the first slider instead of dropping it.
     climateInputs.get('warming')!.input.focus({ preventScroll: true });
   });
