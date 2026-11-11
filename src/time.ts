@@ -6,8 +6,8 @@ export const DEFAULT_TIME_SPEED: TimeSpeed = 600;
 export const MIN_TIME_SPEED = TIME_SPEEDS[0];
 /** Fastest step the tutorial asks for; the day-per-second steps can outrun the CPU. */
 export const TUTORIAL_TIME_SPEED: TimeSpeed = 14_400;
-/** A loaded climate scenario sets this speed (1 day per second), so that the weather runs and storms and climate-driven events form. */
-export const SCENARIO_TIME_SPEED: TimeSpeed = 86_400;
+/** A loaded climate scenario sets this speed (4 hours per second), so that the weather runs and storms and climate-driven events form. */
+export const SCENARIO_TIME_SPEED: TimeSpeed = 14_400;
 export const MAX_TIME_SPEED = TIME_SPEEDS[TIME_SPEEDS.length - 1];
 
 export function isTimeSpeed(value: unknown): value is TimeSpeed {

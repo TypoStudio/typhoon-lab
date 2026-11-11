@@ -230,7 +230,8 @@ async function handle(msg: WorkerRequest): Promise<void> {
         const ids = new Set(checked.actions.flatMap(a => (a.type === 'historic' ? [a.typhoonId] : [])));
         for (const id of ids) await ensureEnvironment(id);
       }
-      const result = replayGame(msg.seed, msg.actions, msg.untilTick, msg.startDayOfYear, msg.trafficDispatches, msg.initialWeather);
+      const result = replayGame(msg.seed, msg.actions, msg.untilTick, msg.startDayOfYear, msg.trafficDispatches, msg.initialWeather,
+        tick => post({ type: 'replay-progress', tick, untilTick: msg.untilTick }));
       if (!result.ok) return fail(`Replay rejected: ${result.reason}`);
       state = result.state;
       playing = false; // replay loads a paused snapshot

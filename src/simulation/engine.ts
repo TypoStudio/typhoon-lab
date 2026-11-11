@@ -27,6 +27,7 @@ import type {
 } from '../types';
 import { CITY_DAMAGE_LEVELS, cityDamageBulletin, estimateCityDamage } from './damage-news';
 import { isWeatherHazardKind, WEATHER_HAZARDS } from '../data/weather-hazards';
+import { fineDustDamageRatio, stepFineDust } from './fine-dust';
 import { applyHazardField, hazardDamageRatio, hazardInfluence, hazardPressureSystem, hazardWind, stepWeatherHazards } from './weather-hazards';
 import { recordDisasterHistory, syncDisasters } from './disasters';
 import { moveTornado } from './tornado-motion';
@@ -820,7 +821,8 @@ export function weatherHazardRecipe(state: GameState, kind: WeatherHazardKind, l
   const x = wrapLon(lon), definition = WEATHER_HAZARDS[kind];
   const env = sampleEnvironment(atFullWeight(state, [], x, lat, kind), x, lat);
   const placements: ToolType[] = [];
-  const allowed = !definition.landOnly || env.land;
+  const populated = (): boolean => !('minPopulation' in definition) || state.grid[gridIndex(x, lat)].population >= definition.minPopulation;
+  const allowed = (!definition.landOnly || env.land) && populated();
   const sites = [{ lon: x, lat }, state.grid[gridIndex(x, lat)]];
   const fill = (type: ToolType, target: number, read: (e: EnvironmentSample) => number) =>
     fillRecipe(state, placements, kind, x, lat, sites, type, target, read);
@@ -828,13 +830,15 @@ export function weatherHazardRecipe(state: GameState, kind: WeatherHazardKind, l
     : kind === 'coldwave' ? (5 - e.airTemperature) / 20
     : kind === 'drought' || kind === 'dust' ? (0.6 - e.humidity) / 0.5
     : kind === 'gust' ? -e.updraft / 5
+    : kind === 'finedust' ? Math.min(clamp((e.pressure - 1010) / 12, 0, 1), clamp(-e.instability, 0, 1), clamp(1 - (Math.hypot(e.u, e.v) - 2) / 8, 0, 1))
     : Math.min(e.humidity / 0.9, e.updraft / (kind === 'hail' ? 5 : 4)), 0, 1);
   if (allowed) {
     if (kind === 'heatwave') { fill('warm-air', 40, e => e.airTemperature); fill('dry', -0.25, e => -e.humidity); }
     else if (kind === 'coldwave') fill('cold-air', 18, e => -e.airTemperature);
     else if (kind === 'drought' || kind === 'dust') {
       fill('dry', -0.1, e => -e.humidity); fill('stable-air', 1, e => -e.instability);
-    } else if (kind === 'gust') { fill('downdraft', 5, e => -e.updraft); fill('moisture', 0.8, e => e.humidity); }
+    } else if (kind === 'finedust') { fill('high', 1022, e => e.pressure); fill('stable-air', 1, e => -e.instability); }
+    else if (kind === 'gust') { fill('downdraft', 5, e => -e.updraft); fill('moisture', 0.8, e => e.humidity); }
     else {
       fill('moisture', 0.95, e => e.humidity);
       fill('warm-air', 20, e => e.airTemperature);
@@ -847,7 +851,8 @@ export function weatherHazardRecipe(state: GameState, kind: WeatherHazardKind, l
   const projected = sampleEnvironment(atFullWeight(state, placements, x, lat, kind), x, lat);
   return { readings: guideReadings(env), potential: readiness(env), projected: allowed ? readiness(projected) : 0,
     ok: allowed, placements, land: env.land, maxEffects: false, threshold: 1, scoreLabel: 'Event readiness', requiresSea: false,
-    note: allowed ? 'Place the recipe. The phenomenon begins after conditions build for six model hours.' : 'This phenomenon needs land. Pick a land spot.' };
+    note: allowed ? 'Place the recipe. The phenomenon begins after conditions build for six model hours.'
+      : !populated() ? 'Fine dust needs a populated area. Pick a city.' : 'This phenomenon needs land. Pick a land spot.' };
 }
 
 /** Thermodynamic ceiling (m/s, 10-min mean) from SST. */
@@ -1136,7 +1141,7 @@ export function createGame(seed: number = SCENARIO.seed, startDayOfYear: number 
   if (initialWeather !== undefined && !isLiveWeatherSnapshot(initialWeather)) throw new Error('Invalid starting weather.');
   const grid: EnvironmentCell[] = getStaticGrid().cells.map(c => ({
     lon: c.lon, lat: c.lat, land: c.land, temperature: 0, airTemperature: 0, airHeating: 0, updraft: 0, instability: 0, humidity: 0, rain: 0, snow: 0, blizzard: false, shear: 0, pressure: REFERENCE_PRESSURE,
-    u: 0, v: 0, population: c.population, cityId: c.cityId, maxDamage: 0, calmHours: 0, exposed: false, snowCm: 0, convection: 0,
+    u: 0, v: 0, population: c.population, cityId: c.cityId, maxDamage: 0, calmHours: 0, exposed: false, snowCm: 0, convection: 0, pm25: 0,
   }));
   const state: GameState = {
     ...(initialWeather ? { initialWeather: structuredClone(initialWeather), weather: {
@@ -1240,6 +1245,8 @@ export function placeFormation(state: GameState, kind: FormationKind, lon: numbe
   if (!inBounds(lon, lat)) return { ok: false, reason: 'Placement needs a valid map position.' };
   if (kind === 'typhoon' && isLand(lon, lat)) return { ok: false, reason: 'Warm water must be placed over the ocean.' };
   if (isWeatherHazardKind(kind) && WEATHER_HAZARDS[kind].landOnly && !isLand(lon, lat)) return { ok: false, reason: 'This phenomenon needs land. Pick a land spot.' };
+  const minPopulation = isWeatherHazardKind(kind) ? (WEATHER_HAZARDS[kind] as { minPopulation?: number }).minPopulation : undefined;
+  if (minPopulation !== undefined && state.grid[gridIndex(lon, lat)].population < minPopulation) return { ok: false, reason: 'Fine dust needs a populated area. Pick a city.' };
   const guide = isWeatherHazardKind(kind) ? weatherHazardRecipe(state, kind, lon, lat)
     : (kind === 'typhoon' ? formationRecipe : kind === 'blizzard' ? blizzardRecipe : tornadoRecipe)(state, lon, lat);
   if (!guide.ok) return { ok: false, reason: 'The formation recipe could not be prepared.' };
@@ -1890,6 +1897,22 @@ function applyDamage(state: GameState): void {
       }
     });
   }
+  // Fine dust is a health impact wherever the wind has carried it, not only inside the event's own circle.
+  const cityPm25 = new Map<number, number>();
+  if (state.fineDustRows) {
+    const event = (state.weatherHazards ?? []).find(hazard => hazard.kind === 'finedust');
+    const record = event && disasters.get(`weather-${event.id}`);
+    for (let k = state.fineDustRows[0] * GRID_COLS; k < (state.fineDustRows[1] + 1) * GRID_COLS; k++) {
+      const cell = state.grid[k];
+      if (cell.pm25 < 35.5 || cell.population <= 0) continue;
+      const added = damageCell(state, k, Math.hypot(cell.u, cell.v), 1, fineDustDamageRatio(cell.pm25), true);
+      if (record) record.damageScore += added;
+      for (const share of shares[k]) {
+        weather.set(share.city, 'finedust');
+        if (cell.pm25 > (cityPm25.get(share.city) ?? 0)) cityPm25.set(share.city, cell.pm25);
+      }
+    }
+  }
   // Recovery: a damaged cell untouched for RECOVERY_DELAY_HOURS repairs exponentially; `score` and `state.score` stay cumulative.
   for (let k = 0; k < state.grid.length; k++) {
     const c = state.grid[k];
@@ -1927,7 +1950,7 @@ function applyDamage(state: GameState): void {
     if (level >= 0) {
       addNews(state, { id: `city-${city.id}-${level}-${state.tick}`, kind: 'city', cityId: city.id,
         ...(weather.has(i) ? { phenomenon: weather.get(i) } : {}),
-        ...cityDamageBulletin(city, impact, level, weather.get(i) ?? (cyclone.has(i) ? 'cyclone' : winter.has(i) ? 'blizzard' : convective.has(i) ? 'thunderstorm' : 'cyclone')) });
+        ...cityDamageBulletin(city, impact, level, weather.get(i) ?? (cyclone.has(i) ? 'cyclone' : winter.has(i) ? 'blizzard' : convective.has(i) ? 'thunderstorm' : 'cyclone'), cityPm25.get(i)) });
     }
     if (beforeDamage[i] / city.population >= CITY_DAMAGE_LEVELS[0] && impact.damage / city.population < CITY_DAMAGE_LEVELS[0]) {
       const damage = estimateCityDamage(city, impact);
@@ -2471,6 +2494,7 @@ export function stepGame(state: GameState): void {
   for (const c of state.grid) { // snow depth: wind-packed, 0.5 cm per mm of water, settling 2 %/h, melting 1 cm/h per °C above zero (up to 4 cm/h); steady state ≈ 25 × rate in mm/h (7 mm/h → ~175 cm, 20 cm after ~6 h, 60 cm after ~20 h)
     if (c.land || c.population > 0) c.snowCm = Math.max(0, c.snowCm + c.snow * 0.5 * STEP_HOURS - c.snowCm * 0.02 * STEP_HOURS - (c.airTemperature > 0 ? STEP_HOURS * Math.min(4, c.airTemperature) : 0));
   }
+  stepFineDust(state, dt, GRID_COLS, GRID_ROWS);
   updateThunderstorms(state, dt);
   syncDisasters(state, point => state.grid[gridIndex(point.lon, point.lat)]);
   applyDamage(state);
@@ -2611,7 +2635,7 @@ export function validateActions(actions: unknown, untilTick: number = REPLAY_MAX
  * REPLAY_MAX_TICKS steps and REPLAY_MAX_ACTIONS actions. Historic reanalysis data must already be
  * registered (setHistoricEnvironment) for every typhoon the log loads.
  */
-export function replayGame(seed: unknown, actions: unknown, untilTick: unknown, startDayOfYear: unknown = DEFAULT_START_DOY, trafficDispatches: unknown = [], initialWeather?: LiveWeatherSnapshot): { ok: true; state: GameState } | { ok: false; reason: string } {
+export function replayGame(seed: unknown, actions: unknown, untilTick: unknown, startDayOfYear: unknown = DEFAULT_START_DOY, trafficDispatches: unknown = [], initialWeather?: LiveWeatherSnapshot, onProgress?: (tick: number) => void): { ok: true; state: GameState } | { ok: false; reason: string } {
   if (!isValidDayOfYear(startDayOfYear)) return { ok: false, reason: 'Replay start day must be a number from 0 to 366.' };
   if (!isValidSeed(seed)) return { ok: false, reason: 'Replay seed must be an integer between 0 and 4294967295.' };
   if (!isValidUntilTick(untilTick)) return { ok: false, reason: `Replay end tick must be an integer between 0 and ${REPLAY_MAX_TICKS} (${REPLAY_MAX_HOURS} hours).` };
@@ -2649,6 +2673,7 @@ export function replayGame(seed: unknown, actions: unknown, untilTick: unknown, 
     const err = applyDue();
     if (err) return { ok: false, reason: err };
     stepGame(state);
+    if (onProgress && state.tick % 96 === 0) onProgress(state.tick); // once per model day
   }
   const err = applyDue();
   if (err) return { ok: false, reason: err };

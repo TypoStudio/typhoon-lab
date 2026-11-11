@@ -21,7 +21,7 @@ function field(): FieldData {
   const airTemperature = zero(), updraft = zero(), humidity = zero(), rain = zero(), snow = zero(), snowCm = zero(), population = zero();
   population[59 * 180 + 128] = 10_000_000;
   return { cols: 180, rows: 90, u, v, speed, pressure, temperature, airTemperature, updraft, humidity, rain, snow, snowCm,
-    population, land: new Uint8Array(count), blizzard: new Uint8Array(count), blizzardF: zero(), maxSpeed: 0 };
+    population, land: new Uint8Array(count), blizzard: new Uint8Array(count), blizzardF: zero(), maxSpeed: 0, pm25: zero(), maxPm25: 0 };
 }
 const f = field();
 const image = () => new Uint8Array(FIELD_IMAGE_COLS * FIELD_IMAGE_ROWS * 4);

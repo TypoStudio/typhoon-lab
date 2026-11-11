@@ -231,10 +231,18 @@ for (const [width, height, lang] of [[1440, 900, 'ko'], [768, 900, 'en'], [390, 
       expect(box.width).toBeCloseTo(home.width, 0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight)).toBe(true);
       // The tab row fits inside the palette and no tab label is cut.
-      const tabs = (await page.getByTestId('palette-tab-climate').boundingBox())!;
-      expect(tabs.x + tabs.width).toBeLessThanOrEqual(box.x + box.width + 1);
+      // At 44 px and the body-small size the five tabs may outgrow a 320-375 px row: it then scrolls sideways and keeps the active tab in view.
+      const scrolls = await page.locator('.palette__tabs').evaluate(e => e.scrollWidth > e.clientWidth + 1);
+      if (!scrolls) {
+        const tabs = (await page.getByTestId('palette-tab-climate').boundingBox())!;
+        expect(tabs.x + tabs.width).toBeLessThanOrEqual(box.x + box.width + 1);
+      } else {
+        const rowBox = (await page.locator('.palette__tabs').boundingBox())!;
+        const active = (await page.getByTestId(`palette-tab-${id}`).boundingBox())!;
+        expect(active.x).toBeGreaterThanOrEqual(rowBox.x - 1);
+        expect(active.x + active.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 1);
+      }
       expect(await page.locator('.palette__tab').evaluateAll(n => n.filter(e => e.scrollWidth > e.clientWidth + 1).length)).toBe(0);
-      expect(await page.locator('.palette__tabs').evaluate(e => e.scrollWidth <= e.clientWidth + 1)).toBe(true); // all five tabs are whole, none scrolled away
       const row = (await page.getByTestId(`experience-${id}`).boundingBox())!;
       const tile = (await page.locator(`[data-palette-panel="${id}"] [data-experience]`).first().boundingBox())!;
       expect(tile.y).toBeGreaterThanOrEqual(row.y - 1);
@@ -264,8 +272,8 @@ test.describe('phone: page buttons and vertical drags', () => {
     for (const b of [prev, next]) {
       const r = (await b.boundingBox())!;
       expect(r.width).toBeGreaterThanOrEqual(24);
-      // The tap area reaches about 40 px: a point 8 px below the visible button still hits it.
-      for (const dy of [r.height + 8]) expect(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('[data-page]'), [r.x + r.width / 2, r.y + dy])).toBe(true);
+      // The face is 32 px inside a 44 x 44 hit area: a point 4 px below the visible button still hits it.
+      for (const dy of [r.height + 4]) expect(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('[data-page]'), [r.x + r.width / 2, r.y + dy])).toBe(true);
     }
     await expect(prev).toBeDisabled();
     const row = page.getByTestId('experience-typhoons');

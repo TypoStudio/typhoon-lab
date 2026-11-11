@@ -3,6 +3,7 @@ import { DEFAULT_MAP_OVERLAYS, type GameState, type MapOverlays } from '../types
 import { windAnimationMultiplier } from '../time';
 import type { BaseRenderer } from './base';
 import { CanvasBase } from './canvas2d';
+import { dustHexesFor, yellowDustLoad } from './dust-hexes';
 import { buildContours, buildFieldData, buildCombinedImage, buildSurfaceImages, FIELD_IMAGE_COLS, FIELD_IMAGE_ROWS, sampleGrid, sampleWind, type Contours, type FieldData } from './fields';
 import { attachStormWind } from './storm-wind';
 import { DEFAULT_LABELS, EMPTY_OVERLAY, OverlayPainter, type MapLabels, type MapOverlay } from './overlay';
@@ -222,7 +223,7 @@ export class MapRenderer {
   get currentOverlays(): Readonly<MapOverlays> { return { ...this.overlays }; }
 
   /** Interpolated grid values at a point, for the coordinate readout. Null before the first state. */
-  sampleAt(lon: number, lat: number): { land: boolean; wind: number; pressure: number; temperature: number; airTemperature: number; updraft: number; humidity: number; rain: number; snow: number; snowCm: number; blizzard: boolean; population: number } | null {
+  sampleAt(lon: number, lat: number): { land: boolean; wind: number; pressure: number; temperature: number; airTemperature: number; updraft: number; humidity: number; rain: number; snow: number; snowCm: number; blizzard: boolean; population: number; pm25: number; dust: number } | null {
     const f = this.field;
     if (!f || lat < BOUNDS.south || lat > BOUNDS.north) return null;
     const wl = wrapLon(lon);
@@ -241,6 +242,8 @@ export class MapRenderer {
       rain: sampleGrid(f, f.rain, wl, lat),
       snow: sampleGrid(f, f.snow, wl, lat),
       snowCm: sampleGrid(f, f.snowCm, wl, lat),
+      pm25: sampleGrid(f, f.pm25, wl, lat),
+      dust: this.state ? yellowDustLoad(this.state, wl, lat) : 0,
       blizzard: f.blizzard[j * f.cols + i] === 1,
       population: f.population[j * f.cols + i],
     };
@@ -350,6 +353,7 @@ export class MapRenderer {
     this.stage.dataset.trafficPlanes = String(traffic.planes);
     this.stage.dataset.trafficDiverted = String(traffic.diverted);
     this.stage.dataset.weatherHazards = String(this.state?.weatherHazards?.length ?? 0);
+    this.stage.dataset.dustHexes = String(this.state ? dustHexesFor(this.state, this.field, this.overlays.finedust, view).hexes.length : 0);
   }
 
   /**

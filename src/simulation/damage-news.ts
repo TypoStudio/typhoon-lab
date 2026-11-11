@@ -1,5 +1,6 @@
 import type { City, CityImpact, DamageReport, Storm, WeatherHazardKind } from '../types';
 import { isWeatherHazardKind, WEATHER_HAZARDS } from '../data/weather-hazards';
+import { pm25Band } from './fine-dust';
 
 export const CITY_DAMAGE_LEVELS = [0.0005, 0.01, 0.05, 0.15] as const;
 const AREAS = ['northern residential blocks', 'southern residential blocks', 'eastern residential blocks', 'western residential blocks'] as const;
@@ -42,11 +43,17 @@ export function estimateCityDamage(city: City, impact: CityImpact): DamageReport
   return { ...estimateStormDamage(damage), area: AREAS[areaIndex] };
 }
 
-export function cityDamageBulletin(city: City, impact: CityImpact, level: number, cause: 'cyclone' | 'thunderstorm' | 'blizzard' | WeatherHazardKind = 'cyclone') {
+export function cityDamageBulletin(city: City, impact: CityImpact, level: number, cause: 'cyclone' | 'thunderstorm' | 'blizzard' | WeatherHazardKind = 'cyclone', pm25 = 0) {
   const damage = estimateCityDamage(city, impact);
   if (isWeatherHazardKind(cause)) {
     const definition = WEATHER_HAZARDS[cause];
     if (cause === 'drought' || cause === 'dust') { damage.missing = 0; damage.deaths = 0; }
+    if (cause === 'finedust') {
+      // A health impact: bad air makes people ill but destroys no homes.
+      damage.missing = 0; damage.deaths = 0; damage.floodedHomes = 0;
+      return { title: `Fine dust: ${pm25Band(pm25)} in ${city.name}`,
+        text: `Fine particles have reached ${city.name}. PM2.5 is about ${pm25.toFixed(0)} µg/m³. Outdoor activity is not advised.`, damage };
+    }
     return { title: `${city.name}: ${definition.name} damage`,
       text: `${definition.name} in ${city.name}. ${definition.impact}`, damage };
   }

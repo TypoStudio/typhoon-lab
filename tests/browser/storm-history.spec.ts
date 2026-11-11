@@ -113,7 +113,7 @@ test('live map labels show storm identifiers, grades, radius and movement speed'
     const { seed, scenarioId, version } = (window as any).__typhoonLab.state;
     return { seed, scenarioId, version };
   });
-  await importReplay(page, { ...meta, format: 'typhoon-lab-replay', formatVersion: 7, startDayOfYear: 213, untilTick: 180,
+  await importReplay(page, { ...meta, format: 'typhoon-lab-replay', formatVersion: 8, startDayOfYear: 213, untilTick: 180,
     actions: ['warm', 'moisture', 'low'].map(type => ({ tick: 0, type, lon: 140, lat: 16 })) });
   const expected = await page.evaluate(async () => {
     const path = '/src/storm-info.ts'; const { stormGradeLabel } = await import(path);

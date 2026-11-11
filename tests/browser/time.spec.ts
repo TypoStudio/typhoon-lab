@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('wind uses camera scale regardless of time speed and freezes while paused', async ({ page }) => {
+test('wind uses camera scale regardless of time speed and keeps moving while paused', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/?renderer=canvas&lang=ko&help=0&seed=42&start=2026-08-01');
@@ -26,10 +26,12 @@ test('wind uses camera scale regardless of time speed and freezes while paused',
   await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.speed)).toBe(3_600);
   expect((await wind()).scale).toBe(await cameraScale());
   await page.getByTestId('play-toggle').click();
-  await expect.poll(async () => (await wind()).paused).toBe(true);
+  await expect(page.getByTestId('play-toggle')).toHaveAttribute('data-state', 'paused');
+  // Pausing model time does not stop the wind streaks: they keep illustrating the current field (docs/DEVELOPMENT.md).
   const before = await wind();
-  await page.waitForTimeout(300);
-  expect(await wind()).toEqual(before);
+  await expect.poll(async () => { const now = await wind(); return now.lon !== before.lon || now.lat !== before.lat || now.age !== before.age; }).toBe(true);
+  expect((await wind()).paused).toBe(false);
+  expect((await wind()).scale).toBe(await cameraScale());
   await page.getByTestId('speed-reset').click();
   await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.speed)).toBe(600);
   await page.getByTestId('play-toggle').click();

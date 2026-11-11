@@ -28,7 +28,7 @@ test('browser location opens the local region and view reset returns there', asy
   expect((await camera(page)).lon).toBeCloseTo(126.98);
   // The tall phone viewport stops against the pole edge, so the centre sits a little south of the home point.
   expect((await camera(page)).lat).toBeGreaterThan(30);
-  expect((await camera(page)).lat).toBeLessThanOrEqual(37.57);
+  expect((await camera(page)).lat).toBeLessThanOrEqual(37.57 + 1e-9);
 });
 
 for (const failure of ['denied', 'unavailable']) {

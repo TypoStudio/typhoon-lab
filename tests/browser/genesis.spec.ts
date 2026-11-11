@@ -41,6 +41,7 @@ test('natural formation toggle starts waves, shows the wave line and stops when 
   await expect(page.getByTestId('genesis-wave')).toBeHidden();
   const off = await stateOf();
   expect(off.genesis.enabled).toBe(false);
+  await setSpeed(page, 86_400); // 4h/s would need the whole 30 s for 120 h; 1d/s leaves slack
   await expect.poll(async () => (await stateOf()).hours, { timeout: 30_000 }).toBeGreaterThanOrEqual(off.hours + 120);
   expect((await stateOf()).genesis.waves).toBe(off.genesis.waves);
 });
@@ -114,7 +115,7 @@ test('world controls fit narrow and desktop viewports without captures', async (
     expect(hud.y).toBeGreaterThanOrEqual(legend.y + legend.height);
     if (width < 768) {
       const strip = (await page.locator('.clockbar').boundingBox())!;
-      expect(strip.height).toBeLessThanOrEqual(2.25 * 15 + 0.5);
+      expect(strip.height).toBeLessThanOrEqual(45.5); // 44 px touch targets plus the rule
       expect(strip.x).toBe(0);
       expect(strip.width).toBe(width);
       // The wave line is ellipsized to one line, never wrapped.
@@ -127,7 +128,7 @@ test('world controls fit narrow and desktop viewports without captures', async (
     if (width < 768) await page.getByTestId('tab-settings').click();
     const sidebar = (await page.getByTestId('sidebar').boundingBox())!;
     expect(sidebar.x + sidebar.width).toBeLessThanOrEqual(width + 1);
-    for (const id of ['genesis-toggle', 'recorded-path-toggle', 'climate-reset']) {
+    for (const id of ['genesis-toggle', 'recorded-path-toggle']) {
       await expect(page.getByTestId(id)).toBeVisible();
       const r = (await page.getByTestId(id).boundingBox())!;
       expect(r.x).toBeGreaterThanOrEqual(sidebar.x);

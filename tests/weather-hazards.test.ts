@@ -5,7 +5,7 @@ import { hazardDamageRatio, stepWeatherHazards } from '../src/simulation/weather
 import type { HistoricEnvironment, LiveWeatherSnapshot, NewsItem } from '../src/types';
 import fixtureJson from './fixtures/environment-fixture.json';
 
-const PRESSURE_SIGN = { heatwave: 1, drought: 1, downpour: -1, coldwave: 1, hail: -1, dust: -1, gust: 1 };
+const PRESSURE_SIGN = { heatwave: 1, drought: 1, downpour: -1, coldwave: 1, hail: -1, dust: -1, gust: 1, finedust: 1 };
 
 const advance = (state: ReturnType<typeof createGame>, ticks: number) => { for (let i = 0; i < ticks; i++) stepGame(state); };
 
@@ -24,10 +24,10 @@ describe('player-created weather phenomena', () => {
     const report = state.disasters!.find(item => item.id === `weather-${hazard.id}`)!;
     expect(report).toMatchObject({ kind, lon: hazard.lon, lat: hazard.lat });
     expect(report.endedHour).toBeUndefined();
-    expect(report.damageScore).toBeGreaterThan(0);
+    if (kind !== 'finedust') expect(report.damageScore).toBeGreaterThan(0); // fine dust needs hours to build (see fine-dust.test.ts)
     expect(report.history.length).toBeGreaterThan(0);
     expect(state.news.filter(item => item.kind === 'weather' && item.phenomenon === kind)).toHaveLength(1);
-    expect(state.score).toBeGreaterThan(0);
+    if (kind !== 'finedust') expect(state.score).toBeGreaterThan(0);
     const cell = state.grid.find(cell => cell.lon === 127 && cell.lat === 37)!;
     if (kind === 'heatwave') expect(cell.airTemperature).toBeGreaterThan(35);
     if (kind === 'coldwave') expect(cell.airTemperature).toBeLessThan(-10);
@@ -137,7 +137,7 @@ describe('player-created weather phenomena', () => {
     const state = createGame(17, 213);
     for (const kind of WEATHER_HAZARD_KINDS) expect(placeFormation(state, kind, 127, 37).ok).toBe(true);
     advance(state, 29);
-    expect(state.weatherHazards).toHaveLength(7);
+    expect(state.weatherHazards).toHaveLength(WEATHER_HAZARD_KINDS.length);
     expect(validateActions(state.actions, state.tick).ok).toBe(true);
     const replay = replayGame(state.seed, state.actions, state.tick, state.initialStartDayOfYear);
     expect(replay.ok).toBe(true);

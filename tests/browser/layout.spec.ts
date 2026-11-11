@@ -27,8 +27,8 @@ for (const width of [1440, 768, 414, 375, 320]) {
       expect(box.y).toBeCloseTo(clockbar.y + clockbar.height, 0);
       expect(box.y + box.height).toBeCloseTo(strip.y, 0);
       expect(box.height / 900).toBeGreaterThanOrEqual(0.6);
-      expect(clockbar.height).toBeLessThanOrEqual(2.25 * rem + 0.5);
-      expect(strip.height).toBeLessThanOrEqual(5.5 * rem + 0.5);
+      expect(clockbar.height).toBeLessThanOrEqual(45.5); // 44 px touch targets plus the rule
+      expect(strip.height).toBeLessThanOrEqual(6.5 * rem + 0.5); // 44 px tabs above the tile row
       expect((await page.locator('.brandbar').boundingBox())!.height).toBeLessThanOrEqual(2.5 * rem + 0.5);
       // Legend is a chip until opened; the zoom buttons are gone (pinch zooms) but reset-view stays.
       await expect(page.getByTestId('legend-toggle')).toBeVisible();
@@ -45,8 +45,8 @@ for (const width of [1440, 768, 414, 375, 320]) {
       await expect(page.getByTestId('legend-toggle')).toBeHidden();
     }
     const layout = await page.evaluate(phone => {
-      // The phone palette is a sideways-scrolling row, so tools beyond the edge are expected.
-      const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')].filter(button => button.getClientRects().length && getComputedStyle(button).visibility !== 'hidden' && !(phone && button.matches('[data-tool]')));
+      // The phone palette's tool row and tab row scroll sideways, so those beyond the edge are expected.
+      const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')].filter(button => button.getClientRects().length && getComputedStyle(button).visibility !== 'hidden' && !(phone && button.matches('[data-tool], .palette__tab')));
       return {
         scrollWidth: document.documentElement.scrollWidth,
         scrollHeight: document.documentElement.scrollHeight,
@@ -58,11 +58,14 @@ for (const width of [1440, 768, 414, 375, 320]) {
     expect(layout.scrollHeight).toBeLessThanOrEqual(900);
     expect(layout.outside).toEqual([]);
     expect(layout.unnamed).toBe(0);
-    if (beside && (await sidebar.isVisible())) {
+    {
+      // The climate reset sits in the speed bar after the clock: inside the bar and the viewport, 44 px tall on phones.
       const reset = (await page.getByTestId('climate-reset').boundingBox())!;
-      const head = (await page.locator('.settings__head').boundingBox())!;
-      expect(reset.height).toBeCloseTo(1.5 * rem, 0);
-      expect(reset.x + reset.width).toBeLessThanOrEqual(head.x + head.width + 1);
+      const bar = (await page.locator('.clockbar').boundingBox())!;
+      expect(reset.x).toBeGreaterThanOrEqual(bar.x - 1);
+      expect(reset.x + reset.width).toBeLessThanOrEqual(Math.min(bar.x + bar.width, width) + 1);
+      if (phone) expect(reset.height).toBeGreaterThanOrEqual(43.5);
+      expect(await page.getByTestId('clock').evaluate((el, r) => el.getBoundingClientRect().right <= r + 1, reset.x)).toBe(true);
     }
     if (!(await sidebar.isVisible())) await page.getByTestId('sidebar-toggle').click();
     if (phone) {
@@ -81,7 +84,7 @@ for (const width of [1440, 768, 414, 375, 320]) {
     }
     const overlayRow = (await page.locator('.map-overlays').boundingBox())!;
     expect(overlayRow.width).toBeLessThanOrEqual(250);
-    for (const [id, label] of [['wind', 'Wind'], ['humidity', 'Humidity'], ['rain', 'Rain'], ['pressure', 'Pressure'], ['temperature', 'Temperature'], ['population', 'Population']]) {
+    for (const [id, label] of [['wind', 'Wind'], ['humidity', 'Humidity'], ['rain', 'Rain'], ['finedust', 'Fine dust'], ['pressure', 'Pressure'], ['temperature', 'Temperature'], ['population', 'Population']]) {
       const button = page.getByTestId(`layer-${id}`);
       await expect(button).toHaveAccessibleName(label);
       await expect(button).toHaveText('');
@@ -99,7 +102,7 @@ for (const width of [1440, 768, 414, 375, 320]) {
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(overlayRow.x + overlayRow.width);
       expect(await button.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     }
-    await expect(page.locator('[data-testid^="legend-"]:not([data-testid="legend-toggle"], [data-testid="legend-close"], [data-testid^="legend-temperature-"])')).toHaveCount(6); // the air and sea readings inside the temperature row are not rows
+    await expect(page.locator('[data-testid^="legend-"]:not([data-testid="legend-toggle"], [data-testid="legend-close"], [data-testid^="legend-temperature-"])')).toHaveCount(8); // wind base + humidity, rain, fine dust, yellow dust, pressure, temperature, population; the air and sea readings inside the temperature row are not rows
     // A button can be inside the viewport yet clipped by a shrinking flex container.
     const speedRow = (await page.locator('.speed').boundingBox())!;
     for (const action of ['prev', 'next']) {

@@ -24,10 +24,10 @@ test('a climate scenario loads from the panel, sets the date and year, and the N
   await nino.click();
   await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.climateScenario?.year)).toBe(1997);
   await expect(page.getByTestId('clock')).toContainText('Jan 1, 1997');
-  // (The "loaded" toast is replaced within a second: the weather now runs at 1d/s and its own news follows.)
+  // (The "loaded" toast is replaced within a second: the weather now runs at 4h/s and its own news follows.)
   expect(await page.evaluate(() => (window as any).__typhoonLab.state.climateLayer.core.script.length)).toBeGreaterThan(0);
-  // Loading sets 1d/s and turns Natural typhoon formation on, so the weather runs and storms form on the changed climate.
-  await expect(page.getByTestId('speed-value')).toHaveText(timeSpeedLabel(86_400));
+  // Loading sets 4h/s and turns Natural typhoon formation on, so the weather runs and storms form on the changed climate.
+  await expect(page.getByTestId('speed-value')).toHaveText(timeSpeedLabel(14_400));
   expect(await page.evaluate(() => (window as any).__typhoonLab.state.genesis.enabled)).toBe(true);
 
   // The Nino 3.4 chart, then fast time.

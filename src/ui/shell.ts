@@ -58,7 +58,7 @@ export const FORMATION_TOOLS = [
   })),
 ] as const;
 /** Keyboard shortcut per formation tool, in list order (A is Typhoon formation). */
-export const FORMATION_KEYS = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';'] as const;
+export const FORMATION_KEYS = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', "'"] as const;
 export type FormationToolId = (typeof FORMATION_TOOLS)[number]['id'];
 
 export const PALETTE_TABS: readonly { id: string; label: string; short?: string }[] = [
@@ -80,6 +80,7 @@ const MEASURE_ICON: Record<MeasureId, string> = {
   'measure-formation': `<path d="${CYCLONE_PATH}" transform="translate(0 4.5) scale(.8)" fill="currentColor" fill-rule="evenodd" stroke="none"/><path d="M17 4.5c1.5-1.5 3.5-1.5 5 0M19.5 2v5"/>`,
   'measure-thermocline': '<path d="M3 4c2-1.5 3.5 1.5 6 0s3.5 1.5 6 0 3.5 1.5 6 0"/><path d="M3 10c6 0 8 6 18 6M3 20h18"/>',
   'measure-nino34': '<rect x="2.5" y="6" width="19" height="12" rx="2" stroke-dasharray="3 2.4"/><text x="12" y="15.2" text-anchor="middle" font-family="ui-monospace, monospace" font-size="8.5" font-weight="700" fill="currentColor" stroke="none">3.4</text>',
+  'measure-fine-dust': '<path d="M3 8h13a3 3 0 1 0-3-3M3 13h17a3 3 0 1 1-3 3M3 18h8M6 3h.1M10 21h.1M16 21h.1M21 8h.1"/>',
   'measure-soi-wwv': '<path d="m4 15 8-3 8 3M12 12v8M9 20h6"/><circle cx="5" cy="8.5" r="2.4"/><circle cx="19" cy="5.5" r="2.4"/>',
 };
 
@@ -90,6 +91,7 @@ export const MAP_OVERLAY_OPTIONS: { id: keyof MapOverlays; label: string; tip: s
   { id: 'wind', label: 'Wind', tip: 'Moving streaks show surface wind speed and direction.' },
   { id: 'humidity', label: 'Humidity', tip: 'Colours the wind streaks by moisture. Brighter is wetter.' },
   { id: 'rain', label: 'Rain', tip: 'Shades the areas where rain is falling.' },
+  { id: 'finedust', label: 'Fine dust', tip: 'Draws small hexagons where fine dust (PM2.5) drifts with the wind. Darker is more polluted.' },
   { id: 'pressure', label: 'Pressure', tip: 'Draws isobars, lines of equal sea-level pressure.' },
   { id: 'temperature', label: 'Temperature', tip: 'Colours the ocean by water temperature and land by air temperature.' },
   { id: 'population', label: 'Population', tip: 'Shows how many people live in each area.' },
@@ -98,12 +100,13 @@ export const MAP_OVERLAY_OPTIONS: { id: keyof MapOverlays; label: string; tip: s
 ];
 
 /** Label layers (stored in the renderer) and the simulation switch that share the overlay icon row. */
-export type RowToggleId = 'recordedPaths' | 'cities' | 'isobars' | 'seas' | 'genesis';
+export type RowToggleId = 'recordedPaths' | 'cities' | 'isobars' | 'seas' | 'graphs' | 'genesis';
 export const ROW_TOGGLES: { id: RowToggleId; label: string; tip: string; testid: string; ref?: string; stateRef?: string; world?: boolean; on: boolean }[] = [
   { id: 'recordedPaths', label: 'Recorded paths', tip: 'Draws the full dashed track of every loaded past typhoon.', testid: 'recorded-path-toggle', ref: 'pathToggle', stateRef: 'pathState', on: true },
   { id: 'cities', label: 'City names', tip: 'Shows the names of cities and places. Their dots always stay.', testid: 'label-cities-toggle', on: true },
   { id: 'isobars', label: 'Isobar values', tip: 'Shows the pressure number on each isobar.', testid: 'label-isobars-toggle', on: true },
   { id: 'seas', label: 'Sea names', tip: 'Shows sea, lake and river names.', testid: 'label-seas-toggle', on: true },
+  { id: 'graphs', label: 'Graphs on map', tip: 'Shows a small graph beside each measured pin on the map.', testid: 'label-graphs-toggle', on: true },
   { id: 'genesis', label: 'Natural typhoon formation', tip: 'Changes the world, not just the view. When on, nature starts new storms every two to three days. Saved in your replay.', testid: 'genesis-toggle', ref: 'genesisToggle', stateRef: 'genesisState', world: true, on: false },
 ];
 
@@ -111,6 +114,7 @@ const MAP_ICON = {
   wind: '<path d="M3 8h11a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h5a3 3 0 1 1-3 3"/>',
   humidity: '<path d="M12 2C9 6 5 10 5 14a7 7 0 0 0 14 0c0-4-4-8-7-12Z"/><path d="M8 14a4 4 0 0 0 4 4"/>',
   rain: '<path d="M7 15a4 4 0 0 1-.5-7.9A5.5 5.5 0 0 1 17 6.5a4.5 4.5 0 0 1 0 8.5"/><path d="M8 18l-1 3M12 18l-1 3M16 18l-1 3"/>',
+  finedust: '<path d="M3 8h13a3 3 0 1 0-3-3M3 13h17a3 3 0 1 1-3 3M3 18h8M6 3h.1M10 21h.1M16 21h.1M21 8h.1"/>',
   pressure: '<circle cx="12" cy="12" r="9"/><path d="M6 13a6 6 0 0 1 12 0M12 13l4-5M8 18h8"/><circle cx="12" cy="13" r="1"/>',
   temperature: '<path d="M5 13V4a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0ZM7 7v9M14 7h5M14 11h3M13 18c2-2 4 2 6 0s2 0 3 0M14 22c2-2 4 2 6 0"/>',
   population: '<circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6M17 13a5 5 0 0 1 4 5v3"/>',
@@ -120,6 +124,8 @@ const MAP_ICON = {
   cities: '<path d="M12 21.5s-6.5-5.8-6.5-11.2a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11.2-6.5 11.2Z"/><circle cx="12" cy="10.3" r="2.4"/>',
   isobars: '<path d="M2 6.5c4-3 7 2.5 11 0s6-1 9-1"/><path d="M2 19c4-3 7 2.5 11 0s6-1 9-1"/><text x="12" y="15" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" font-weight="700" fill="currentColor" stroke="none">1008</text>',
   seas: '<path d="M2 20c2-2 3.5 2 5.5 0s3.5 2 5.5 0 3.5 2 5.5 0 2.5 1 3.5 0"/><path d="M7.5 15 12 3.5 16.5 15M9.2 11h5.6"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3.2 3 3.2 15 0 18M12 3c-3.2 3-3.2 15 0 18"/>',
+  graphs: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M6.5 15l3-3.5 2.5 2 4-5"/>',
   genesis: '<circle cx="10.5" cy="12.5" r="2.2"/><path d="M10.5 5.5c4.5-.3 7.5 2.5 7.5 6.5M10.5 19.5c-4.5.3-7.5-2.5-7.5-6.5"/><path d="M18.5 17v5M16 19.5h5"/>',
   spring: '<path d="M12 21v-9"/><path d="M12 13c0-4-3-6-7-6 0 4 3 6 7 6Z"/><path d="M12 11c0-3.5 2.5-6 7-6 0 3.5-2.5 6-7 6Z"/>',
   summer: '<circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>',
@@ -197,16 +203,18 @@ export function shellHtml(): string {
       <span class="tool__name">${f.name}</span>
     </button>`).join('');
   const measureTools = MEASURE_ITEMS.map(m => `
-    <button type="button" class="tool" data-tool="${m.id}" data-measure data-testid="tool-${m.id}" aria-pressed="false" aria-keyshortcuts="${m.key.toUpperCase()}"
+    <button type="button" class="tool" data-tool="${m.id}" data-measure data-testid="tool-${m.id}" aria-pressed="false" ${m.key ? `aria-keyshortcuts="${m.key.toUpperCase()}"` : ''}
       aria-label="${m.name}: drag onto the map, or press to arm it" data-tip-title="${m.name}" data-tip="${m.tip}">
-      <span class="tool__key" aria-hidden="true">${m.key.toUpperCase()}</span>
+      ${m.key ? `<span class="tool__key" aria-hidden="true">${m.key.toUpperCase()}</span>` : ''}
       ${toolIconSvg(m.id)}
       <span class="tool__name">${m.name}</span>
     </button>`).join('');
   const paletteTabs = PALETTE_TABS.map((t, i) => `
     <button type="button" role="tab" class="palette__tab" id="palette-tab-${t.id}" data-palette-tab="${t.id}" data-testid="palette-tab-${t.id}"
       aria-selected="${i === 0}" aria-controls="palette-panel-${t.id}" tabindex="${i === 0 ? 0 : -1}"${t.short ? ` aria-label="${t.label}" data-short="${t.short}"` : ''}>${t.label}</button>`).join('');
-  const overlays = MAP_OVERLAY_OPTIONS.map(l => `
+  const globeButton = `
+    <button type="button" class="overlay-toggle" role="switch" aria-checked="true" data-ref="globeToggle" data-testid="globe-toggle" aria-label="Globe view" data-tip-title="Globe view" data-tip="Switch between the 3D globe and the flat Equal Earth map.">${mapIconSvg('globe')}</button>`;
+  const overlays = globeButton + MAP_OVERLAY_OPTIONS.map(l => `
     <button type="button" class="overlay-toggle" data-overlay="${l.id}" data-testid="layer-${l.id}"
       aria-pressed="true" aria-label="${l.label}" data-tip-title="${l.label}" data-tip="${l.tip}">${mapIconSvg(l.id)}</button>`).join('')
     + ROW_TOGGLES.map(l => {
@@ -254,7 +262,7 @@ export function shellHtml(): string {
       tabindex="0" role="group" aria-roledescription="map" aria-label="World weather map" aria-describedby="map-help">
       <div class="stage__veil" data-ref="veil" data-testid="map-veil"><p data-ref="veilText">Starting the world…</p></div>
     </main>
-    <p id="map-help" class="sr-only">Map controls. With a weather tool armed, arrow keys move the placement target one degree, Shift five degrees, Alt a quarter degree, and Enter places it. Without a tool, arrow keys pan the map. Keys Q to U cycle paired conditions. Keys A, S, D, F, G, H, J, K, L and semicolon select a formation tool. Keys Z, X, C, V, B, N, M, comma, period and slash select a measurement tool. Number keys 1–9 set the speed steps, minus and plus step it slower and faster, and the backtick key resets it to 10m/s. Shift plus and Shift minus zoom. Space plays or pauses, Escape disarms.</p>
+    <p id="map-help" class="sr-only">Map controls. With a weather tool armed, arrow keys move the placement target one degree, Shift five degrees, Alt a quarter degree, and Enter places it. Without a tool, arrow keys pan the map. Keys Q to U cycle paired conditions. Keys A, S, D, F, G, H, J, K, L, semicolon and apostrophe select a formation tool. Keys Z, X, C, V, B, N, M, comma, period and slash select a measurement tool. Number keys 1–9 set the speed steps, minus and plus step it slower and faster, and the backtick key resets it to 10m/s. Shift plus and Shift minus zoom. Space plays or pauses, Escape disarms.</p>
 
     <header class="brandbar">
       <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor" fill-rule="evenodd"><path d="${CYCLONE_PATH}"/></svg>
@@ -295,6 +303,7 @@ export function shellHtml(): string {
       <div class="speed" role="group" aria-label="Simulation speed" data-ref="speedGroup">${speeds}</div>
       <button type="button" class="btn btn--float" data-ref="speedReset" data-testid="speed-reset" aria-label="Reset speed" aria-keyshortcuts="\`" data-tip-title="Reset speed" data-tip="Return only the speed to 10m/s. Shortcut: \`."><span class="key-hint key-hint--tick" aria-hidden="true">\`</span><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/></svg><span class="btn__label">Reset speed</span></button>
       <p class="clock__text" data-ref="clockText" data-testid="clock" data-short="D1 00:00">Day 1 · 00:00:00</p>
+      <button type="button" class="btn btn--float" data-ref="climateReset" data-testid="climate-reset" aria-label="Reset climate" data-tip-title="Reset climate" data-tip="Set ocean warming, ENSO and polar temperature back to 0" disabled><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14V5.5a2 2 0 0 1 4 0V14a3.5 3.5 0 1 1-4 0Z"/><path d="M16.5 4.5a5 5 0 0 1 3.2 4.6M20 5v4.2h-4.2"/></svg><span class="btn__label">Reset climate</span></button>
     </div>
 
     <div class="notes">
@@ -326,17 +335,17 @@ export function shellHtml(): string {
 
       <div class="settings-panel" role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" data-panel="settings" tabindex="0" hidden>
       <div class="settings" role="group" aria-label="World settings">
-        <label class="setting"><span class="setting__label">Globe view</span><button type="button" class="switch" role="switch" aria-checked="true" data-ref="globeToggle" data-testid="globe-toggle" data-tip-title="Globe view" data-tip="Switch between the 3D globe and the flat Equal Earth map.">On</button></label>
+        <div class="setting setting--overlays"><span class="setting__label">Map mode</span><div class="map-overlays" role="group" aria-label="Map mode" data-ref="mapOverlays">${overlays}</div></div>
         <div class="settings__group" role="group" aria-label="World climate">
           <div class="settings__head">
             <p class="settings__title">World climate</p>
-            <button type="button" class="btn btn--small settings__reset" data-ref="climateReset" data-testid="climate-reset" data-tip-title="Reset" data-tip="Set ocean warming, ENSO and polar temperature back to 0" disabled>Reset</button>
           </div>
-          <div class="setting"><span class="setting__label">Season</span><div class="season-row" role="radiogroup" aria-label="Season" data-ref="seasonRow">${seasonButtons}</div></div>
-          <p class="fine">Changing the season shifts the calendar; the world keeps running.</p>
+          <div class="settings__season">
+            <div class="setting"><span class="setting__label">Season</span><div class="season-row" role="radiogroup" aria-label="Season" data-ref="seasonRow">${seasonButtons}</div></div>
+            <p class="fine">Changing the season shifts the calendar; the world keeps running.</p>
+          </div>
           ${climateRows}
         </div>
-        <div class="setting setting--overlays"><span class="setting__label">Map overlays</span><div class="map-overlays" role="group" aria-label="Map overlays" data-ref="mapOverlays">${overlays}</div></div>
       </div>
       </div>
 

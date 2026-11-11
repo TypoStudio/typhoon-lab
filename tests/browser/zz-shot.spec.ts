@@ -5,7 +5,8 @@ test('legend shot', async ({ page }) => {
   await page.goto('/?lang=en&seed=20261022&help=0&start=2026-08-01&renderer=canvas&map=flat');
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   for (const o of ['pressure', 'temperature', 'population']) {
-    await page.getByTestId(`layer-${o}`).click();
+    // These overlays start on; only click one that is off.
+    if ((await page.getByTestId(`layer-${o}`).getAttribute('aria-pressed')) !== 'true') await page.getByTestId(`layer-${o}`).click();
     await expect(page.getByTestId(`layer-${o}`)).toHaveAttribute('aria-pressed', 'true');
   }
   console.log('OVERLAYS', await page.getByTestId('map-stage').getAttribute('data-overlays'), await page.getByTestId('sidebar').isVisible());

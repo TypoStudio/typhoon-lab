@@ -20,12 +20,13 @@ test('Korean controls, help, errors and live language changes preserve the world
   await expect(page.getByTestId('recorded-path-toggle')).toHaveText('켜짐');
   await expect(page.getByTestId('palette-tab-typhoons')).toHaveText('태풍체험');
   await expect(page.getByTestId('palette-tab-climate')).toHaveText('기후체험');
-  await expect(page.getByTestId('climate-reset')).toHaveText('초기화');
+  await expect(page.getByTestId('climate-reset')).toHaveAccessibleName('기후 초기화');
   await expect(page.getByTestId('climate-reset')).toHaveAttribute('data-tip', 'Set ocean warming, ENSO and polar temperature back to 0');
   await expect(page.getByTestId('storm-active-title')).toHaveText('진행 중인 재난 · 0');
   await expect(page.getByTestId('storm-ended-title')).toHaveText('종료된 재난 · 0');
   await expect(page.getByTestId('genesis-toggle')).toHaveAccessibleName('태풍 자연 발생');
-  await expect(page.getByTestId('sidebar')).toContainText('지구본 보기');
+  await expect(page.getByTestId('sidebar')).toContainText('지도 모드');
+  await expect(page.getByTestId('globe-toggle')).toHaveAttribute('aria-label', '지구본 보기');
   await expect(page.getByTestId('recorded-path-toggle')).toHaveAccessibleName('기록 경로');
   await page.getByTestId('tab-environment').click();
   await expect(page.getByTestId('place-confirm')).toHaveCount(0);

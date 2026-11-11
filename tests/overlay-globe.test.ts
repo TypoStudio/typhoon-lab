@@ -59,7 +59,7 @@ const mkStorm = (id: number, lon: number, lat: number, extra: Partial<Storm> = {
   ageHours: 100, peakWind: 40, track: [], forecast: [], history: [], damageScore: 0, windDelta: 0, ...extra,
 });
 const stateWith = (patch: Partial<GameState>): GameState => ({ storms: [], stormArchive: [], thunderstorms: [], candidates: [], effects: [], cities: [], ...patch }) as unknown as GameState;
-const NO_LAYERS: MapOverlays = { wind: false, humidity: false, rain: false, pressure: false, temperature: false, population: false, ships: false, planes: false };
+const NO_LAYERS: MapOverlays = { wind: false, humidity: false, rain: false, finedust: false, pressure: false, temperature: false, population: false, ships: false, planes: false };
 
 describe('placed condition markers', () => {
   const effect: Effect = { id: 1, type: 'moisture', lon: 150, lat: 20, radiusKm: 500, remainingHours: 144, ageHours: 0 };

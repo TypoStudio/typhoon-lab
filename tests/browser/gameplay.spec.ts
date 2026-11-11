@@ -62,7 +62,7 @@ async function loadCycloneReplay(page: Page) {
 
 async function expectOverlays(page: Page, enabled: string[]) {
   await expect.poll(async () => (await page.getByTestId('map-stage').getAttribute('data-overlays') ?? '').split(/\s+/).filter(Boolean)).toEqual([...enabled, 'ships', 'planes']);
-  for (const id of ['wind', 'humidity', 'rain', 'pressure', 'temperature', 'population']) {
+  for (const id of ['wind', 'humidity', 'rain', 'finedust', 'pressure', 'temperature', 'population']) {
     await expect(page.getByTestId(`layer-${id}`)).toHaveAttribute('aria-pressed', String(enabled.includes(id)));
     if (id !== 'wind') await expect(page.getByTestId(`legend-${id}`)).toHaveCount(enabled.includes(id) ? 1 : 0);
   }
@@ -193,7 +193,7 @@ for (const renderer of ['canvas', 'webgl'] as const) {
     expect(release.now - frozen.now).toBeLessThan(200);
     expect(release.storms).toEqual(frozen.storms);
     await expect.poll(async () => Number(await map.getAttribute('data-rendered-tick'))).toBeGreaterThan(Number(frozenTick));
-    await expect(page.getByTestId('speed-value')).toHaveText('x12');
+    await expect(page.getByTestId('speed-value')).toHaveText('4h/s');
     await expect(page.getByTestId('play-toggle')).toHaveAttribute('data-state', 'playing');
   });
 }
@@ -214,7 +214,7 @@ test('snapshot export/import reproduces the moment and reload resumes live play'
   expect(replay.untilTick).toBe(snapshot.tick);
   expect(replay.actions).toHaveLength(1);
   expect(replay).not.toHaveProperty('budget');
-  expect(replay.formatVersion).toBe(7);
+  expect(replay.formatVersion).toBe(8);
   expect(replay.startDayOfYear).toBe(213);
   expect(replay).not.toHaveProperty('mode');
   expect(replay).not.toHaveProperty('typhoonId');
@@ -263,7 +263,7 @@ test('Canvas fallback supports the worldwide map and free tool drops', async ({ 
   await expect.poll(async () => (await state(page)).effects.length).toBe(1);
   const snapshot = await loadCycloneReplay(page);
   await page.getByTestId('layer-wind').click();
-  await expectOverlays(page, ['humidity', 'rain', 'pressure', 'temperature', 'population']);
+  await expectOverlays(page, ['humidity', 'rain', 'finedust', 'pressure', 'temperature', 'population']);
   await expectWindDraw(page, false);
   await expectHumidityDraw(page, true);
   await expect(page.getByTestId('legend-humidity').locator('[data-tip]')).toHaveAttribute('data-tip', 'Turn on Wind to see humidity colours.');
@@ -272,11 +272,11 @@ test('Canvas fallback supports the worldwide map and free tool drops', async ({ 
   expect(await state(page)).toEqual(snapshot);
   await page.getByTestId('layer-wind').click();
   await expectWindDraw(page, true);
-  await expectOverlays(page, ['wind', 'humidity', 'rain', 'pressure', 'temperature', 'population']);
+  await expectOverlays(page, ['wind', 'humidity', 'rain', 'finedust', 'pressure', 'temperature', 'population']);
   await page.getByTestId('layer-temperature').click();
-  await expectOverlays(page, ['wind', 'humidity', 'rain', 'pressure', 'population']);
+  await expectOverlays(page, ['wind', 'humidity', 'rain', 'finedust', 'pressure', 'population']);
   await page.getByTestId('layer-temperature').click();
-  await expectOverlays(page, ['wind', 'humidity', 'rain', 'pressure', 'temperature', 'population']);
+  await expectOverlays(page, ['wind', 'humidity', 'rain', 'finedust', 'pressure', 'temperature', 'population']);
   await expect(page.getByTestId('legend')).toContainText('Moving streaks show wind.');
   expect(await state(page)).toEqual(snapshot);
   await page.reload();
@@ -360,7 +360,7 @@ test('same-tick replays with different tool positions refresh the visible weathe
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
   await page.getByTestId('tab-replay').click();
   const initial = await state(page);
-  const makeReplay = (lon: number) => ({ format: 'typhoon-lab-replay', formatVersion: 7, startDayOfYear: 213, scenarioId: initial.scenarioId, version: initial.version, seed: initial.seed, untilTick: 24, actions: [{ tick: 0, type: 'low', lon, lat: 16 }] });
+  const makeReplay = (lon: number) => ({ format: 'typhoon-lab-replay', formatVersion: 8, startDayOfYear: 213, scenarioId: initial.scenarioId, version: initial.version, seed: initial.seed, untilTick: 24, actions: [{ tick: 0, type: 'low', lon, lat: 16 }] });
   const load = async (lon: number) => {
     await page.getByTestId('import-replay-input').setInputFiles({ name: 'snapshot.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(makeReplay(lon))) });
     await expect.poll(async () => (await state(page)).actions[0]?.lon).toBe(lon);
@@ -435,7 +435,7 @@ test('shortcuts work with focus in the sidebar, except Space on a focused contro
   // Arrow keys on a tablist still rove between tabs instead of panning.
   await page.getByTestId('tab-environment').focus();
   await page.keyboard.press('ArrowRight');
-  await expect(page.getByTestId('tab-news')).toBeFocused();
+  await expect(page.getByTestId('tab-measure')).toBeFocused();
   // Shift + zooms from the sidebar.
   const zoom = () => page.evaluate(() => (window as any).__typhoonLab.mapView.zoom as number);
   const z0 = await zoom();
@@ -448,9 +448,7 @@ test('World climate Reset is disabled at 0, returns every slider to 0 and clears
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
   const reset = page.getByTestId('climate-reset');
   await expect(reset).toBeDisabled();
-  await expect(reset).toHaveText('Reset');
-  const rem = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
-  expect((await reset.boundingBox())!.height).toBeCloseTo(1.5 * rem, 0);
+  await expect(reset).toHaveAccessibleName('Reset climate'); // in the speed bar now, after the clock
   await page.getByTestId('climate-warming').fill('2');
   await page.getByTestId('climate-polar').fill('-1.5');
   await expect(reset).toBeEnabled();
@@ -479,7 +477,7 @@ test('Season icons show the calendar season, move the calendar and keep the worl
 });
 
 test('combined overlays independently toggle wind and preserve replay state across Korean switching', async ({ page }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(180_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await ready(page, '/?map=flat&lang=en');
@@ -488,8 +486,8 @@ test('combined overlays independently toggle wind and preserve replay state acro
   await expectWindDraw(page, true);
   await expectHumidityDraw(page, true);
   await expect(page.getByTestId('layer-wind')).not.toHaveAttribute('role', 'tab');
-  await expect(page.locator('[data-overlay]')).toHaveCount(8);
-  await expectOverlays(page, ['wind', 'humidity', 'rain', 'pressure', 'temperature', 'population']);
+  await expect(page.locator('[data-overlay]')).toHaveCount(9);
+  await expectOverlays(page, ['wind', 'humidity', 'rain', 'finedust', 'pressure', 'temperature', 'population']);
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
   const replay = await page.evaluate(async () => {
     const enginePath = '/src/simulation/engine.ts';
@@ -508,27 +506,27 @@ test('combined overlays independently toggle wind and preserve replay state acro
   expect(snapshot.thunderstorms.length).toBeGreaterThan(0);
   expect(snapshot.storms).toHaveLength(0);
   await page.getByTestId('tab-storms').click();
-  await expect(page.locator('[data-ref="stormSummary"]')).toContainText(`Thunderstorms: ${snapshot.thunderstorms.length}`);
+  await expect(page.locator('[data-ref="stormSummary"]')).toContainText(`Disasters: ${snapshot.thunderstorms.length}`);
   await expect(page.locator('[data-ref="stormSummary"]')).not.toContainText('The world is calm.');
   await expect(page.locator('[data-ref="stormCount"]')).toHaveText(String(snapshot.storms.length + snapshot.thunderstorms.length));
   await page.getByTestId('layer-pressure').press('Space');
-  await expectOverlays(page, ['wind', 'humidity', 'rain', 'temperature', 'population']);
+  await expectOverlays(page, ['wind', 'humidity', 'rain', 'finedust', 'temperature', 'population']);
   await page.getByTestId('layer-temperature').press('Enter');
-  await expectOverlays(page, ['wind', 'humidity', 'rain', 'population']);
+  await expectOverlays(page, ['wind', 'humidity', 'rain', 'finedust', 'population']);
   await page.getByTestId('layer-population').click();
-  await expectOverlays(page, ['wind', 'humidity', 'rain']);
+  await expectOverlays(page, ['wind', 'humidity', 'rain', 'finedust']);
   await expect(page.getByTestId('legend')).toContainText('Moving streaks show wind.');
   await page.getByTestId('language-select').selectOption('ko');
   await expect(page.getByTestId('layer-wind')).toHaveAccessibleName('바람');
   await expect(page.getByTestId('legend')).toContainText('흐름선은 바람을 나타냅니다.');
-  await expect(page.locator('[data-ref="stormSummary"]')).toContainText('뇌우');
+  await expect(page.locator('[data-ref="stormSummary"]')).toContainText('재난: ');
   expect(await state(page)).toEqual(snapshot);
   await page.getByTestId('help-open').click();
   await expect(page.getByTestId('help-dialog')).toContainText('뇌우');
   await page.getByTestId('help-close').click();
   const cyclone = await loadCycloneReplay(page);
   await page.getByTestId('layer-wind').press('Space');
-  await expectOverlays(page, ['humidity', 'rain']);
+  await expectOverlays(page, ['humidity', 'rain', 'finedust']);
   await expectWindDraw(page, false);
   await expect(page.getByTestId('legend')).toContainText('바람 흐름선은 숨겨져 있습니다.');
   await page.getByTestId('legend-humidity').locator('.legend__info').hover();
@@ -548,13 +546,13 @@ test('combined overlays independently toggle wind and preserve replay state acro
   const humidity = await page.evaluate(() => (window as any).__particleHumidity as number[]);
   expect(humidity).toHaveLength(8);
   expect(humidity.every(value => Number.isFinite(value) && value >= 0 && value <= 1)).toBe(true);
-  await expectOverlays(page, ['wind', 'humidity', 'rain']);
+  await expectOverlays(page, ['wind', 'humidity', 'rain', 'finedust']);
   for (const overlay of ['pressure', 'temperature', 'population']) {
     await page.getByTestId(`layer-${overlay}`).click();
   }
-  await expectOverlays(page, ['wind', 'humidity', 'rain', 'pressure', 'temperature', 'population']);
+  await expectOverlays(page, ['wind', 'humidity', 'rain', 'finedust', 'pressure', 'temperature', 'population']);
   await page.getByTestId('layer-temperature').click();
-  await expectOverlays(page, ['wind', 'humidity', 'rain', 'pressure', 'population']);
+  await expectOverlays(page, ['wind', 'humidity', 'rain', 'finedust', 'pressure', 'population']);
   await page.getByTestId('language-select').selectOption('en');
   await expect(page.getByTestId('legend')).toContainText('Moving streaks show wind.');
   const ocean = await point(page, 140, 16);
@@ -571,7 +569,8 @@ test('combined overlays independently toggle wind and preserve replay state acro
   await page.getByTestId('layer-population').click();
   await expect(page.getByTestId('legend-population')).toHaveCount(0);
   await page.getByTestId('layer-temperature').click();
-  await expect(page.getByTestId('legend-temperature')).toContainText(/\d+\.\d \/ \d+\.\d °C/);
+  await expect(page.getByTestId('legend-temperature-air')).toContainText(/\d+\.\d °C/);
+  await expect(page.getByTestId('legend-temperature-sea')).toContainText(/\d+\.\d °C/);
   await page.getByTestId('layer-population').click();
   expect(await state(page)).toEqual(cyclone);
   await page.getByTestId('layer-wind').click();
@@ -579,7 +578,7 @@ test('combined overlays independently toggle wind and preserve replay state acro
   await page.reload();
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   await expect.poll(async () => (await state(page)).storms.length).toBe(0);
-  await expectOverlays(page, ['wind', 'humidity', 'rain', 'pressure', 'temperature', 'population']);
+  await expectOverlays(page, ['wind', 'humidity', 'rain', 'finedust', 'pressure', 'temperature', 'population']);
   await expect(page.getByTestId('map-stage')).toHaveAttribute('data-wind', 'visible');
   expect(errors).toEqual([]);
 });

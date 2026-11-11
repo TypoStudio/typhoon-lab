@@ -10,7 +10,8 @@ export function disasterName(kind: DisasterKind): string {
 export function disasterDamage(record: Pick<DisasterRecord, 'damageScore' | 'transportLossUsd' | 'kind'>) {
   const report = estimateStormDamage(record.damageScore);
   report.lossUsd += record.transportLossUsd;
-  if (record.kind === 'dust' || record.kind === 'drought') { report.deaths = 0; report.missing = 0; }
+  if (record.kind === 'dust' || record.kind === 'drought' || record.kind === 'finedust') { report.deaths = 0; report.missing = 0; }
+  if (record.kind === 'finedust') report.floodedHomes = 0;
   return report;
 }
 

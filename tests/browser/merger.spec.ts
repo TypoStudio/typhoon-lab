@@ -9,7 +9,7 @@ test('independent young storms later merge, keep selection, and explain the even
     const { scenarioId, version, seed } = (window as any).__typhoonLab.state;
     return { scenarioId, version, seed };
   });
-  const replay = { ...meta, format: 'typhoon-lab-replay', formatVersion: 7, startDayOfYear: 213, untilTick: 120,
+  const replay = { ...meta, format: 'typhoon-lab-replay', formatVersion: 8, startDayOfYear: 213, untilTick: 120,
     actions: ['warm', 'moisture', 'low', 'low'].map(type => ({ tick: 0, type, lon: 140, lat: 16 })) };
   await page.getByTestId('tab-replay').click();
   await page.getByTestId('import-replay-input').setInputFiles({ name: 'young.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(replay)) });

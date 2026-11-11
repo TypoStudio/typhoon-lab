@@ -38,6 +38,8 @@ svg { display: block; }
 
 .app {
   --sidebar-w: min(22rem, 100vw);
+  /* One spacing system for the floating cards: the gap between stacked cards, the margin to the viewport edge, and the height of the top bars. */
+  --gap: var(--space-sm); --edge: var(--space-sm); --bar-h: 3.125rem; --row2: calc(var(--edge) + var(--bar-h) + var(--gap));
   --float-bg: color-mix(in oklch, var(--color-paper-2) 92%, transparent);
   position: fixed; inset: 0; height: 100dvh; overflow: clip;
 }
@@ -113,6 +115,9 @@ svg { display: block; }
   display: inline-flex; align-items: center; gap: var(--space-sm); cursor: pointer;
 }
 .app[data-sidebar="open"] .sidebar-toggle { right: auto; left: calc(100% - var(--sidebar-w) + var(--space-sm)); }
+/* Open: a compact button in one row with the language select, with a 44 px touch area. */
+.app[data-sidebar="open"] .sidebar-toggle { top: calc(var(--space-sm) + (2.75rem - 2rem) / 2); height: 2rem; min-height: 0; padding-inline: var(--space-sm); gap: var(--space-xs); font-size: var(--text-sm); }
+@media (pointer: coarse) { .app[data-sidebar="open"] .sidebar-toggle::after { content: ""; position: absolute; inset: -0.5rem -0.25rem; } }
 .sidebar__head { position: fixed; z-index: 40; top: var(--space-sm); right: var(--space-sm); display: flex; align-items: center; min-height: 2.75rem; }
 .sidebar__head select { width: auto; min-width: 7rem; }
 .sidebar-toggle__count {
@@ -138,15 +143,15 @@ svg { display: block; }
 .overlay-toggle--world[aria-checked="true"], .overlay-toggle--world[aria-checked="true"]:hover { background: var(--color-storm); border: var(--rule-width) solid var(--color-storm); color: var(--color-paper); }
 .overlay-toggle--world[aria-checked="true"]::after { background: var(--color-paper); border-color: var(--color-paper); }
 
-.zoom { top: 3.75rem; right: var(--space-sm); display: grid; gap: 2px; padding: 2px; }
+.zoom { top: var(--row2); right: var(--edge); display: grid; gap: 2px; padding: 2px; }
 .icon-btn { display: grid; place-items: center; width: 2.5rem; padding: 0; background: transparent; border-color: transparent; }
 .icon-btn svg { width: 1.1rem; height: 1.1rem; }
 @media (pointer: coarse) { .icon-btn { width: 2.75rem; } }
 
-.map-status { position: absolute; z-index: 10; top: 3.75rem; left: var(--space-sm); width: min(13rem, calc(100% - 4.5rem)); display: grid; gap: var(--space-xs); pointer-events: none; }
+.map-status { position: absolute; z-index: 10; top: var(--row2); left: var(--edge); width: min(13rem, calc(100% - 4.5rem)); display: grid; gap: var(--gap); pointer-events: none; }
 .legend { width: 100%; min-width: 0; padding: var(--space-xs) var(--space-sm) var(--space-sm); background: var(--float-bg); border: var(--rule-width) solid var(--color-rule); border-top: 0; border-radius: 0 0 var(--radius-md) var(--radius-md); font-size: var(--text-xs); }
 /* The pointer position is the legend's header line: joined to the legend box on desktop, a small chip of its own on phones. */
-.legend-pos { width: 100%; margin-bottom: calc(-1 * var(--space-xs)); padding: var(--space-sm) var(--space-sm) 0; background: var(--float-bg); border: var(--rule-width) solid var(--color-rule); border-bottom: 0; border-radius: var(--radius-md) var(--radius-md) 0 0; font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.3; display: flex; align-items: center; justify-content: space-between; gap: var(--space-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; pointer-events: none; }
+.legend-pos { width: 100%; margin-bottom: calc(-1 * var(--gap)); padding: var(--space-sm) var(--space-sm) 0; background: var(--float-bg); border: var(--rule-width) solid var(--color-rule); border-bottom: 0; border-radius: var(--radius-md) var(--radius-md) 0 0; font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.3; display: flex; align-items: center; justify-content: space-between; gap: var(--space-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; pointer-events: none; }
 .legend-pos__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .legend-pos__terrain { flex: none; display: inline-grid; place-items: center; color: var(--color-muted); }
 .terrain-icon { display: block; width: 18px; height: 18px; }
@@ -182,8 +187,8 @@ svg { display: block; }
 .legend__ticks span[data-edge="end"] { transform: translateX(-100%); }
 .legend__note { color: var(--color-muted); line-height: 1.3; }
 
-/* Clock and time controls: a bottom row on phones, beside the brand on larger screens. */
-.clockbar { left: var(--space-sm); right: var(--space-sm); bottom: 13.25rem; display: flex; align-items: center; gap: var(--space-xs); padding: var(--space-xs); }
+/* Clock and time controls: always at the top. A strip under the brand bar on phones; on larger screens under the brand panel, or beside it where there is room. The bottom belongs to the palette and the toasts. */
+.clockbar { left: var(--edge); right: var(--edge); top: var(--row2); display: flex; align-items: center; gap: var(--space-xs); padding: var(--space-xs); }
 .speed { display: inline-flex; flex: none; border: var(--rule-width) solid var(--color-rule); border-radius: var(--radius-sm); overflow: hidden; background: var(--float-bg); }
 .speed__opt { display: grid; place-items: center; border: 0; border-radius: 0; min-width: 2.1rem; padding: 0 var(--space-xs); background: transparent; }
 .speed__icon { display: block; width: 1rem; height: 1rem; }
@@ -324,6 +329,11 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
 .setting { display: flex; align-items: center; gap: var(--space-sm); min-height: 2.25rem; padding: var(--space-xs) 0; border-bottom: var(--rule-width) solid var(--color-rule); font-size: var(--text-sm); color: var(--color-muted); }
 .setting:last-child { border-bottom: 0; }
 .settings__group { display: grid; border-bottom: var(--rule-width) solid var(--color-rule); }
+/* The season row and its sentence read as their own section: a rule above and below. */
+.settings__season { margin-block: var(--space-xs); border-block: var(--rule-width) solid var(--color-rule); }
+.settings__season .setting { border-bottom: 0; }
+.settings__season .fine { margin: 0; padding-bottom: var(--space-xs); }
+.overlay-toggle[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
 .settings__title { padding-top: var(--space-xs); font-size: var(--text-xs); font-weight: 600; color: var(--color-muted); }
 .settings__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); padding-top: var(--space-xs); }
 .settings__head .settings__title { padding-top: 0; }
@@ -578,10 +588,12 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
 .measure-card__head { display: flex; align-items: baseline; gap: var(--space-xs); min-width: 0; }
 .measure-card__title { min-width: 0; font-family: var(--font-display); font-size: var(--text-md); font-weight: 700; color: var(--color-ink); overflow-wrap: anywhere; }
 .measure-card__unit { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
-.measure-card__remove { flex: none; margin-inline-start: auto; align-self: center; width: 2rem; height: 2rem; min-height: 2rem; color: var(--color-muted); }
-.measure-card__remove:hover { color: var(--color-ink); background: var(--color-paper-4); }
-.measure-card__remove svg { width: 1rem; height: 1rem; }
-@media (pointer: coarse) { .measure-card__remove { width: 2.75rem; height: 2.75rem; min-height: 2.75rem; } }
+.measure-card__act { flex: none; align-self: center; width: 2rem; height: 2rem; min-height: 2rem; color: var(--color-muted); }
+.measure-card__locate { margin-inline-start: auto; }
+.measure-card__act:hover, .measure-line__locate:hover { color: var(--color-ink); background: var(--color-paper-4); }
+.measure-card__act svg, .measure-line__locate svg { width: 1rem; height: 1rem; }
+.measure-line__locate { flex: none; width: 1.75rem; height: 1.75rem; min-height: 1.75rem; padding: 0; color: var(--color-muted); }
+@media (pointer: coarse) { .measure-card__act { width: 2.75rem; height: 2.75rem; min-height: 2.75rem; } .measure-line__locate { width: 2.25rem; height: 2.25rem; min-height: 2.25rem; } }
 .measure-lines { display: grid; gap: 2px; }
 .measure-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-xs); min-width: 0; font-size: var(--text-xs); }
 .measure-line__name { flex: 1 1 8rem; min-width: 0; color: var(--color-muted); overflow-wrap: anywhere; }
@@ -621,9 +633,12 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
   .sidebar { position: relative; inset: auto; flex: 0 0 var(--sidebar-w); width: var(--sidebar-w); height: 100%; }
   .app[data-sidebar="open"] .sidebar-toggle { left: calc(100% + var(--space-sm)); }
   .brandbar .tag { display: inline-block; }
-  .clockbar { left: 15rem; right: auto; bottom: auto; top: var(--space-sm); min-height: 2.75rem; }
+  .brandbar, .clockbar, .sidebar-toggle { height: var(--bar-h); min-height: 0; }
+  .clockbar { left: var(--edge); right: auto; top: var(--row2); max-width: calc(100% - 4.5rem); } /* stops short of the zoom buttons */
+  /* Under the brand panel: the legend column starts below the bar. */
+  .map-status { top: calc(var(--row2) + var(--bar-h) + var(--gap)); }
   .btn--play { font-size: var(--text-sm); gap: var(--space-xs); min-width: 5.4rem; }
-  .clock__text { flex: none; }
+  .clock__text { flex: 0 1 auto; } /* shrinks with an ellipsis before the bar would leave the map */
   .speed__opt { min-width: 2.4rem; padding: 0 var(--space-sm); }
   .brandbar { max-width: none; }
   .brandbar .tag { display: none; }
@@ -635,11 +650,16 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
   .palette__tools { grid-template-columns: repeat(7, minmax(0, 1fr)); }
   .notes { bottom: 11rem; }
   .brandbar .tag { display: inline-block; }
-  .clockbar { left: 27rem; }
 }
 
-@media (min-width: 48rem) and (max-width: 69.999rem) {
-  .clockbar { left: var(--space-sm); right: var(--space-sm); top: auto; bottom: 7rem; }
+/* Beside the brand panel and clear of the sidebar toggle: wide screens, or wider still while the sidebar takes 22rem. */
+@media (min-width: 70rem) {
+  .app[data-sidebar="closed"] .clockbar { left: calc(var(--brand-right, 27rem) + var(--gap)); top: var(--edge); }
+  .app[data-sidebar="closed"] .map-status { top: var(--row2); }
+}
+@media (min-width: 92rem) {
+  .app[data-sidebar="open"] .clockbar { left: calc(var(--brand-right, 27rem) + var(--gap)); top: var(--edge); }
+  .app[data-sidebar="open"] .map-status { top: var(--row2); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -864,7 +884,7 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
 }
 
 @media (max-width: 47.9375rem) {
-  .app { --sidebar-w: 100vw; --safe-top: env(safe-area-inset-top, 0px); --strip-top: calc(var(--safe-top) + 4.75rem); }
+  .app { --gap: 0.4rem; --sidebar-w: 100vw; --safe-top: env(safe-area-inset-top, 0px); --strip-top: calc(var(--safe-top) + 2.5rem + 45px); }
   .stage { top: var(--strip-top); }
 
   /* Top strip, row one: brand, help, sidebar toggle. */
@@ -878,30 +898,32 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
   .brandbar .btn--help { width: 2.25rem; height: 2.25rem; min-height: 2.25rem; font-size: var(--text-sm); }
   .sidebar-toggle { top: calc(var(--safe-top) + 0.125rem); right: var(--space-sm); height: 2.25rem; min-height: 2.25rem; padding-inline: var(--space-sm); gap: var(--space-xs); font-size: var(--text-sm); }
   .app[data-sidebar="open"] .sidebar-toggle { right: auto; left: var(--space-sm); }
+  .app[data-sidebar="open"] .sidebar-toggle { top: calc(var(--safe-top) + 0.25rem); }
   .sidebar__head { top: calc(var(--safe-top) + 0.125rem); min-height: 2.25rem; }
   .sidebar { padding-top: calc(var(--safe-top) + 3rem); }
 
   /* Row two: play, speed, reset, clock; 2.25rem tall, one line at 320px. */
   .clockbar {
-    top: calc(var(--safe-top) + 2.5rem); left: 0; right: 0; bottom: auto; height: 2.25rem; min-height: 0;
+    top: calc(var(--safe-top) + 2.5rem); left: 0; right: 0; bottom: auto; height: 45px; min-height: 0; box-sizing: border-box;
     padding: 0 var(--space-sm); gap: var(--space-xs);
     background: var(--color-paper-2); border-width: 0 0 var(--rule-width); border-radius: 0;
   }
-  .clockbar .btn { height: 2rem; min-height: 0; padding: 0; }
-  .clockbar .btn--play { min-width: 2.5rem; }
+  .clockbar .btn { height: 44px; min-height: 0; padding: 0; }
+  .clockbar .btn--play { min-width: 44px; }
   .clockbar .btn--play .btn__icon { width: 1.1rem; height: 1.1rem; }
-  .clockbar [data-ref="speedReset"] { width: 2rem; min-width: 0; }
+  .clockbar [data-ref="speedReset"], .clockbar [data-ref="climateReset"] { width: 40px; min-width: 0; }
   .clockbar .btn__icon--phone { display: block; }
   .clockbar .btn__label { display: none; }
-  .speed, .speed__opt { height: 2rem; min-height: 2rem; }
-  .speed__opt { min-width: 2rem; padding: 0 var(--space-xs); font-size: var(--text-xs); }
+  .speed, .speed__opt { height: 44px; min-height: 44px; }
+  .speed { border: 0; }
+  .speed__opt { min-width: 36px; padding: 0 var(--space-xs); font-size: var(--text-xs); }
   /* The full "Day 1 · 18:30" stays in the DOM for screen readers; sighted users get "D1 18:30" from data-short. */
   html .clockbar .clock__text { padding-inline: 0 var(--space-xs); font-size: 0; line-height: 1; white-space: nowrap; text-overflow: clip; }
   html .clockbar .clock__text::after { content: attr(data-short); font-size: var(--text-xs); }
 
   /* Legend chip at the top left of the map, the reset-view icon beside it; pinch zooms, so the +/- buttons go. */
-  .map-status { top: calc(var(--strip-top) + var(--space-xs)); left: var(--space-sm); right: var(--space-sm); width: auto; }
-  .zoom { top: calc(var(--strip-top) + var(--space-xs)); left: calc(var(--space-sm) + 5rem + var(--space-xs)); right: auto; padding: 0; gap: 0; }
+  .map-status { top: calc(var(--strip-top) + var(--gap)); left: var(--edge); right: var(--space-sm); width: auto; }
+  .zoom { top: calc(var(--strip-top) + var(--gap)); left: calc(var(--edge) + 5rem + var(--gap)); right: auto; padding: 0; gap: 0; }
   .zoom [data-testid="zoom-in"], .zoom [data-testid="zoom-out"] { display: none; }
   .zoom .icon-btn { width: 2rem; height: 2rem; min-height: 2rem; }
   .palette__label { display: none; }
@@ -967,5 +989,93 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
   .palette__tab[data-short]::after { content: attr(data-short); font-size: 0.625rem; }
 }
 
+/* Phone widths: touch-sized tabs (44 px) at the body-small size; the row scrolls sideways when the labels do not all fit, and setPaletteTab keeps the active one in view. Page buttons keep a 32 px face inside a 44 x 44 hit area. */
+@media (max-width: 47.9375rem) {
+  .app { --tabs-h: 44px; --palette-h: calc(3.5rem + var(--tabs-h) + env(safe-area-inset-bottom, 0px)); }
+  .palette { grid-template-rows: var(--tabs-h) minmax(0, 1fr); }
+  .palette__tabs { overflow-x: auto; scroll-snap-type: x proximity; }
+  .palette__tab { height: var(--tabs-h); min-width: 44px; padding: 0 0.5rem; font-size: var(--text-sm); }
+  .palette__tab[data-short]::after { font-size: var(--text-sm); }
+  .palette__pager { gap: 12px; }
+  .palette__page { width: 32px; height: 32px; }
+  .palette__page::after { inset: -6px; }
+  .palette__page[data-page="-1"]::after, .palette__page[data-page="1"]::after { inset: -6px; }
+}
+
 .news--place { cursor: pointer; }
 .news--place:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+
+/* ---- Focus mode while an icon is dragged onto the map ------------------------------------------ */
+/* The legend, the notes, the palette and the phone graphs fade out and stop catching the pointer, so the drop lands on the map. Hiding keeps layout and scroll positions. */
+.map-status, .notes, .palette, .onmap-graphs { transition: opacity 0.12s ease-out, visibility 0s linear 0s; }
+.is-tool-dragging .map-status, .is-tool-dragging .notes, .is-tool-dragging .palette, .is-tool-dragging .onmap-graphs {
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.12s ease-out, visibility 0s linear 0.12s;
+}
+.drag-card {
+  position: absolute; z-index: 13; box-sizing: border-box; pointer-events: none;
+  width: min(var(--dock-width, 100%), 34rem); left: calc(var(--dock-left, 0px) + (var(--dock-width, 100%) - min(var(--dock-width, 100%), 34rem)) / 2); bottom: var(--dock-floor, 0px);
+  display: flex; align-items: center; gap: var(--space-md); padding: var(--space-sm) var(--space-md);
+  background: var(--color-paper-2); border: var(--rule-width) solid var(--color-rule); border-radius: var(--radius-md);
+  animation: drag-card-in 0.14s ease-out;
+}
+.drag-card[hidden] { display: none; }
+.drag-card__art { flex: none; display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border-radius: var(--radius-sm); background: var(--color-paper-3); }
+.drag-card__icon { width: 1.75rem; height: 1.75rem; }
+.drag-card__text { display: grid; gap: 2px; min-width: 0; }
+.drag-card__name { font-size: var(--text-md); font-weight: 700; line-height: 1.25; }
+.drag-card__desc { font-size: var(--text-sm); line-height: 1.4; color: var(--color-muted); }
+.drag-card__meta { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-ink); }
+.drag-card__meta[hidden] { display: none; }
+@keyframes drag-card-in { from { opacity: 0; transform: translateY(6px); } }
+@media (max-width: 47.9375rem) {
+  .drag-card { left: 0; width: 100%; border-width: var(--rule-width) 0 0; border-radius: 0; padding-bottom: calc(var(--space-sm) + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* ---- Notes stack: dock.ts places it on the palette (or the speed bar above it); the items sit tight ---------- */
+.notes { gap: var(--gap); margin-bottom: var(--gap); }
+@media (max-width: 47.9375rem) { .notes { box-sizing: border-box; padding-inline: var(--edge); } }
+
+/* On phones a long damage or readout line truncates inside the legend column instead of widening it. */
+@media (max-width: 47.9375rem) { .map-status { grid-template-columns: minmax(0, 1fr); } }
+
+/* A brief ring (or outline) where "show on the map" went. */
+.locate-flash { position: absolute; z-index: 11; width: 2.75rem; height: 2.75rem; border: 2px solid var(--color-accent); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; animation: locate-pulse 1.5s ease-out forwards; }
+.locate-flash--box { transform: none; border-radius: var(--radius-sm); border-style: dashed; animation-name: locate-fade; }
+@keyframes locate-fade { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes locate-pulse { 0% { opacity: 1; scale: 0.6; } 25% { opacity: 1; scale: 1; } 100% { opacity: 0; scale: 1.25; } }
+@media (prefers-reduced-motion: reduce) { .locate-flash { animation: none; } }
+
+/* ---- Graphs on the map: a small translucent card beside each measured pin on screen ------------------- */
+.onmap-graphs { position: absolute; inset: 0; z-index: 2; overflow: hidden; pointer-events: none; }
+.onmap-graphs[hidden], .onmap-card[hidden], .onmap-box[hidden] { display: none; }
+.onmap-card {
+  position: absolute; left: 0; top: 0; pointer-events: none; color: var(--color-ink);
+  background: color-mix(in oklch, var(--color-paper-2) 70%, transparent); border: var(--rule-width) solid var(--color-rule); border-inline-start: 3px solid var(--color-rule); border-radius: var(--radius-md);
+}
+.onmap-card__main {
+  display: flex; align-items: flex-start; gap: 5px; padding: 4px 22px 4px 4px; pointer-events: auto; cursor: pointer; text-align: start; font: inherit; color: inherit;
+  background: transparent; border: 0; border-radius: inherit; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.onmap-card__main:has(.onmap-name) { flex-direction: column; gap: 1px; }
+.onmap-name { font-size: var(--text-xs); line-height: 1.2; color: var(--color-muted); white-space: nowrap; }
+.onmap-rows { display: grid; gap: 2px; }
+.onmap-icon { display: inline-grid; place-items: center; flex: none; width: 1rem; height: 1rem; color: var(--color-wind); }
+.onmap-icon__svg { width: 1rem; height: 1rem; }
+.onmap-row { display: flex; align-items: center; gap: 4px; }
+.onmap-val { min-width: 3.6rem; font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.onmap-spark { display: block; width: 3.2rem; height: 1.15rem; }
+.onmap-card__info {
+  position: absolute; top: -8px; right: -8px; display: grid; place-items: start end; width: 44px; height: 44px; padding: 11px 11px 0 0; pointer-events: auto; cursor: pointer;
+  color: var(--color-muted); background: transparent; border: 0; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.onmap-card__info svg { width: 0.9rem; height: 0.9rem; }
+.onmap-box { position: absolute; pointer-events: none; border: 1px dashed color-mix(in oklch, var(--color-ink) 45%, transparent); border-radius: 2px; }
+
+/* 320 px: the strip also holds the climate reset, so the controls tighten (heights stay 44 px) and the clock keeps its full time. */
+@media (max-width: 22.5rem) {
+  .clockbar { padding-inline: 4px; gap: 2px; }
+  .clockbar .speed__opt { min-width: 30px; padding-inline: 2px; }
+  .clockbar .speed__value { min-width: 2.75rem; }
+  .clockbar [data-ref="speedReset"], .clockbar [data-ref="climateReset"] { width: 32px; }
+  .clockbar .btn--play { min-width: 40px; }
+}

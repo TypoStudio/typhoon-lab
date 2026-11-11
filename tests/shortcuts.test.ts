@@ -9,7 +9,7 @@ describe('palette shortcuts', () => {
   it('maps typed letters and punctuation', () => {
     expect(shortcutChar(key('z', 'KeyZ'))).toBe('z');
     expect(shortcutChar(key('Z', 'KeyZ'))).toBe('z');
-    for (const c of [',', '.', '/', ';']) expect(shortcutChar(key(c))).toBe(c);
+    for (const c of [',', '.', '/', ';', "'"]) expect(shortcutChar(key(c))).toBe(c);
   });
 
   it('falls back to the physical key under a non-Latin layout', () => {
@@ -18,6 +18,8 @@ describe('palette shortcuts', () => {
     expect(shortcutChar(key('，', 'Comma'))).toBe(',');
     expect(shortcutChar(key('。', 'Period'))).toBe('.');
     expect(shortcutChar(key('；', 'Semicolon'))).toBe(';');
+    expect(shortcutChar(key('’', 'Quote'))).toBe("'");
+    expect(shortcutChar(key('"', 'Quote', { shiftKey: true }))).toBe(''); // Shift + ' types a double quote on a US layout
   });
 
   it('follows the typed character with Shift, so / and . work on QWERTZ and AZERTY', () => {
@@ -39,9 +41,10 @@ describe('palette shortcuts', () => {
 
   it('gives each tool one key: Z moved off Formation, measure keys follow Z X C V B N M , . /', () => {
     expect(MEASURE_KEYS.join('')).toBe('zxcvbnm,./');
-    expect(FORMATION_KEYS.join('')).toBe('asdfghjkl;');
+    expect(FORMATION_KEYS.join('')).toBe("asdfghjkl;'");
     expect(FORMATION_KEYS).toHaveLength(FORMATION_TOOLS.length);
     expect(MEASURE_KEYS).toHaveLength(MEASURE_ITEMS.length);
+    expect(MEASURE_ITEMS.at(-1)).toMatchObject({ id: 'measure-fine-dust', key: '' }); // the 11th item has no shortcut
     const all = [...TOOL_KEYS, ...FORMATION_KEYS, ...MEASURE_KEYS];
     expect(new Set(all).size).toBe(all.length);
     for (const k of all) expect(shortcutChar(key(k))).toBe(k);

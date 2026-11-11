@@ -1,4 +1,4 @@
-import { GENESIS_THRESHOLD, readClimateIndices, readClimatePoint, readThermocline, type ClimatePointReading } from '../simulation/engine';
+import { GENESIS_THRESHOLD, GRID_COLS, GRID_ROWS, readClimateIndices, readClimatePoint, readThermocline, type ClimatePointReading } from '../simulation/engine';
 import { OCEAN_LON0, thermoclineMeanDepth } from '../simulation/climate-core';
 import { wrapLon } from '../render/view';
 import type { GameState } from '../types';
@@ -38,6 +38,15 @@ const lonEast = (lon: number): number => ((lon % 360) + 360) % 360;
 /** The equatorial Pacific strip the thermocline exists in, degrees east. */
 export const THERMOCLINE_STRIP = [OCEAN_LON0, 280] as const;
 export const inThermoclineStrip = (lon: number): boolean => { const e = lonEast(lon); return e >= THERMOCLINE_STRIP[0] && e <= THERMOCLINE_STRIP[1]; };
+
+/** PM2.5 (µg/m³) at a point, bilinear between the 2° cell centres; 0 where there is no fine dust, so the line stays continuous. */
+export function pm25At(state: GameState, lon: number, lat: number): number {
+  if (!state.fineDustRows) return 0;
+  const gx = ((((lon + 180) / 2 - 0.5) % GRID_COLS) + GRID_COLS) % GRID_COLS, gy = Math.max(0, Math.min(GRID_ROWS - 1, (lat + 90) / 2 - 0.5));
+  const i = Math.floor(gx), j = Math.min(GRID_ROWS - 2, Math.floor(gy)), tx = gx - i, ty = gy - j, i2 = (i + 1) % GRID_COLS;
+  const at = (jj: number, ii: number) => state.grid[jj * GRID_COLS + ii].pm25;
+  return (at(j, i) * (1 - tx) + at(j, i2) * tx) * (1 - ty) + (at(j + 1, i) * (1 - tx) + at(j + 1, i2) * tx) * ty;
+}
 
 const NINO_GUIDES = [{ value: 0.5, label: 'El Niño' }, { value: -0.5, label: 'La Niña' }];
 
@@ -81,6 +90,12 @@ export const MEASURE_ITEMS = [
     tip: 'Drop anywhere to graph the Southern Oscillation Index and the warm water volume of the Pacific.',
     plots: [{ label: 'Southern Oscillation Index', unit: 'index', digits: 1, zero: true }, { label: 'Warm water volume', unit: 'm', digits: 1, zero: true }],
     read: r => { const i = readClimateIndices(r.state); return [i?.soi ?? 0, i?.wwv ?? 0]; } },
+  // No shortcut: the keys of the bottom row are all taken, and backslash types ₩ on Korean keyboards (speed reset).
+  { id: 'measure-fine-dust', key: '', name: 'Fine dust (PM2.5)', basin: false,
+    tip: 'Drop on the map to graph the fine dust concentration there. The lines mark the air quality bands; where there is no fine dust it reads 0.',
+    plots: [{ label: 'Fine dust (PM2.5)', unit: 'µg/m³', digits: 0, guides: [
+      { value: 12, label: 'Good up to 12' }, { value: 35.5, label: 'Moderate up to 35' }, { value: 150.5, label: 'Unhealthy up to 150' }, { value: 250.5, label: 'Very unhealthy up to 250' }] }],
+    read: r => [pm25At(r.state, r.lon, r.lat)] },
 ] as const satisfies readonly MeasureItem[];
 
 export type MeasureId = (typeof MEASURE_ITEMS)[number]['id'];

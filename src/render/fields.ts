@@ -9,6 +9,8 @@ export interface FieldData {
   cols: number; rows: number;
   u: Float32Array; v: Float32Array; speed: Float32Array;
   pressure: Float32Array; temperature: Float32Array; airTemperature: Float32Array; updraft: Float32Array; humidity: Float32Array; rain: Float32Array; snow: Float32Array; snowCm: Float32Array; population: Float32Array;
+  /** Fine dust PM2.5 (µg/m³) and the largest value on the grid (0 in almost every world). */
+  pm25: Float32Array; maxPm25: number;
   land: Uint8Array; blizzard: Uint8Array;
   /** blizzard as 0/1 floats, so particles can sample it bilinearly. */
   blizzardF: Float32Array;
@@ -27,7 +29,7 @@ export function buildFieldData(grid: EnvironmentCell[]): FieldData | null {
   const f: FieldData = {
     cols: GRID_COLS, rows: GRID_ROWS,
     u: new Float32Array(n), v: new Float32Array(n), speed: new Float32Array(n),
-    pressure: new Float32Array(n), temperature: new Float32Array(n), airTemperature: new Float32Array(n), updraft: new Float32Array(n), humidity: new Float32Array(n), rain: new Float32Array(n), snow: new Float32Array(n), snowCm: new Float32Array(n), population: new Float32Array(n),
+    pressure: new Float32Array(n), temperature: new Float32Array(n), airTemperature: new Float32Array(n), updraft: new Float32Array(n), humidity: new Float32Array(n), rain: new Float32Array(n), snow: new Float32Array(n), snowCm: new Float32Array(n), population: new Float32Array(n), pm25: new Float32Array(n), maxPm25: 0,
     land: new Uint8Array(n), blizzard: new Uint8Array(n), blizzardF: new Float32Array(n), maxSpeed: 0,
   };
   for (let k = 0; k < n; k++) {
@@ -45,6 +47,8 @@ export function buildFieldData(grid: EnvironmentCell[]): FieldData | null {
     f.rain[k] = c.rain;
     f.snow[k] = c.snow;
     f.snowCm[k] = c.snowCm;
+    f.pm25[k] = c.pm25;
+    if (f.pm25[k] > f.maxPm25) f.maxPm25 = f.pm25[k];
     f.blizzard[k] = c.blizzard ? 1 : 0;
     f.blizzardF[k] = f.blizzard[k];
     f.population[k] = c.population;

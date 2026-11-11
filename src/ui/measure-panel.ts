@@ -14,6 +14,10 @@ const AXIS_UNITS: Record<Language, Record<AxisUnit, string>> = {
 const unitWord = (u: AxisUnit): string => AXIS_UNITS[getLanguage()][u];
 
 const MINUS = '−';
+const ICON_ATTRS = 'viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+const TRASH_ICON = `<svg ${ICON_ATTRS}><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>`;
+export const LOCATE_ICON = `<svg ${ICON_ATTRS}><circle cx="12" cy="12" r="6"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>`;
+const LOCATE_TIP = "Centres the map on this chart's pin. Press again to go to the next pin.";
 export function fmtMeasure(v: number, digits: number): string {
   if (!Number.isFinite(v)) return '\u2014';
   const text = v.toFixed(digits);
@@ -56,6 +60,8 @@ export interface MeasurePanelOptions {
   /** Whether the world has an ENSO climate layer (the basin indices and the thermocline anomaly are 0 without one). */
   hasLayer(): boolean;
   onRemove(itemId: string): void;
+  /** Centre the map on the chart (the next pin when `pin` is null, else that pin; basin charts go to their ocean box). */
+  onLocate(itemId: string, pin: number | null): void;
   onClear(): void;
 }
 
@@ -127,7 +133,9 @@ export function createMeasurePanel(o: MeasurePanelOptions): MeasurePanel {
       const key = el('span', { class: 'measure-key', 'aria-hidden': 'true' });
       key.style.setProperty('--line', line.color);
       if (line.dashed) key.dataset.dashed = 'true';
-      card.linesList.append(el('li', { class: 'measure-line', 'data-pin': line.n }, [key, el('span', { class: 'measure-line__name', text: line.name }), values]));
+      const where = item.basin ? null : el('button', { type: 'button', class: 'icon-btn measure-line__locate', 'data-testid': `measure-line-locate-${item.id}-${line.n}`, 'aria-label': `${t('Show on the map')}: #${line.n}`, 'data-tip-title': 'Show on the map', 'data-tip': LOCATE_TIP });
+      if (where) { where.innerHTML = LOCATE_ICON; where.addEventListener('click', () => o.onLocate(item.id, line.n)); }
+      card.linesList.append(el('li', { class: 'measure-line', 'data-pin': line.n }, [key, el('span', { class: 'measure-line__name', text: line.name }), values, where]));
       return spans;
     });
     card.observedValue = null;
@@ -142,9 +150,12 @@ export function createMeasurePanel(o: MeasurePanelOptions): MeasurePanel {
 
   function buildCard(item: MeasureItem): Card {
     const title = el('h3', { class: 'measure-card__title', id: `measure-title-${item.id}`, text: item.name });
-    const remove = el('button', { type: 'button', class: 'icon-btn measure-card__remove', 'data-testid': `measure-remove-${item.id}`, 'aria-label': `Remove ${item.name}`, title: `Remove ${item.name}` });
-    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>';
+    const remove = el('button', { type: 'button', class: 'icon-btn measure-card__act', 'data-testid': `measure-remove-${item.id}`, 'aria-label': t('Remove chart'), 'data-tip-title': 'Remove chart', 'data-tip': 'Takes this chart and its pins off the map.' });
+    remove.innerHTML = TRASH_ICON;
     remove.addEventListener('click', () => o.onRemove(item.id));
+    const locate = el('button', { type: 'button', class: 'icon-btn measure-card__act measure-card__locate', 'data-testid': `measure-locate-${item.id}`, 'aria-label': t('Show on the map'), 'data-tip-title': 'Show on the map', 'data-tip': LOCATE_TIP });
+    locate.innerHTML = LOCATE_ICON;
+    locate.addEventListener('click', () => o.onLocate(item.id, null));
     const unit = el('span', { class: 'measure-card__unit', text: plotUnits(item) });
     const linesList = el('ul', { class: 'measure-lines' });
     const plotsBox = el('div', { class: 'measure-plots' });
@@ -176,7 +187,7 @@ export function createMeasurePanel(o: MeasurePanelOptions): MeasurePanel {
       });
     });
     card.root = el('section', { class: 'measure-card', 'data-testid': `measure-card-${item.id}`, 'data-item': item.id, 'data-plots': item.plots.length, 'aria-labelledby': title.id }, [
-      el('header', { class: 'measure-card__head' }, [title, unit, remove]), linesList, plotsBox, card.note,
+      el('header', { class: 'measure-card__head' }, [title, unit, locate, remove]), linesList, plotsBox, card.note,
     ]);
     buildLines(card);
     byRoot.set(card.root, card);

@@ -6,11 +6,14 @@ import { isLake } from '../data/lakes';
 import { typhoonById } from '../data/typhoons';
 import { layerLegend, type LayerLegend } from '../render/fields';
 import { tickPosition } from './legend-scale';
+import { FINE_EDGES, FINE_RAMP } from '../render/dust-hexes';
 import { MapRenderer } from '../render/map';
 import type { MapOverlay } from '../render/overlay';
 import { wrapLon } from '../render/view';
+import { RESET_WAIT, replayWait, waitVerdict } from './replay-wait';
 import { SEAS, seaName } from '../data/seas';
 import { GENESIS_HOURS, GENESIS_THRESHOLD, TICKS_PER_HOUR, TOOLS, dayOfYear, historicEnvironmentReady, setHistoricEnvironment } from '../simulation/engine';
+import { pm25Band } from '../simulation/fine-dust';
 import { loadEnvironment } from '../data/environment';
 import { distanceKm } from '../simulation/geo';
 import { TRAFFIC_SPEED } from '../simulation/traffic';
@@ -38,6 +41,9 @@ import { createTutorial, shouldAutoStart } from './tutorial';
 import { initialiseLocation } from './initial-location';
 import { MEASURE_BY_ID, MEASURE_ITEMS, MEASURE_KEYS, ProbeBook, isMeasureId, pinStyle, type MeasureId } from './measure';
 import { createMeasurePanel } from './measure-panel';
+import { BASIN_SPOTS, createMeasureOnMap, type MeasureOnMap } from './measure-onmap';
+import { dockToPalette } from './dock';
+import { configureDragFocus } from './drag-focus';
 import { shortcutChar, speedKey } from './shortcuts';
 import { CLIMATE_ROWS, CONDITION_GROUPS, CYCLONE_PATH, FORMATION_TOOLS, PALETTE_TABS, FORMATION_KEYS, TOOL_KEYS, footerHtml, shellHtml, terrainIconSvg, toolIconSvg, type FormationToolId, type Terrain } from './shell';
 import { MAX_REPLAY_BYTES, actionKey, buildReplay, downloadJson, parseReplay, parseSeedParam, randomSeed, replayExportProblem } from './storage';
@@ -74,8 +80,8 @@ function storedShowPaths(): boolean {
 /** Label layers (city names, isobar values, sea names): UI-only, on by default, remembered per layer. */
 const LABEL_IDS = ['cities', 'isobars', 'seas'] as const;
 type LabelId = (typeof LABEL_IDS)[number];
-const labelKey = (id: LabelId) => `typhoon-lab-label-${id}`;
-function storedLabel(id: LabelId): boolean {
+const labelKey = (id: LabelId | 'graphs') => `typhoon-lab-label-${id}`;
+function storedLabel(id: LabelId | 'graphs'): boolean {
   try { return localStorage.getItem(labelKey(id)) !== 'off'; } catch { return true; }
 }
 
@@ -116,6 +122,18 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   const veil = ref('veil');
   const sidebar = ref('sidebar');
   const sidebarBesideMap = window.matchMedia('(min-width: 48rem)');
+  const stageWrap = root.querySelector<HTMLElement>('.stage-wrap')!;
+  let measureOnMap: MeasureOnMap | undefined;
+  // The notes stack sits on the palette; while an icon is dragged the palette gives way to a description card.
+  const undock = dockToPalette(stageWrap, ref('palette'), root.querySelector<HTMLElement>('.notes')!, root.querySelector<HTMLElement>('.brandbar')!);
+  configureDragFocus({
+    host: stageWrap,
+    announce: text => announce(text),
+    detail: b => {
+      const def = b.dataset.variant ? TOOL_BY_TYPE.get(b.dataset.variant as ToolType) : undefined;
+      return def ? `${t('Affected radius')} ${def.radiusKm} km` : '';
+    },
+  });
   /** Width of the map covered by the sidebar: none when it sits beside the stage, its full width when it overlays (phones). */
   const sidebarInset = (): number => {
     if (sidebar.hidden || sidebarBesideMap.matches) return 0;
@@ -150,6 +168,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     drag: null as { tool: ArmedTool; point: GeoPoint | null } | null,
     overlays: { ...DEFAULT_MAP_OVERLAYS },
     showRecordedPaths: storedShowPaths(),
+    /** The "Graphs on map" switch (Measure charts drawn beside their pins). */
+    graphsOnMap: storedLabel('graphs'),
     speed: DEFAULT_TIME_SPEED as TimeSpeed,
     clockHours: 0,
     playing: true,
@@ -201,6 +221,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   const rankedKeys = new Map<number, string>();
   const rankedDisasters = new Map<string, string>();
   let expectTimer = 0;
+  let expectLastProgress = 0;
   let toastTimer = 0;
   /** Phones show the starting hint for a few seconds only; this stays true once it has timed out. */
   let hintDismissed = false;
@@ -321,6 +342,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       const note = layerLegend('rain').note;
       rainTip.setAttribute('data-tip', sample.snowCm >= 1 ? `${note} · ${sample.snowCm.toFixed(0)} cm on ground` : note);
     }
+    setLegendValue('finedust', `${sample.pm25.toFixed(0)} µg/m³ · ${pm25Band(sample.pm25)}`, sample.pm25);
+    setLegendValue('yellowdust', `${(sample.dust * 100).toFixed(0)}%`, sample.dust * 100);
     setLegendValue('pressure', `${sample.pressure.toFixed(0)} hPa`, sample.pressure);
     setLegendValue('temperature', sample.land ? '—' : `${sample.temperature.toFixed(1)} °C`, sample.land ? NaN : sample.temperature);
     setLegendValue('airTemperature', `${sample.airTemperature.toFixed(1)} °C`, sample.airTemperature);
@@ -508,9 +531,19 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       el('span', { class: 'legend__base-text' }, [localizedText(ui.overlays.wind ? 'Moving streaks show wind.' : 'Wind streaks are hidden.')]),
       el('span', { class: 'legend__value legend__readout', 'data-legend-value': true }, [windValue.speed, windValue.vertical]),
     ])];
-    for (const id of ['humidity', 'rain', 'pressure', 'temperature', 'population'] as const) {
-      if (!ui.overlays[id]) continue;
-      const legend = id === 'humidity' ? {
+    for (const id of ['humidity', 'rain', 'finedust', 'yellowdust', 'pressure', 'temperature', 'population'] as const) {
+      if (!ui.overlays[id === 'yellowdust' ? 'finedust' : id]) continue;
+      const legend = id === 'finedust' ? {
+        title: 'Fine dust (PM2.5)', unit: 'µg/m³',
+        gradient: `linear-gradient(to right, ${FINE_RAMP.map((c, i) => `${c} ${(i / FINE_RAMP.length) * 100}% ${((i + 1) / FINE_RAMP.length) * 100}%`).join(', ')})`,
+        ticks: FINE_EDGES.map((edge, i) => ({ label: String(Math.floor(edge)), pos: i / FINE_RAMP.length })),
+        note: 'Small hexagons show where fine particles (PM2.5) from cities drift with the wind. The colour steps from cream through orange and red to deep purple as the concentration rises; hexagons appear from 12 µg/m³.',
+      } : id === 'yellowdust' ? {
+        title: 'Yellow dust', unit: '%',
+        gradient: 'linear-gradient(to right, rgba(230,196,84,0.25), rgba(230,196,84,0.42) 50%, rgba(230,196,84,0.6))',
+        ticks: [{ label: '12', pos: 0 }, { label: '50', pos: 0.5 }, { label: '100', pos: 1 }],
+        note: 'Small, spaced sand-yellow hexagons show the extent of a yellow dust event. Darker is denser.',
+      } : id === 'humidity' ? {
         title: 'Humidity', unit: '%',
         gradient: 'linear-gradient(to right, var(--ramp-humidity-0), var(--ramp-humidity-1) 50%, var(--ramp-humidity-2))',
         ticks: [{ label: '0', pos: 0 }, { label: '50', pos: 0.5 }, { label: '100', pos: 1 }],
@@ -518,7 +551,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       } : layerLegend(id);
       const row = el('div', { class: 'legend__item', testid: `legend-${id}` });
       const value = el('span', { class: 'legend__value', 'data-legend-value': true, text: legend.unit });
-      const info = id === 'humidity' || id === 'rain' || id === 'pressure' || id === 'temperature'
+      const info = id === 'humidity' || id === 'rain' || id === 'finedust' || id === 'yellowdust' || id === 'pressure' || id === 'temperature'
         ? el('button', { type: 'button', class: 'legend__info', 'aria-label': legend.title, 'data-tip-title': legend.title, 'data-tip': legend.note, text: '?' })
         : null;
       if (id === 'rain') rainTip = info;
@@ -1257,6 +1290,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       'measure-formation': 'The typhoon formation score. A storm can start once the line passes the formation threshold. Over land it is 0.',
       'measure-thermocline': 'How deep the boundary between warm surface water and cold deep water lies, and how far that is from normal. It works only in the equatorial Pacific, 120°E to 80°W, and shows an ocean wave passing as the depth rises and falls.',
       'measure-nino34': 'How much warmer or colder than normal the central Pacific is. Above +0.5 counts as El Niño and below −0.5 as La Niña; both lines are drawn. It covers the whole Pacific, so drop it anywhere.',
+      'measure-fine-dust': 'The fine dust (PM2.5) concentration at the pin, in µg/m³. Lines mark the air quality bands. It reads 0 where there is no fine dust, so the line stays continuous. It has no shortcut key.',
       'measure-soi-wwv': 'Two plots for the whole Pacific, so drop it anywhere: the Southern Oscillation Index (the pressure difference across the Pacific) and the warm water volume (the warm water stored in the upper ocean) as a change from normal.',
     };
     const measureItems = MEASURE_ITEMS.map(m => `
@@ -1265,7 +1299,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         <span class="help-tool__text">
           <span class="help-tool__condition" data-help-measure="${m.id}"><strong>${m.name}</strong><span>${[...new Set(m.plots.map(pl => pl.unit))].join(' · ')}</span><span>${measureMeaning[m.id]}</span></span>
         </span>
-        <kbd class="help-key">${m.key.toUpperCase()}</kbd>
+        ${m.key ? `<kbd class="help-key">${m.key.toUpperCase()}</kbd>` : ''}
       </li>`).join('');
     const formationItems = FORMATION_TOOLS.map((f, i) => {
       const entry = DISASTER_HELP.find(d => d.kind === f.kind)!;
@@ -1294,7 +1328,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <li>Wait. Overlapping conditions accumulate time, then a depression forms. Several separate spots can each make their own storm.</li>
           <li>Young depressions strengthen and their circulation grows. <strong>High pressure</strong> changes the flow around them and steers them.</li>
         </ol>
-        <p>Open Formation for typhoons, blizzards, tornadoes, heatwaves, droughts, downpours, cold waves, hail, yellow dust and wind gusts. Tap a map spot to prepare the conditions. The seven weather phenomena begin after six model hours.</p>
+        <p>Open Formation for typhoons, blizzards, tornadoes, heatwaves, droughts, downpours, cold waves, hail, yellow dust, wind gusts and fine dust. Tap a map spot to prepare the conditions. The eight weather phenomena begin after six model hours.</p>
         <p>Open Typhoon experience or Climate experience in the palette to start a past typhoon or a climate scenario with one click, or drag its tile onto the map.</p>
         <h3 class="dialog__sub">Time</h3>
         <p>Use the arrows to choose a speed. Real time runs the world at the speed of the clock. 10m/s is 10 minutes of world time per second, 30m/s is 30 minutes, 1h/s is 1 hour, 2h/s is 2 hours and 4h/s is 4 hours; 1d/s, 2d/s and 7d/s are 1, 2 and 7 days per second. Number keys 1–9 select the same nine steps, - and + step slower and faster, and the \` key (₩ on a Korean keyboard) resets the speed. Reset speed returns to 10m/s without changing the world or pause state.</p>
@@ -1302,14 +1336,14 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         <p class="fine">At 7d/s the weather is not calculated. The world runs on the fast climate calculation instead: the map, the date and the seasons keep changing, but active storms and tools end without further damage. New storms can form again after you slow down. A world that started from live weather continues on the base climate from then on. See Long-term simulation in the Climate tab.</p>
         <h3 class="dialog__sub">The map</h3>
         <ul class="help__list">
-          <li>The map is a globe by default: drag to rotate it and use the wheel or pinch to zoom. Switch Globe view off in the right panel for the flat Equal Earth map.</li>
+          <li>The map is a globe by default: drag to rotate it and use the wheel or pinch to zoom. Turn Globe view off in Map mode, at the top of the right panel, for the flat Equal Earth map.</li>
           <li>Open the right panel for the storm list, forming patches, news and replay files. Pan and zoom freely: the weather freezes while you move the camera and catches up when you let go.</li>
           <li>Toggle wind streaks, humidity colours, rainfall, pressure lines, a light sea-temperature tint and population independently.</li>
           <li>Humidity colours the wind streaks: higher humidity is brighter. Turn on Wind to see the colours.</li>
           <li>Choose a nickname in the Ranking tab to appear on the online leaderboard. Nicknames are public.</li>
         </ul>
         <h3 class="dialog__sub">Without a mouse</h3>
-        <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L and ; select the formation tools in order, and Z, X, C, V, B, N, M, comma, period and slash select the measurement tools. 1–9 set the speed steps, - and + step it slower and faster, and \` (₩ on a Korean keyboard) resets it to 10m/s. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
+        <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L, ; and ' select the formation tools in order, and Z, X, C, V, B, N, M, comma, period and slash select the measurement tools. 1–9 set the speed steps, - and + step it slower and faster, and \` (₩ on a Korean keyboard) resets it to 10m/s. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
         <p class="fine">Shortcuts work from anywhere on the page, except while you type in a field or a dialog is open; with a button or tab focused, Space and Enter press it instead of playing or pausing.</p>`,
       conditions: `
         <p>The bottom palette has seven paired condition buttons. The large icon is the selected setting; the small faded icon shows the opposite. Click or tap once to select, then again to switch, or use Q–U. Drag the large icon onto the map.</p>
@@ -1381,7 +1415,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <dd>Polar cooling chills the sea and air poleward of about 35° latitude, so storms that curve out of the tropics weaken sooner. Polar warming does the reverse. The effect is full strength from about 50°.</dd>
         </dl>
         <h3 class="dialog__sub">Scenarios</h3>
-        <p>The Climate experience tab of the palette loads a historic El Niño or La Niña: press a tile, or drag it onto the map. The world jumps to 1 January of that year, storms, weather hazards and tools already running carry on as they are, and the Pacific starts in the ocean state of the time, with the winds that drove the event added by date. The speed is set to 1d/s so that the weather runs, and Natural typhoon formation is on while the scenario is loaded. Watch it on the map and in the Measure tab. You can change the speed afterwards: at 7d/s the weather is not calculated, so storms and the events below do not form, but the record of real events still appears.</p>
+        <p>The Climate experience tab of the palette loads a historic El Niño or La Niña: press a tile, or drag it onto the map. The world jumps to 1 January of that year, storms, weather hazards and tools already running carry on as they are, and the Pacific starts in the ocean state of the time, with the winds that drove the event added by date. The speed is set to 4h/s so that the weather runs, and Natural typhoon formation is on while the scenario is loaded. Watch it on the map and in the Measure tab. You can change the speed afterwards: at 7d/s the weather is not calculated, so storms and the events below do not form, but the record of real events still appears.</p>
         <p>While a scenario is loaded the model starts weather disasters by itself where its own climate calls for them. During an El Niño these are heavy rain on coastal Peru and Ecuador, in East Africa and in the southern United States, and drought or heat in Indonesia, Australia, India and southern Africa. A La Niña brings the opposite pattern: heavy rain in eastern Australia, Indonesia, South Asia and Colombia, and drought in the Horn of Africa and the southwestern United States. Each event follows the sea temperature, air temperature or humidity of its place, so it stops when the anomaly does. The News tab marks it as El Niño or La Niña, and its damage is counted like any other disaster. A place rests for several weeks after an event, and at most four run at once.</p>
         <p>The News tab also posts real events of the period on their dates, marked as a historical record. They are not model results, cause no damage here and appear at every speed. Click such an item to see its place on the map.</p>
         <p>The Niño 3.4 chart draws the real monthly values of the same months as a dashed line labelled Observed, so you can compare. The slider and your conditions still work on a running scenario, and the model goes on by itself once the script ends.</p>
@@ -1572,7 +1606,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     ui.expectSig = actionsSig(r.actions);
     ui.expectTrafficSig = JSON.stringify(r.trafficDispatches ?? []);
     // The worker keeps its previous play state if it rejects the replay, so only pause once it accepts.
-    arm('replay');
+    arm('replay', r.untilTick);
     setReplayMessage('Re-running the replay on the simulation…', 'info');
     post({ type: 'replay', seed: r.seed, actions: r.actions, untilTick: r.untilTick, startDayOfYear: r.startDayOfYear, trafficDispatches: r.trafficDispatches, initialWeather: r.initialWeather });
     renderClock();
@@ -1596,18 +1630,25 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
 
   // ---- worker traffic ----------------------------------------------------------------------
   /** Wait for the answer to reset/replay and ignore stale states from before it. */
-  function arm(kind: Expect): void {
+  function arm(kind: Expect, untilTick = 0): void {
     ui.expect = kind;
     syncClimateDisabled();
     window.clearTimeout(expectTimer);
-    expectTimer = window.setTimeout(() => {
-      if (ui.expect === kind && kind !== 'normal') {
-        ui.expect = 'normal';
-        syncClimateDisabled();
-        toast('The simulation did not answer in time. Try again.', 'error');
-        if (kind === 'replay') setReplayMessage('The simulation did not answer in time.', 'error');
-      }
-    }, 15_000);
+    const limits = kind === 'replay' ? replayWait(untilTick) : RESET_WAIT;
+    const startedAt = performance.now();
+    expectLastProgress = startedAt;
+    const check = (): void => {
+      if (ui.expect !== kind || kind === 'normal') return;
+      const now = performance.now();
+      const verdict = waitVerdict(now, startedAt, expectLastProgress, limits);
+      if (verdict === 'wait') { expectTimer = window.setTimeout(check, 1000); return; }
+      ui.expect = 'normal';
+      syncClimateDisabled();
+      const text = verdict === 'stalled' ? 'The simulation did not answer in time.' : 'The simulation took too long.';
+      toast(`${text} Try again.`, 'error');
+      if (kind === 'replay') setReplayMessage(text, 'error');
+    };
+    expectTimer = window.setTimeout(check, 1000);
   }
 
   /** Gate a worker state; returns false for stale states that predate a pending reset or replay. */
@@ -1662,6 +1703,11 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     } else if (msg.type === 'progress') {
       ui.clockHours = msg.clockHours;
       renderClockText();
+    } else if (msg.type === 'replay-progress') {
+      if (ui.expect === 'replay' && msg.untilTick === ui.expectUntil) {
+        expectLastProgress = performance.now();
+        toast(`Loading replay… ${Math.min(99, Math.floor(100 * msg.tick / Math.max(1, msg.untilTick)))}%`, 'info', 4000);
+      }
     } else if (msg.type === 'placement') {
       ui.placementQueue.shift()?.(msg.result);
     } else if (msg.type === 'speed') {
@@ -1959,7 +2005,50 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   });
 
   // ---- measure tab -------------------------------------------------------------------------
+  const pinCycle = new Map<string, number>();
+  let flashTimer = 0;
+  /** A ring (or the Niño 3.4 outline) that marks the place for a moment; a DOM overlay, so the renderer is untouched. */
+  function flashAt(lon: number, lat: number, box?: [number, number, number, number]): void {
+    const view = renderer?.view;
+    if (!view) return;
+    stageWrap.querySelector('.locate-flash')?.remove();
+    window.clearTimeout(flashTimer);
+    const mark = el('div', { class: 'locate-flash', 'aria-hidden': 'true' });
+    const at = view.lonLatToPx(lon, lat);
+    if (!at || !Number.isFinite(at[0]) || !Number.isFinite(at[1])) return;
+    const [x, y] = at;
+    const left = stage.offsetLeft, top = stage.offsetTop;
+    if (box) {
+      const a = view.lonLatToPx(box[0], box[1]), b = view.lonLatToPx(box[2], box[3]);
+      if (!a || !b || ![...a, ...b].every(Number.isFinite)) return;
+      const [x0, y0] = a, [x1, y1] = b;
+      mark.classList.add('locate-flash--box');
+      Object.assign(mark.style, { left: `${left + Math.min(x0, x1)}px`, top: `${top + Math.min(y0, y1)}px`, width: `${Math.abs(x1 - x0)}px`, height: `${Math.abs(y1 - y0)}px` });
+    } else Object.assign(mark.style, { left: `${left + x}px`, top: `${top + y}px` });
+    stageWrap.append(mark);
+    flashTimer = window.setTimeout(() => mark.remove(), 1600);
+  }
+  /** Centres the map on a chart: its pin (the next one on each repeat, or the given pin), or the ocean box of a basin chart. Phones: the sidebar closes so the map shows. */
+  function locateMeasure(id: string, pin: number | null): void {
+    const view = renderer?.view;
+    if (!view) return;
+    const basin = BASIN_SPOTS[id];
+    let spot: { lon: number; lat: number; box?: [number, number, number, number] } | undefined = basin;
+    if (!spot) {
+      const ns = [...(probes.charts.get(id) ?? [])].sort((a, b) => a - b);
+      if (!ns.length) return;
+      const n = pin ?? ns[(pinCycle.get(id) ?? -1) + 1 >= ns.length ? 0 : (pinCycle.get(id) ?? -1) + 1];
+      pinCycle.set(id, Math.max(0, ns.indexOf(n)));
+      const found = probes.pins.find(p => p.n === n);
+      if (!found) return;
+      spot = { lon: found.lon, lat: found.lat };
+    }
+    view.centerOn(spot.lon, spot.lat);
+    if (!sidebarBesideMap.matches && !sidebar.hidden) setSidebar(false);
+    requestAnimationFrame(() => flashAt(spot!.lon, spot!.lat, spot!.box));
+  }
   const measurePanel = createMeasurePanel({
+    onLocate: locateMeasure,
     cards: ref('measureCards'),
     hint: ref('measureHint'),
     clear: ref<HTMLButtonElement>('measureClear'),
@@ -1980,6 +2069,31 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     },
   });
   document.addEventListener('visibilitychange', measurePanel.refresh);
+
+  /** Opens the sidebar on the Measure tab, at the card of `id` when given. */
+  function openMeasureAt(id: string | null): void {
+    setSidebar(true);
+    if (ui.tab !== 'measure') activateTab('measure'); else measurePanel.refresh();
+    if (!id) return;
+    // The cards are built on the next frame once the tab is visible.
+    requestAnimationFrame(() => requestAnimationFrame(() => ref('measureCards').querySelector(`[data-item="${id}"]`)?.scrollIntoView({ block: 'start' })));
+  }
+
+  // Graphs on the map itself, beside the measured pins that are on screen.
+  const onMapHost = el('div', { class: 'onmap-graphs', 'data-testid': 'onmap-graphs', hidden: true });
+  stage.append(onMapHost);
+  const OBSTACLES = '.brandbar, .clockbar, .zoom, .sidebar-toggle, .palette, .notes > *, .legend-chip, [data-testid="coords"], [data-testid="legend"], .damage-hud, .historic-hud, .tutorial';
+  measureOnMap = createMeasureOnMap({
+    host: onMapHost,
+    book: probes,
+    view: () => renderer?.view ?? null,
+    enabled: () => ui.graphsOnMap && (sidebarBesideMap.matches || sidebar.hidden),
+    obstacles: () => [...root.querySelectorAll<HTMLElement>(OBSTACLES)].filter(n => !n.hidden && getComputedStyle(n).visibility !== 'hidden').map(n => n.getBoundingClientRect()).filter(r => r.width > 0 && r.height > 0),
+    onLocate: locateMeasure,
+    onOpen: openMeasureAt,
+  });
+  const onMapFree = new ResizeObserver(() => measureOnMap?.invalidate());
+  for (const node of root.querySelectorAll('.notes, .palette, .map-status, .clockbar, .brandbar, .legend')) onMapFree.observe(node);
 
   /** Drops a measurement: puts the pin on the map, records the first value now and shows the graphs. */
   function addProbe(id: MeasureId, lon: number, lat: number): void {
@@ -2099,12 +2213,13 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   });
   renderPathToggle();
   for (const button of root.querySelectorAll<HTMLButtonElement>('[data-label]')) {
-    const id = button.dataset.label as LabelId;
+    const id = button.dataset.label as LabelId | 'graphs';
     button.setAttribute('aria-pressed', String(storedLabel(id)));
     button.addEventListener('click', () => {
       const on = button.getAttribute('aria-pressed') !== 'true';
       button.setAttribute('aria-pressed', String(on));
       try { localStorage.setItem(labelKey(id), on ? 'on' : 'off'); } catch { /* storage is optional */ }
+      if (id === 'graphs') { ui.graphsOnMap = on; measureOnMap?.invalidate(); return; }
       renderer?.setLabels({ [id]: on });
     });
   }
@@ -2113,7 +2228,6 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   function renderGlobeToggle(): void {
     const on = renderer?.mode === 'globe';
     globeToggle.setAttribute('aria-checked', String(on));
-    setText(globeToggle, on ? 'On' : 'Off');
     if (renderer?.kind === 'canvas') globeToggle.setAttribute('aria-disabled', 'true');
   }
   globeToggle.addEventListener('click', () => {
@@ -2556,6 +2670,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     raf = requestAnimationFrame(loop);
     if (!renderer?.isInteracting) applyPending();
     renderer?.frame(now);
+    measureOnMap?.update();
     syncTrafficView(now);
     if (selectedTrafficId && now - trafficPopupAt > 150) { trafficPopupAt = now; renderTrafficPopup(); }
     if (spotAt) positionSpot();
@@ -2588,6 +2703,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       get renderer() { return renderer?.kind ?? 'none'; },
       get speed() { return ui.speed; },
       /** Measure tab probes: pin numbers and places, and the charts' item ids. */
+      /** Cost of the on-map graph placement: runs, total and last milliseconds. */
+      get onMapStats() { return measureOnMap?.stats() ?? null; },
       get probes() { return { pins: probes.pins.map(p => ({ ...p })), charts: [...probes.charts.keys()] }; },
     },
   });
@@ -2601,6 +2718,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       window.removeEventListener('keydown', onKey);
       document.removeEventListener('visibilitychange', measurePanel.refresh);
       measurePanel.dispose();
+      undock();
+      onMapFree.disconnect();
       window.removeEventListener('resize', refreshOverlay);
       renderer?.dispose();
       worker.terminate();

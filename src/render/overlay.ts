@@ -11,6 +11,7 @@ import { GENESIS_HOURS, stageRank } from '../simulation/engine';
 import { estimateCityDamage } from '../simulation/damage-news';
 import { fmtMoneyCompact } from '../ui/dom';
 import { drawTraffic, type TrafficCounts, type TrafficMarker } from './traffic';
+import { drawDustHexes, dustHexesFor } from './dust-hexes';
 import { drawWeatherHazards } from './weather-hazards';
 import type { Effect, GameState, GeoPoint, MapOverlays, Storm, StormRecord, Thunderstorm, ToolDefinition, ToolType } from '../types';
 import { type Contours, type FieldData, type Isobar } from './fields';
@@ -190,6 +191,7 @@ export class OverlayPainter {
     this.graticule(view);
     this.referenceParallels(view);
     this.coastline(view);
+    if (state) drawDustHexes(ctx, view, dustHexesFor(state, _field, overlays.finedust, view));
     if (state?.weatherHazards?.length) drawWeatherHazards(ctx, view, state.weatherHazards, this.theme.font, this.theme.paper);
     // Pass 1: reference-parallel, storm and isobar labels claim their rectangles first, without drawing, so cities and places yield to them.
     const parallelLabels = this.referenceParallelLabelLayout(view, overlay.rightInset);

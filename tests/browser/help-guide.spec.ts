@@ -35,7 +35,7 @@ test('condition text and all disaster guides translate independently in every la
     await page.getByTestId('help-tab-disasters').click();
     const disasters = page.getByTestId('help-panel-disasters');
     await expect(disasters).toBeVisible();
-    await expect(disasters.locator('[data-help-disaster]')).toHaveCount(11);
+    await expect(disasters.locator('[data-help-disaster]')).toHaveCount(12);
     const disasterText = await disasters.locator('[data-help-disaster]').evaluateAll(entries => entries.map(entry => ({
       kind: entry.getAttribute('data-help-disaster'), text: [entry.querySelector('h3 span')!.textContent!.trim(),
         entry.querySelector('p span')!.textContent!.trim(), entry.querySelector('p:last-child')!.textContent!.trim()],

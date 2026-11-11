@@ -17,7 +17,7 @@ export interface Scenario {
   description: string; populationNote: string; sources: { name: string; url: string; license: string }[];
 }
 export type ToolType = 'warm' | 'moisture' | 'low' | 'high' | 'warm-air' | 'updraft' | 'cool' | 'dry' | 'cold-air' | 'downdraft' | 'low-shear' | 'high-shear' | 'unstable-air' | 'stable-air';
-export type WeatherHazardKind = 'heatwave' | 'drought' | 'downpour' | 'coldwave' | 'hail' | 'dust' | 'gust';
+export type WeatherHazardKind = 'heatwave' | 'drought' | 'downpour' | 'coldwave' | 'hail' | 'dust' | 'gust' | 'finedust';
 export type FormationKind = 'typhoon' | 'blizzard' | 'tornado' | WeatherHazardKind;
 export interface WeatherHazard extends GeoPoint {
   id: number; kind: WeatherHazardKind; radiusKm: number; ageHours: number; durationHours: number; intensity: number; directionRad: number;
@@ -37,8 +37,8 @@ export interface DisasterRecord extends GeoPoint {
 }
 export type Layer = 'wind' | 'pressure' | 'temperature' | 'population' | 'rain';
 /** Independent map overlays. */
-export interface MapOverlays { wind: boolean; humidity: boolean; rain: boolean; pressure: boolean; temperature: boolean; population: boolean; ships: boolean; planes: boolean }
-export const DEFAULT_MAP_OVERLAYS: Readonly<MapOverlays> = { wind: true, humidity: true, rain: true, pressure: true, temperature: true, population: true, ships: true, planes: true };
+export interface MapOverlays { wind: boolean; humidity: boolean; rain: boolean; finedust: boolean; pressure: boolean; temperature: boolean; population: boolean; ships: boolean; planes: boolean }
+export const DEFAULT_MAP_OVERLAYS: Readonly<MapOverlays> = { wind: true, humidity: true, rain: true, finedust: true, pressure: true, temperature: true, population: true, ships: true, planes: true };
 export interface ToolDefinition { type: ToolType; name: string; radiusKm: number; durationHours: number; description: string }
 export type TrafficKind = 'ships' | 'planes';
 export interface TrafficVehicle extends GeoPoint {
@@ -63,7 +63,9 @@ export interface EnvironmentCell extends GeoPoint { land: boolean; temperature: 
   /** Snow lying on the ground (cm). Persistent; built up by snowfall and melted by warm air during simulation steps. */
   snowCm: number;
   /** Convective potential (0 = none; >= 1 lets thunderstorms start). Player-driven: zero in an untouched world. */
-  convection: number }
+  convection: number;
+  /** Fine particulate matter PM2.5 (µg/m³) carried by the wind; 0 unless a fine-dust event has run. */
+  pm25: number }
 /** Hourly observations plus every stage change, birth and ending. */
 export interface StormSample extends GeoPoint {
   hour: number; wind: number; pressure: number; stage: string; grade: number;
@@ -227,6 +229,8 @@ export interface GameState {
   phase: 'seeding' | 'active'; score: number; exposedPopulation: number;
   storms: Storm[]; remnants: Remnant[]; stormArchive: StormRecord[]; thunderstorms: Thunderstorm[]; nextThunderstormId: number; candidates: GenesisCandidate[]; effects: Effect[]; grid: EnvironmentCell[]; cities: CityImpact[];
   weatherHazards: WeatherHazard[];
+  /** Grid rows (south, north) that may hold fine dust; absent when the whole field is clean, so plain worlds skip the tracer. */
+  fineDustRows?: [number, number];
   disasters?: DisasterRecord[];
   news: NewsItem[]; actions: ActionRecord[]; peakWind: number;
   /** Number of blizzard cells after the latest refresh (used to detect world-wide onset). */
@@ -253,6 +257,8 @@ export type WorkerResponse =
   | { type: 'state'; state: GameState; clockHours: number }
   | { type: 'interaction'; active: boolean; state: GameState; clockHours: number }
   | { type: 'progress'; clockHours: number }
+  /** A replay being rebuilt reached `tick` of `untilTick`. */
+  | { type: 'replay-progress'; tick: number; untilTick: number }
   | { type: 'placement'; result: PlacementResult }
   /** The worker changed the time speed by itself (the run's fast climate time is used up). */
   | { type: 'speed'; speed: number }

@@ -29,6 +29,9 @@ export const DISASTER_HELP = [
   { kind: 'dust', name: 'Yellow dust',
     conditions: 'Dry air and stable air over land.',
     description: 'A dry, windy dust area moves with the flow. It reduces visibility and disrupts outdoor work and transport. A nearby low-pressure area changes the wind.' },
+  { kind: 'finedust', name: 'Fine dust',
+    conditions: 'A populated area, high pressure, weak wind and stable air. Dry air keeps it from clearing.',
+    description: 'Fine particles (PM2.5) from traffic, industry and heating build up in stagnant air and are carried downwind, so a city can pollute places far away. Rain, strong wind and unstable air clear them. It harms health rather than property.' },
   { kind: 'gust', name: 'Wind gust',
     conditions: 'Moisture and downdraft.',
     description: 'A short burst of strong wind with a local pressure rise. It damages trees and buildings and can put ships and flights at risk.' },
@@ -38,4 +41,4 @@ export const DISASTER_HELP = [
 ] as const satisfies readonly { kind: FormationKind | DisasterKind; name: string; conditions: string; description: string }[];
 
 export const DISASTER_HELP_INTRO = 'These descriptions explain disasters in this simulation. Choose a disaster in Formation and place its recipe on the map. The required stack adapts to the location.';
-export const DISASTER_HELP_TIMING = 'Heatwaves, droughts, downpours, cold waves, hail, yellow dust and wind gusts begin six model hours after their recipe is placed. Typhoons, blizzards and tornadoes form as their conditions develop. Thunderstorms can also grow from placed conditions.';
+export const DISASTER_HELP_TIMING = 'Heatwaves, droughts, downpours, cold waves, hail, yellow dust, wind gusts and fine dust begin six model hours after their recipe is placed. Typhoons, blizzards and tornadoes form as their conditions develop. Thunderstorms can also grow from placed conditions.';

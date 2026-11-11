@@ -1,4 +1,5 @@
 import type { GeoPoint } from '../types';
+import { hideDragFocus, showDragFocus } from './drag-focus';
 
 export interface PaletteHandlers<T extends string> {
   /** Geographic point under the pointer if it is over the map itself (not over a floating control). */
@@ -33,6 +34,7 @@ export function attachPalette<T extends string>(buttons: Map<T, HTMLButtonElemen
     drag.ghost?.remove();
     drag.button.classList.remove('is-dragging');
     document.documentElement.classList.remove('is-tool-dragging');
+    hideDragFocus();
     try { drag.button.releasePointerCapture(drag.pointerId); } catch { /* already released */ }
     return drag;
   };
@@ -85,6 +87,7 @@ export function attachPalette<T extends string>(buttons: Map<T, HTMLButtonElemen
       document.body.append(drag.ghost);
       drag.button.classList.add('is-dragging');
       document.documentElement.classList.add('is-tool-dragging');
+      showDragFocus(drag.button);
       handlers.onDragStart(drag.tool);
     }
     ev.preventDefault();

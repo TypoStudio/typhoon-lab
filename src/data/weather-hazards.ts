@@ -2,10 +2,10 @@ import type { ToolType, WeatherHazardKind } from '../types';
 
 interface HazardDefinition {
   name: string; radiusKm: number; durationHours: number; buildupHours: number; damage: number; pressureHpa: number;
-  anchor: ToolType; landOnly: boolean; moves: boolean; color: string; iconPath: string; impact: string;
+  anchor: ToolType; landOnly: boolean; minPopulation?: number; moves: boolean; color: string; iconPath: string; impact: string;
 }
 
-/** Display and gameplay constants; all seven phenomena use the same recipe/replay pipeline. */
+/** Display and gameplay constants; all eight phenomena use the same recipe/replay pipeline. */
 export const WEATHER_HAZARDS = {
   heatwave: { name: 'Heatwave', radiusKm: 450, durationHours: 72, buildupHours: 12, damage: 0.025, pressureHpa: 12,
     anchor: 'warm-air', landOnly: false, moves: false, color: '#f4a259',
@@ -35,6 +35,10 @@ export const WEATHER_HAZARDS = {
     anchor: 'downdraft', landOnly: false, moves: true, color: '#b5dddb',
     iconPath: 'M2 5h13a3 3 0 1 0-3-3M2 11h17a3 3 0 1 1-3 3M3 18h8M16 17v6M13 20l3 3 3-3',
     impact: 'Sudden strong gusts bring down trees and damage buildings.' },
+  finedust: { name: 'Fine dust', radiusKm: 600, durationHours: 96, buildupHours: 12, damage: 0, pressureHpa: 6,
+    anchor: 'high', landOnly: false, minPopulation: 500_000, moves: false, color: '#8c7a68',
+    iconPath: 'M3 8h13a3 3 0 1 0-3-3M3 13h17a3 3 0 1 1-3 3M3 18h8M6 3h.1M10 21h.1M16 21h.1M21 8h.1',
+    impact: 'Fine particles from traffic, industry and heating build up in still air and drift downwind, harming health.' },
 } as const satisfies Record<WeatherHazardKind, HazardDefinition>;
 
 export const WEATHER_HAZARD_KINDS = Object.keys(WEATHER_HAZARDS) as WeatherHazardKind[];

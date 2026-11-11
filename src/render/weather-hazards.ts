@@ -19,7 +19,8 @@ export function drawWeatherHazards(ctx: CanvasRenderingContext2D, view: MapCamer
     // Feather in geographic distance so the tint follows the surface on both maps,
     // including partially visible events at the globe's horizon.
     let opacity = 0;
-    for (let band = FOOTPRINT_BANDS; band > 0; band--) {
+    // Dust extents are drawn as hexagons (dust-hexes.ts), so no smooth footprint under them.
+    for (let band = hazard.kind === 'dust' || hazard.kind === 'finedust' ? 0 : FOOTPRINT_BANDS; band > 0; band--) {
       const radius = band / FOOTPRINT_BANDS;
       const next = 0.12 * hazard.intensity * (1 - smoothstep(0.2, 1, (band - 0.5) / FOOTPRINT_BANDS));
       if (next <= opacity) continue;

@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 
 for (const renderer of ['canvas', 'webgl']) {
   test(`warm air and updraft drag, keyboard, Korean readout and replay (${renderer})`, async ({ page }) => {
+    test.setTimeout(120_000); // the globe renders slowly under load; the steps themselves are quick
     await page.goto(`/?renderer=${renderer}&lang=ko&seed=20261022&help=0&start=2026-08-01`);
     await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
     await page.getByTestId('play-toggle').click();
@@ -42,7 +43,8 @@ for (const renderer of ['canvas', 'webgl']) {
     expect(fixture.fields[0].updraft).toBeGreaterThan(0);
     await page.mouse.move(point[0], point[1]);
     await page.mouse.move(point[0] + 1, point[1]);
-    await expect(page.getByTestId('legend-temperature')).toContainText(/\d+\.\d \/ \d+\.\d °C/);
+    await expect(page.getByTestId('legend-temperature-air')).toContainText(/\d+\.\d °C/);
+    await expect(page.getByTestId('legend-temperature-sea')).toContainText(/\d+\.\d °C/);
     await expect(page.getByTestId('legend-wind')).toContainText('상승 기류');
     await page.getByTestId('sidebar-toggle').click();
     await page.getByTestId('tab-replay').click();

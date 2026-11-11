@@ -193,6 +193,7 @@ test('worker pauses explicitly, rejects malformed replay, and resets into a live
 });
 
 test('an empty live world keeps running beyond the old round deadline', async ({ page }) => {
+  // 1d/s: 180 h at the old 4h/s step would need 45 s, longer than the 30 s deadline below.
   const result = await page.evaluate(async () => {
     const worker = new Worker('/src/worker.ts', { type: 'module' });
     try {
@@ -206,7 +207,7 @@ test('an empty live world keeps running beyond the old round deadline', async ({
           }
         };
         worker.postMessage({ type: 'init' });
-        worker.postMessage({ type: 'speed', speed: 14_400 });
+        worker.postMessage({ type: 'speed', speed: 86_400 });
       });
     } finally { worker.terminate(); }
   });
