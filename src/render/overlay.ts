@@ -125,6 +125,10 @@ export class OverlayPainter {
   /** Whole isobars as unit vectors (xyz per vertex), for the globe. */
   private readonly isobarUnits = new WeakMap<Isobar, Float32Array>();
   private readonly occ = new LabelOccupancy();
+  /** Boxes of disaster objects drawn this frame (storm glyphs and labels, the start of a forecast, thunderstorms, hazards, formation candidates, the reticle). */
+  private readonly hard: Rect[] = [];
+  /** Bumped on every draw, so a reader knows the boxes may have changed. */
+  drawRev = 0;
   /** Real frame time when a placed condition first appeared, independent of simulation speed. */
   private readonly effectPlacedAt = new Map<number, number>();
   private readonly effectScale = new Map<number, { from: number; to: number; startedAt: number }>();
@@ -137,6 +141,9 @@ export class OverlayPainter {
     if (!ctx) throw new Error('Canvas 2D is not available.');
     this.ctx = ctx;
   }
+
+  /** What was drawn last frame, in canvas pixels: `hard` are disaster objects that nothing may cover; `soft` are all claimed labels (cities, places, seas, parallels, isobars, storms), which may be covered when there is no better place. */
+  obstacles(): { hard: Rect[]; soft: Rect[] } { return { hard: this.hard.slice(), soft: this.occ.snapshot() }; }
 
   resize(width: number, height: number, dpr: number): void {
     this.dpr = dpr;
@@ -186,13 +193,15 @@ export class OverlayPainter {
     const tm = this.reducedMotion ? 0 : now;
     const labels = { ...DEFAULT_LABELS, ...overlay.labels };
     this.occ.clear();
+    this.hard.length = 0;
+    this.drawRev++;
 
     // Bottom to top: reference lines, coast, cities and places, sea names, isobars, tracks, effects, history, target preview, storms, outline.
     this.graticule(view);
     this.referenceParallels(view);
     this.coastline(view);
     if (state) drawDustHexes(ctx, view, dustHexesFor(state, _field, overlays.finedust, view));
-    if (state?.weatherHazards?.length) drawWeatherHazards(ctx, view, state.weatherHazards, this.theme.font, this.theme.paper);
+    if (state?.weatherHazards?.length) drawWeatherHazards(ctx, view, state.weatherHazards, this.theme.font, this.theme.paper, this.hard);
     // Pass 1: reference-parallel, storm and isobar labels claim their rectangles first, without drawing, so cities and places yield to them.
     const parallelLabels = this.referenceParallelLabelLayout(view, overlay.rightInset);
     const spots = state ? state.storms.map(s => this.stormLayout(view, s, s.id === overlay.selectedStormId)) : [];
@@ -807,6 +816,9 @@ export class OverlayPainter {
     const { ctx, theme } = this;
     if (s.forecast.length === 0) return;
     const geo: GeoPoint[] = [{ lon: s.lon, lat: s.lat }, ...s.forecast];
+    // The first leg of the forecast track, near the centre, is an object too.
+    const near = geo.slice(0, 3).map(p => view.lonLatToPx(p.lon, p.lat));
+    if (near.every(Boolean)) this.hard.push([Math.min(...near.map(q => q![0])) - 8, Math.min(...near.map(q => q![1])) - 8, Math.max(...near.map(q => q![0])) + 8, Math.max(...near.map(q => q![1])) + 8]);
     ctx.save();
     ctx.fillStyle = theme.track;
     ctx.globalAlpha = 0.09;
@@ -994,7 +1006,9 @@ export class OverlayPainter {
       ctx.beginPath(); ctx.arc(x, y, 2.5, 0, TAU); ctx.fill();
       ctx.font = `600 11px ${theme.font}`;
       ctx.textAlign = 'left';
-      this.halo(`Forming · ${Math.min(99, Math.floor((hours / GENESIS_HOURS) * 100))}%`, x + ax + 5, y + 4, theme.ink, a);
+      const text = `Forming · ${Math.min(99, Math.floor((hours / GENESIS_HOURS) * 100))}%`;
+      this.hard.push([x - 6, y - 8, x + ax + 7 + ctx.measureText(text).width, y + 8]);
+      this.halo(text, x + ax + 5, y + 4, theme.ink, a);
       ctx.restore();
     });
   }
@@ -1040,6 +1054,7 @@ export class OverlayPainter {
       ctx.beginPath(); groundCircle(view, ctx, storm.lon, storm.lat, storm.radiusKm, 'stroke', 8);
       ctx.setLineDash([2, 4]); ctx.stroke(); ctx.setLineDash([]);
       ctx.globalAlpha = a;
+      this.hard.push([x - 12, y - 12, x + 12, y + 12]);
       ctx.beginPath();
       if (storm.tornado) {
         ctx.moveTo(x - 8, y - 8); ctx.lineTo(x + 8, y - 8);
@@ -1054,7 +1069,9 @@ export class OverlayPainter {
       if (view.scale >= 8) {
         ctx.font = `500 11px ${theme.font}`;
         ctx.textAlign = 'left';
-        this.halo(`${translate(storm.tornado ? 'Tornado' : 'Thunderstorm')} · ${storm.gustMs.toFixed(0)} m/s`, x + 11, y + 4, theme.warn, a);
+        const text = `${translate(storm.tornado ? 'Tornado' : 'Thunderstorm')} · ${storm.gustMs.toFixed(0)} m/s`;
+        this.hard.push([x + 11, y - 8, x + 13 + ctx.measureText(text).width, y + 8]);
+        this.halo(text, x + 11, y + 4, theme.warn, a);
       }
       ctx.restore();
     });
@@ -1082,6 +1099,7 @@ export class OverlayPainter {
       const labelX = Math.max(flip ? tw + 4 : 4, lx);
       this.occ.add([x - R * 1.5, y - R * 1.5, x + R * 1.5, y + R * 1.5]);
       this.occ.add([flip ? labelX - tw : labelX, ly - 12, flip ? labelX : labelX + tw, ly + 20]);
+      this.hard.push([x - R * 1.5, y - R * 1.5, x + R * 1.5, y + R * 1.5], [flip ? labelX - tw : labelX, ly - 12, flip ? labelX : labelX + tw, ly + 20]);
       spots.push({ x, y, a, labels, flip, labelX, ly });
     });
     return spots;
@@ -1462,6 +1480,7 @@ export class OverlayPainter {
       ctx.globalAlpha = a;
       ctx.strokeStyle = theme.accent;
       ctx.lineWidth = 1.5;
+      this.hard.push([x - 15, y - 15, x + 15, y + 15]);
       ctx.beginPath(); ctx.arc(x, y, 7, 0, TAU); ctx.stroke();
       ctx.beginPath();
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { ctx.moveTo(x + dx * 4, y + dy * 4); ctx.lineTo(x + dx * 14, y + dy * 14); }

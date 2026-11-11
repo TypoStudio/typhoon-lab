@@ -9,7 +9,7 @@ const icons = new Map<WeatherHazardKind, Path2D>();
 const FOOTPRINT_BANDS = 32;
 
 /** Shared flat/globe symbols and geographic footprints for non-cyclone weather. */
-export function drawWeatherHazards(ctx: CanvasRenderingContext2D, view: MapCamera, hazards: readonly WeatherHazard[], font: string, paper: string): void {
+export function drawWeatherHazards(ctx: CanvasRenderingContext2D, view: MapCamera, hazards: readonly WeatherHazard[], font: string, paper: string, boxes?: [number, number, number, number][]): void {
   const point = new Float64Array(3);
   ctx.save();
   ctx.font = `11px ${font}`;
@@ -37,6 +37,7 @@ export function drawWeatherHazards(ctx: CanvasRenderingContext2D, view: MapCamer
     ctx.strokeStyle = paper; ctx.lineWidth = 4; ctx.stroke(icon);
     ctx.strokeStyle = definition.color; ctx.lineWidth = 1.8; ctx.stroke(icon); ctx.restore();
     const label = `${t(definition.name)} · ${Math.ceil(hazard.durationHours - hazard.ageHours)} h`;
+    boxes?.push([point[0] - 10, point[1] - 10, point[0] + 16 + ctx.measureText(label).width, point[1] + 10]);
     ctx.strokeStyle = paper; ctx.lineWidth = 3; ctx.strokeText(label, point[0] + 14, point[1] + 4);
     ctx.fillStyle = definition.color; ctx.fillText(label, point[0] + 14, point[1] + 4);
   }

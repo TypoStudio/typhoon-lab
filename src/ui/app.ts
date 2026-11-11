@@ -2089,9 +2089,16 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     view: () => renderer?.view ?? null,
     enabled: () => ui.graphsOnMap && (sidebarBesideMap.matches || sidebar.hidden),
     obstacles: () => [...root.querySelectorAll<HTMLElement>(OBSTACLES)].filter(n => !n.hidden && getComputedStyle(n).visibility !== 'hidden').map(n => n.getBoundingClientRect()).filter(r => r.width > 0 && r.height > 0),
+    mapObstacles: () => {
+      const seen = renderer && 'overlayObstacles' in renderer ? renderer.overlayObstacles() : null;
+      return seen ? { hard: [...seen.hard, ...onMapExtraBoxes], soft: seen.soft } : null;
+    },
+    mapRev: () => (renderer && 'overlayRev' in renderer ? renderer.overlayRev : 0),
     onLocate: locateMeasure,
     onOpen: openMeasureAt,
   });
+  /** Test hook: extra boxes the on-map cards must avoid, to force the crowded case. */
+  let onMapExtraBoxes: [number, number, number, number][] = [];
   const onMapFree = new ResizeObserver(() => measureOnMap?.invalidate());
   for (const node of root.querySelectorAll('.notes, .palette, .map-status, .clockbar, .brandbar, .legend')) onMapFree.observe(node);
 
@@ -2704,6 +2711,10 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       get speed() { return ui.speed; },
       /** Measure tab probes: pin numbers and places, and the charts' item ids. */
       /** Cost of the on-map graph placement: runs, total and last milliseconds. */
+      /** What the overlay drew last frame (disaster objects and labels, stage pixels). */
+      get overlayObstacles() { return renderer && 'overlayObstacles' in renderer ? renderer.overlayObstacles() : null; },
+      /** Test hook: extra boxes (stage pixels) the on-map graph cards must avoid. */
+      set onMapExtraBoxes(boxes: [number, number, number, number][]) { onMapExtraBoxes = boxes; measureOnMap?.invalidate(); },
       get onMapStats() { return measureOnMap?.stats() ?? null; },
       get probes() { return { pins: probes.pins.map(p => ({ ...p })), charts: [...probes.charts.keys()] }; },
     },

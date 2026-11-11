@@ -1079,3 +1079,13 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
   .clockbar [data-ref="speedReset"], .clockbar [data-ref="climateReset"] { width: 32px; }
   .clockbar .btn--play { min-width: 40px; }
 }
+
+/* A card with no room for its sparkline shrinks to a chip: icon and value only. On phones every card is smaller and shows its (i) only while focused (after a tap). */
+.onmap-card--chip .onmap-spark, .onmap-card--chip .onmap-name, .onmap-card--chip .onmap-card__info { display: none; }
+.onmap-card--chip .onmap-card__main { padding: 3px 6px 3px 5px; }
+.onmap-card--chip .onmap-val { min-width: 0; }
+.onmap-graphs--compact .onmap-spark { width: 2.2rem; height: 0.9rem; }
+.onmap-graphs--compact .onmap-val { min-width: 2.6rem; }
+.onmap-graphs--compact .onmap-card__main { padding-inline-end: 5px; }
+.onmap-graphs--compact .onmap-card:not(:focus-within) .onmap-card__info { display: none; }
+.onmap-graphs--compact .onmap-card:focus-within .onmap-card__main { padding-inline-end: 22px; }

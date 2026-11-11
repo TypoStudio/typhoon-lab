@@ -304,6 +304,7 @@ test('phone 375: on-map cards say what they measure, tap moves the map, (i) open
   await expect(page.locator('.locate-flash')).toHaveCount(1);
   await expect(page.getByTestId('sidebar')).toBeHidden();
   // The (i) button has a 44 x 44 hit area and opens the Measure tab at that card.
+  await pin1.focus(); // on phones the (i) shows once the card is tapped or focused
   const info = page.getByTestId('onmap-info-1');
   const box = (await info.boundingBox())!;
   expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);
@@ -317,6 +318,7 @@ test('phone 375: on-map cards say what they measure, tap moves the map, (i) open
   await expect(page.getByTestId('sidebar')).toBeHidden();
   await expect.poll(async () => Math.hypot(((await centre())[0]) - 140, ((await centre())[1]) - 10)).toBeLessThan(2);
   // Trash removes the card.
+  await pin1.focus();
   await page.getByTestId('onmap-info-1').click();
   await expect(page.getByTestId('measure-card-measure-wind')).toBeVisible();
   await page.getByTestId('measure-remove-measure-wind').click();
@@ -444,4 +446,71 @@ test('graphs on the map at 375: on-screen charts have cards, off-screen ones non
   // Pan far away: the spots are off-screen and nothing is drawn for them.
   await page.evaluate(() => (window as any).__typhoonLab.mapView.centerOn(-100, 10));
   await expect.poll(async () => (await cardsOnMap(page)).length).toBe(0);
+});
+
+/** Loads Maemi (a recorded typhoon) so a real storm with its symbol, labels and forecast is on the map, and centres the view on it. */
+async function stormOnMap(page: Page) {
+  await page.getByTestId('palette-tab-typhoons').click();
+  await page.getByTestId('experience-typhoon-maemi-2003').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.storms.length)).toBeGreaterThan(0);
+  const storm = await page.evaluate(() => { const s = (window as any).__typhoonLab.state.storms[0]; return { lon: s.lon as number, lat: s.lat as number }; });
+  await page.evaluate(({ lon, lat }) => (window as any).__typhoonLab.mapView.centerOn(lon, lat), storm);
+  await page.waitForTimeout(500);
+  return storm;
+}
+
+for (const [width, height, shot] of [[1440, 900, '1440'], [360, 740, '360']] as const) {
+  test(`graph cards never cover a storm or its label (${shot})`, async ({ page }) => {
+    test.setTimeout(150_000);
+    await ready(page, width, 'ko', height);
+    const storm = await stormOnMap(page);
+    await page.getByTestId('palette-tab-conditions').click();
+    // Pins on and around the storm, close enough that the cards would sit on its symbol and label.
+    await dropCharts(page, [['sea-temperature', storm.lon + 1.5, storm.lat + 1], ['pressure', storm.lon - 1.5, storm.lat - 1], ['air-temperature', storm.lon + 3, storm.lat - 2], ['wind', storm.lon, storm.lat + 3]]);
+    await page.waitForTimeout(600);
+    const check = async () => {
+      const cards = await cardsOnMap(page);
+      const seen = await page.evaluate(() => (window as any).__typhoonLab.overlayObstacles as { hard: number[][] });
+      const host = (await page.getByTestId('map-stage').boundingBox())!;
+      expect(seen.hard.length).toBeGreaterThan(0);
+      for (const [i, c] of cards.entries()) for (const b of seen.hard) {
+        const box = { left: host.x + b[0], top: host.y + b[1], right: host.x + b[2], bottom: host.y + b[3] };
+        expect(overlaps(c, box), `card ${i} covers a drawn storm object`).toBe(false);
+      }
+      return cards.length;
+    };
+    expect(await check()).toBeGreaterThanOrEqual(1);
+    await page.screenshot({ path: `/tmp/typhoon-shot/onmap-avoid-ko-${shot}.png` });
+    // The storm moves with time: the cards keep clear of it as it goes.
+    await page.getByTestId('play-toggle').click();
+    await page.evaluate(() => (window as any).__typhoonLab.state && 0);
+    await page.waitForTimeout(1500);
+    await check();
+  });
+}
+
+test('graph cards: no free spot collapses a card to a chip, then hides it', async ({ page }) => {
+  test.setTimeout(120_000);
+  await ready(page, 1440, 'ko');
+  await dropCharts(page, [['sea-temperature', 140, 12]]);
+  await expect.poll(async () => (await cardsOnMap(page)).length).toBe(1);
+  const card = page.locator('.onmap-card:has([data-testid="onmap-pin-1"])');
+  const full = (await card.boundingBox())!;
+  const pin = (await pinPoints(page))[0];
+  const stage = (await page.getByTestId('map-stage').boundingBox())!;
+  const px = pin.x - stage.x, py = pin.y - stage.y;
+  // Everything but a region that is wide enough for a chip and too narrow for the card is covered.
+  const regionW = full.width * 0.75 + 6, left = px + 8, top = py - full.height - 8, bottom = py + 12;
+  const cover = (l: number, t: number, r: number, b: number) => [[0, 0, stage.width, t], [0, b, stage.width, stage.height], [0, t, l, b], [r, t, stage.width, b]];
+  await page.evaluate(boxes => { (window as any).__typhoonLab.onMapExtraBoxes = boxes; }, cover(left, top, left + regionW, bottom));
+  await expect(card).toHaveClass(/onmap-card--chip/);
+  expect(await card.locator('.onmap-spark').isVisible()).toBe(false);
+  const chip = (await card.boundingBox())!;
+  expect(chip.width).toBeLessThan(full.width);
+  // Nowhere to go: the card hides while the conflict lasts and returns when it ends.
+  await page.evaluate(w => { (window as any).__typhoonLab.onMapExtraBoxes = [[0, 0, w.w, w.h]]; }, { w: stage.width, h: stage.height });
+  await expect.poll(async () => (await cardsOnMap(page)).length).toBe(0);
+  await page.evaluate(() => { (window as any).__typhoonLab.onMapExtraBoxes = []; });
+  await expect.poll(async () => (await cardsOnMap(page)).length).toBe(1);
+  await expect(card).not.toHaveClass(/onmap-card--chip/);
 });

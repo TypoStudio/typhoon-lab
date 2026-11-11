@@ -267,6 +267,10 @@ export class MapRenderer {
   pickStorm(px: number, py: number): number | null { return this.state ? this.overlayPainter.pickStorm(this.view, this.state.storms, px, py) : null; }
 
   pickCity(px: number, py: number): string | null { return this.overlayPainter.pickCity(this.view, px, py); }
+  /** Boxes of what the overlay drew last frame (canvas pixels): disaster objects (`hard`) and every claimed label (`soft`), so other UI can stay clear of them. */
+  overlayObstacles(): { hard: [number, number, number, number][]; soft: [number, number, number, number][] } { return this.overlayPainter.obstacles(); }
+  /** Counts overlay draws: changes whenever the boxes may have. */
+  get overlayRev(): number { return this.overlayPainter.drawRev; }
 
   /** Visible moving vehicle under a map tap, using the same interpolated position as the icon. */
   pickTraffic(px: number, py: number): string | null {
