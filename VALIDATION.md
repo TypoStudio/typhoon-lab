@@ -3,6 +3,21 @@
 Checked on 2026-10-23 with Node.js 26.10.0 and Chromium through Playwright.
 
 
+## Current verification — live air temperature relaxes toward the monthly climatology
+
+- `stepLiveWeather` now relaxes land and sea-ice air (72 h) toward the NCEP/NCAR 1991–2020 monthly mean air temperature for the model date, and open-sea air (48 h) toward sea temperature + (climatological air − ERSST normal) of that place and date, replacing the latitude/season formula and the fixed sea − 1.5 °C. Player `airHeating` is still added to the target; the warming/polar sliders act at the cell read (`climateGrid`), not here, and still add +2.0 °C on land per +2 °C (ocean +3.5 to +4.0, as before: the sea term already carries the slider's SST). Base worlds untouched (golden fixture unchanged). Data: `climate-air.json` 21.6 KB gzipped; with `climate-slp.json` 36.7, teleconnections 16.4 and normals 40.1 the four climate files total 114.8 KB gzipped (budget 125).
+- GFS 2026-10-27 fixture, 10 days, mean absolute error cos-weighted, land / ocean, before to after: vs the analysis day 1 3.63/1.31 to 2.54/1.32, day 3 6.26/2.04 to 3.88/1.95, day 10 8.21/2.26 to 4.29/1.99; vs the 2.5° real monthly mean day 1 3.69/1.62 to 2.77/1.51, day 3 5.74/1.83 to 2.90/1.50, day 10 7.72/1.81 to 2.80/1.28 (analysis itself 3.35/1.59). Land mean bias vs analysis at day 10 -2.87 to +1.68 °C.
+- Day-10 points (real / before / after, °C): Siberia 90E 62N -7.1 / -18.4 / -6.7; Sahara 10E 25N 21.0 / 8.2 / 21.6; central China 114E 34N 13.3 / 1.5 / 7.0; Antarctica 0E 80S -39.9 / -17.3 / -37.9; Arctic 0E 80N -11.1 / -3.7 / -9.7; N America 98W 38N 12.7 / 2.4 / 12.4.
+- Knock-on (thermal low uses the heat field): box 100–150E 15–50N pressure drift vs analysis day 10 mean absolute 6.17 to 6.13, vs climatology 2.40 to 2.69; wind speed in the box day 10 4.33 to 4.74 m/s (analysis 5.58); pressure tendency percentiles unchanged (median 0.016 hPa/h, p99.9 1.13 to 1.14). Typhoons: seeds 1–3, genesis on from 26 Oct, 20 days: 8/5/4 storms before and after, similar tracks and peak winds (70.3/68.3/70.0 to 71.0/69.7/71.5 m/s).
+- `tests/climate-air.test.ts` is new. `gameplay.spec.ts`: no stale selector — `layer-pressure` is found; both failing tests pass when given enough time (the app was running at load average 30–50, with steps taking seconds). The reload test is not network dependent (`start=` pins a base world) and now sets a 180 s limit like its sibling.
+
+## Current verification — live pressure relaxes toward the monthly SLP climatology
+
+- `stepLiveWeather` now relaxes pressure (still 72 h) toward the NCEP/NCAR 1991–2020 monthly mean for the model date plus the thermal low and climate-layer terms, instead of 1010 hPa plus a zonally symmetric belt. Base worlds are untouched (golden fixture unchanged). Data: `climate-slp.json`, 36.7 KB gzipped (shipped climate data about 95 KB gzipped in total).
+- GFS 2026-10-27 fixture, 10-day run, East Asia box 100–150E 15–50N (cos-weighted), drift from the analysis: mean -4.95 to -0.94 hPa, minimum -30.7 to -12.9 hPa; mean absolute 6.53 to 6.17 (the analysis is itself 6.1 hPa from the monthly mean, so this cannot reach zero). Distance from the climatology: mean absolute 3.99 to 2.40 hPa. Global mean absolute drift from the analysis 7.94 to 5.46 hPa.
+- Pressure tendency at non-storm points: median 0.02 to 0.016 hPa/h, 99.9th percentile 1.12 to 1.13, maximum 2.89 to 3.01. Typhoons still form and move in live worlds (5 to 7 per 20 days on four seeds).
+- `tests/live-weather.test.ts` paused-field test now expects relaxation to the climatology; new `tests/climate-slp.test.ts`. `gameplay.spec.ts` "snapshot export/import" and "combined overlays" fail identically with the old belt (not caused by this change).
+
 ## Current verification — humidity wind colours and sparse isobars
 
 - Added a fifth 32 px droplet toggle. Local relative humidity colours wind trails from dark blue to pale white; the same 16 colour steps are used in Canvas and WebGL. Humidity off restores the existing wind colours. Wind off hides all trails without changing the humidity setting or cyclone clouds.

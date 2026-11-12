@@ -333,6 +333,7 @@ test('desktop 1440: card locate (per card and per pin) centres the map; trash re
   await page.getByTestId('tab-measure').click();
   const centre = () => page.evaluate(() => (window as any).__typhoonLab.mapView.centerLonLat() as [number, number]);
   const locate = page.getByTestId('measure-locate-measure-sea-temperature');
+  await expect(page.getByTestId('measure-line-locate-measure-sea-temperature-1')).toBeVisible(); // two pins: per-line buttons shown
   await locate.click();
   await expect.poll(async () => Math.hypot(((await centre())[0]) - 140, ((await centre())[1]) - 16)).toBeLessThan(2);
   await locate.click();

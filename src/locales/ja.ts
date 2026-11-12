@@ -60,6 +60,7 @@ export const ja: Record<string, string> = {
   '`': '`', 'Slower': '遅く', 'Faster': '速く',
   'Select the previous speed.': '前の速度を選びます。', 'Select the next speed.': '次の速度を選びます。',
   'Reset speed': '速度をリセット', 'Return only the speed to 10m/s. Shortcut: `.': '速度だけを10m/sに戻します。ショートカット：`',
+  "Skip ahead 4 hours": "4時間スキップ", "Advance the world by 4 hours at once, as if time had run. Works while paused and while playing.": "世界を一度に4時間進めます。時間が経過したときと同じように反映されます。一時停止中も再生中も使えます。", "Time cannot be skipped while the world is loading.": "世界を読み込んでいる間は時間をスキップできません。", "Time cannot be skipped while a replay plays.": "リプレイの再生中は時間をスキップできません。", "Time cannot be skipped at 7d/s, where the weather is not calculated.": "天気を計算しない7d/sでは時間をスキップできません。", "The +4h button in the speed bar jumps the world ahead by exactly 4 hours at once, as if time had run: storms move, damage and news update, and Measure adds one point at the new time. It works while paused (the world stays paused) and while playing. It is off during a replay, while a world is loading, and at 7d/s.": "速度バーの+4hボタンは、世界をちょうど4時間先へ一度に進めます。時間が経過したときと同じように台風が動き、被害とニュースが更新され、計測には新しい時刻の点が1つ加わります。一時停止中（停止のまま）も再生中も使えます。リプレイ再生中、世界の読み込み中、7d/sでは使えません。",
   'Real time': 'リアルタイム', 'Model time that passes in each second of real time. Change it with the arrows or the 1–9 keys.': '現実の1秒でゲーム内の世界が進む時間です。矢印キーか1〜9キーで変更します。',
   'Real time: 1 second per second': 'リアルタイム：1秒で1秒',
   '10 minutes per second': '1秒で10分',

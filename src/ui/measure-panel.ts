@@ -1,7 +1,7 @@
 import { getLanguage, setText, t, type Language } from '../i18n';
 import { el, fmtCoord } from './dom';
 import { MEASURE_BY_ID, pinStyle, type MeasureItem, type ProbeBook } from './measure';
-import { niceRange, nearestIndex, elapsedTicks, trimNumber, type AxisUnit, type Series } from './measure-store';
+import { niceRange, padSpan, nearestIndex, elapsedTicks, trimNumber, type AxisUnit, type Series } from './measure-store';
 
 /** Axis unit words per language (a tick reads "6h", "3 d", "2 mo", "1y"). */
 const AXIS_UNITS: Record<Language, Record<AxisUnit, string>> = {
@@ -133,7 +133,7 @@ export function createMeasurePanel(o: MeasurePanelOptions): MeasurePanel {
       const key = el('span', { class: 'measure-key', 'aria-hidden': 'true' });
       key.style.setProperty('--line', line.color);
       if (line.dashed) key.dataset.dashed = 'true';
-      const where = item.basin ? null : el('button', { type: 'button', class: 'icon-btn measure-line__locate', 'data-testid': `measure-line-locate-${item.id}-${line.n}`, 'aria-label': `${t('Show on the map')}: #${line.n}`, 'data-tip-title': 'Show on the map', 'data-tip': LOCATE_TIP });
+      const where = item.basin || pinNs.length < 2 ? null : el('button', { type: 'button', class: 'icon-btn measure-line__locate', 'data-testid': `measure-line-locate-${item.id}-${line.n}`, 'aria-label': `${t('Show on the map')}: #${line.n}`, 'data-tip-title': 'Show on the map', 'data-tip': LOCATE_TIP });
       if (where) { where.innerHTML = LOCATE_ICON; where.addEventListener('click', () => o.onLocate(item.id, line.n)); }
       card.linesList.append(el('li', { class: 'measure-line', 'data-pin': line.n }, [key, el('span', { class: 'measure-line__name', text: line.name }), values, where]));
       return spans;
@@ -280,6 +280,7 @@ export function createMeasurePanel(o: MeasurePanelOptions): MeasurePanel {
     if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
     if (plot.zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
     for (const g of plot.guides ?? []) { lo = Math.min(lo, g.value); hi = Math.max(hi, g.value); }
+    [lo, hi] = padSpan(lo, hi, plot.span);
     const y = niceRange(lo, hi, h < 100 ? 2 : 3);
     const x0 = PAD.l, x1 = w - PAD.r, yTop = PAD.t, yBottom = h - PAD.b;
     const X = (time: number) => x0 + ((time - t0) / (t1 - t0)) * (x1 - x0);

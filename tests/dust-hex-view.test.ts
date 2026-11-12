@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { createGame, placeFormation, stepGame } from '../src/simulation/engine';
 import { buildFieldData } from '../src/render/fields';
-import { HEX_TARGET_PX, HEX_WIDTH, MAX_HEXES, buildDustHexes, dustHexWidth, dustHexesFor } from '../src/render/dust-hexes';
+import { HEX_TARGET_PX, HEX_WIDTH, MAX_HEXES, GLOBE_STRIDE, buildDustHexes, dustHexWidth, dustHexesFor, projectGlobeHexes } from '../src/render/dust-hexes';
 import { GlobeView } from '../src/render/globe-view';
 import { FlatView } from '../src/render/view';
+
+function scene() {
+  const state = createGame(17, 213);
+  placeFormation(state, 'finedust', 117, 39);
+  for (let i = 0; i < 192; i++) stepGame(state);
+  return { state, field: buildFieldData(state.grid)! };
+}
 
 describe('dust hexagon grid follows the zoom', () => {
   it('keeps the on-screen width near the target, finer when zoomed in, within the limits', () => {
@@ -43,34 +50,70 @@ describe('dust hexagon grid follows the zoom', () => {
     }
   });
 
-  it('globe lattice is regular in screen space: equal neighbour spacing, no overlap, and fast', () => {
-    const state = createGame(17, 213);
-    placeFormation(state, 'finedust', 117, 39);
-    for (let i = 0; i < 192; i++) stepGame(state);
-    const field = buildFieldData(state.grid)!;
+  it('globe lattice is regular in the tangent plane at the anchor: equal neighbour spacing, no overlap, centres match lon/lat', () => {
+    const { state, field } = scene();
     const g = new GlobeView();
     g.resize(1280, 800);
     for (const span of [60, 25, 8]) {
       g.setHome(117, 37, span);
       const t0 = performance.now();
-      const { hexes, width, space } = buildDustHexes(state, field, true, g);
-      const ms = performance.now() - t0;
-      console.log(`globe span ${span}: ${hexes.length} hexes, build ${ms.toFixed(1)} ms`);
-      expect(space).toBe('screen');
+      const built = buildDustHexes(state, field, true, g);
+      const { hexes, width, space } = built;
+      console.log(`globe span ${span}: ${hexes.length} hexes, build ${(performance.now() - t0).toFixed(1)} ms, cap ${built.cap!.toFixed(1)} deg, thr ${built.thr!.toFixed(1)} deg`);
+      expect(space).toBe('globe');
+      expect(built.anchor).toEqual(g.centerLonLat());
       expect(hexes.length).toBeGreaterThan(20);
-      const pitch = width * g.scale;
-      for (const h of hexes) { // same lon/lat as the lattice point it came from, to within the inverse projection
-        const p = g.lonLatToPx(h.lon, h.lat)!;
-        expect(Math.hypot(p[0] - h.x, p[1] - h.y)).toBeLessThan(1e-6 * g.radius + 1e-6);
+      const pitch = width * Math.PI / 180;
+      for (const [i, h] of hexes.entries()) { // the stored centre is the lattice point lifted onto the sphere
+        const u = built.geo!.subarray(i * GLOBE_STRIDE, i * GLOBE_STRIDE + 3);
+        expect(Math.abs(Math.asin(u[1]) * 180 / Math.PI - h.lat)).toBeLessThan(1e-9);
       }
       let pairs = 0;
-      for (const a of hexes) for (const b of hexes) {
-        if (a === b) continue;
-        const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const sorted = [...hexes].sort((a, b) => a.x - b.x);
+      for (let i = 0; i < sorted.length; i++) for (let j = i + 1; j < sorted.length && sorted[j].x - sorted[i].x < pitch * 1.02; j++) {
+        const d = Math.hypot(sorted[i].x - sorted[j].x, sorted[i].y - sorted[j].y);
         expect(d).toBeGreaterThan(pitch * 0.999); // never closer than one pitch: no overlap
         if (d < pitch * 1.01) { pairs++; expect(Math.abs(d - pitch)).toBeLessThan(pitch * 0.01); }
       }
       expect(pairs).toBeGreaterThan(10);
     }
+  });
+
+  it('globe hexes move with the ground when the camera rotates, and nothing is rebuilt below the threshold', () => {
+    const { state, field } = scene();
+    const g = new GlobeView();
+    g.resize(1280, 800); g.setHome(117, 37, 25);
+    const built = dustHexesFor(state, field, true, g, 0);
+    const before = Float64Array.from(projectGlobeHexes(g, built).subarray(0, built.hexes.length * 14));
+    const ground = built.hexes.map(h => g.lonLatToPx(h.lon, h.lat)!);
+    g.centerOn(117 + 6, 37 - 3); // rotate by about 6.7 degrees
+    expect(dustHexesFor(state, field, true, g, 10_000)).toBe(built); // below the threshold: same build
+    const t0 = performance.now();
+    let after = projectGlobeHexes(g, built);
+    for (let k = 0; k < 50; k++) after = projectGlobeHexes(g, built);
+    const frameMs = (performance.now() - t0) / 51;
+    console.log(`globe ${built.hexes.length} hexes: per-frame projection ${frameMs.toFixed(3)} ms`);
+    let worst = 0, moved = 0, checked = 0;
+    built.hexes.forEach((h, i) => {
+      const now = g.lonLatToPx(h.lon, h.lat);
+      if (!now || Number.isNaN(after[i * 14])) return;
+      const dx = now[0] - ground[i][0], dy = now[1] - ground[i][1]; // how far the ground point under the hex moved
+      moved = Math.max(moved, Math.hypot(dx, dy));
+      worst = Math.max(worst, Math.hypot(after[i * 14] - before[i * 14] - dx, after[i * 14 + 1] - before[i * 14 + 1] - dy));
+      checked++;
+    });
+    console.log(`checked ${checked} hexes, ground moved up to ${moved.toFixed(1)} px, worst hex-vs-ground difference ${worst.toExponential(2)} px`);
+    expect(checked).toBeGreaterThan(20);
+    expect(moved).toBeGreaterThan(50);
+    expect(worst).toBeLessThan(1e-6);
+    // far enough: once the camera has settled it rebuilds, anchored at the new centre; during a gesture it keeps the old lattice
+    g.centerOn(117 + 40, 37);
+    expect(dustHexesFor(state, field, true, g, 10_100)).toBe(built);
+    const again = dustHexesFor(state, field, true, g, 20_000);
+    expect(again).not.toBe(built);
+    expect(again.anchor).toEqual(g.centerLonLat());
+    const t1 = performance.now();
+    buildDustHexes(state, field, true, g);
+    console.log(`rebuild ${(performance.now() - t1).toFixed(1)} ms`);
   });
 });

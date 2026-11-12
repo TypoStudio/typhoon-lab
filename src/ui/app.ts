@@ -31,7 +31,7 @@ import { freshNews } from './news-fresh';
 import { DISASTER_HELP, DISASTER_HELP_INTRO, DISASTER_HELP_TIMING } from './disaster-help';
 import { el, svgEl, fmtClock, fmtClockLive, fmtClockShort, fmtCoord, fmtInt, fmtMoney, fmtPop, fmtUtc, rovingKeys } from './dom';
 import { SEASONS, fmtDateWithYear, fmtSerialDate, fmtMonthDay, parseStartParam, realTimeOfYear, seasonIdOf, showsYear, worldDay } from './calendar';
-import { DEFAULT_TIME_SPEED, SCENARIO_TIME_SPEED, TIME_SPEEDS, adjacentTimeSpeed, isTimeSpeed, timeSpeedDescription, timeSpeedLabel, type TimeSpeed } from '../time';
+import { DEFAULT_TIME_SPEED, SCENARIO_TIME_SPEED, TIME_SPEEDS, adjacentTimeSpeed, isFastClimateSpeed, isTimeSpeed, timeSpeedDescription, timeSpeedLabel, type TimeSpeed } from '../time';
 import { attachMapInput } from './input';
 import { attachPalette } from './palette';
 import { SCENARIO_PROBES } from './scenario-probes';
@@ -177,6 +177,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     selectedDisasterId: null as string | null,
     selectedCityId: null as string | null,
     expect: 'normal' as Expect,
+    /** A +4h skip is posted and its state has not come back: further presses wait. */
+    skipping: false,
     expectBaseTick: 0,
     expectUntil: 0,
     expectSeed: 0,
@@ -494,6 +496,28 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     localizeTree(speedValue);
     for (const b of speedButtons) b.disabled = !s;
     ref<HTMLButtonElement>('speedReset').disabled = !s || ui.speed === DEFAULT_TIME_SPEED;
+    syncSkip();
+  }
+
+  /** Why the +4h button cannot be used right now, or '' when it can. */
+  function skipBlock(): string {
+    if (!ui.latest) return 'Time cannot be skipped while the world is loading.';
+    if (ui.expect === 'replay') return 'Time cannot be skipped while a replay plays.';
+    if (ui.expect !== 'normal' || ui.placementQueue.length || ui.scenarioPending) return 'Time cannot be skipped while the world is loading.';
+    if (isFastClimateSpeed(ui.speed)) return 'Time cannot be skipped at 7d/s, where the weather is not calculated.';
+    return '';
+  }
+  function syncSkip(): void {
+    const btn = ref<HTMLButtonElement>('skip');
+    const why = skipBlock();
+    btn.disabled = why !== '';
+    btn.dataset.tip = why || 'Advance the world by 4 hours at once, as if time had run. Works while paused and while playing.';
+    localizeTree(btn);
+  }
+  function skipAhead(): void {
+    if (skipBlock() || ui.skipping) return;
+    ui.skipping = true;
+    post({ type: 'skip' });
   }
 
   function playIcon(playing: boolean): SVGSVGElement {
@@ -1336,6 +1360,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         <p>Open Typhoon experience or Climate experience in the palette to start a past typhoon or a climate scenario with one click, or drag its tile onto the map.</p>
         <h3 class="dialog__sub">Time</h3>
         <p>Use the arrows to choose a speed. Real time runs the world at the speed of the clock. 10m/s is 10 minutes of world time per second, 30m/s is 30 minutes, 1h/s is 1 hour, 2h/s is 2 hours and 4h/s is 4 hours; 1d/s, 2d/s and 7d/s are 1, 2 and 7 days per second. Number keys 1–9 select the same nine steps, - and + step slower and faster, and the \` key (₩ on a Korean keyboard) resets the speed. Reset speed returns to 10m/s without changing the world or pause state.</p>
+        <p>The +4h button in the speed bar jumps the world ahead by exactly 4 hours at once, as if time had run: storms move, damage and news update, and Measure adds one point at the new time. It works while paused (the world stays paused) and while playing. It is off during a replay, while a world is loading, and at 7d/s.</p>
         <p class="fine">On a slow device the faster weather steps may not be fully reached, and the clock shows the time that was really simulated, so it can lag behind the speed you chose.</p>
         <p class="fine">At 7d/s the weather is not calculated. The world runs on the fast climate calculation instead: the map, the date and the seasons keep changing, but active storms and tools end without further damage. New storms can form again after you slow down. A world that started from live weather continues on the base climate from then on. See Long-term simulation in the Climate tab.</p>
         <h3 class="dialog__sub">The map</h3>
@@ -1697,7 +1722,9 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       // Probes read the newest state as it arrives, even while a gesture holds back the drawn one; paused time adds no samples.
       ensureHistoricEnvironment(msg.state);
       if (ui.scenarioProbes) applyScenarioProbes(msg.state);
-      if (probes.size && ui.playing && historicEnvironmentReady(msg.state)) probes.sample(msg.state);
+      if (msg.type === 'state' && msg.skipped) ui.skipping = false;
+      // A skip adds one sample at the new time even while paused; the jump is not filled in.
+      if (probes.size && (ui.playing || (msg.type === 'state' && msg.skipped)) && historicEnvironmentReady(msg.state)) probes.sample(msg.state);
       measurePanel.refresh();
       ui.clockHours = msg.clockHours;
       ui.pending = msg.state;
@@ -1719,6 +1746,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       if (isTimeSpeed(msg.speed)) { ui.speed = msg.speed; renderClock(); }
     } else if (msg.type === 'error') {
       const wasReplay = ui.expect === 'replay';
+      ui.skipping = false;
       if (ui.expect !== 'normal') { window.clearTimeout(expectTimer); ui.expect = 'normal'; syncClimateDisabled(); }
       for (const cb of ui.placementQueue.splice(0)) cb({ ok: false, reason: msg.message });
       toast(msg.message, 'error');
@@ -2151,6 +2179,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
 
   ref('play').addEventListener('click', togglePlay);
   ref('speedReset').addEventListener('click', () => setSpeed(DEFAULT_TIME_SPEED));
+  ref('skip').addEventListener('click', skipAhead);
     function loadScenario(id: ClimateScenarioId): void {
     const scenario = climateScenarioById(id);
     setSpeed(SCENARIO_TIME_SPEED); // weather has to run for storms and climate-driven events to form on the changed climate; the player may change the speed afterwards

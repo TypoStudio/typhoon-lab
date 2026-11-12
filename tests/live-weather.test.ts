@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { byteRange, findRecord, parseIdx } from '@azohra/meteo.grib';
 import { fetchGfsSnapshot, gfsRunCandidates, loadLiveWeather } from '../src/data/live-weather';
 import { isLiveWeatherSnapshot, sampleLiveWeather, stepLiveWeather } from '../src/simulation/live-weather';
+import { slpClimatologyInto } from '../src/data/climate-slp';
 import { distanceKm } from '../src/simulation/geo';
 import { createGame, gridIndex, placeTool, replayGame, sampleEnvironment, steeringFlow, stepGame, totalPressure, totalWind } from '../src/simulation/engine';
 import { buildReplay, parseReplay, replayExportProblem } from '../src/ui/storage';
@@ -188,8 +189,11 @@ it('keeps a paused field unchanged and does not create wind from rotation withou
   stepLiveWeather(weather, 0);
   expect(weather).toEqual(before);
   for (let i = 0; i < 288; i++) stepLiveWeather(weather, 0.25);
-  expect(weather.pressure[0]).toBeCloseTo(1010 - 5 / Math.E, 6);
-  expect(weather.u[0]).toBeCloseTo(0, 10); expect(weather.v[0]).toBeCloseTo(0, 10);
+  const target = new Float32Array(16200); slpClimatologyInto(213, target); // no heat contrast: the field relaxes to the monthly climatology (day 213 without a date)
+  const gap = (p: number[]) => p.reduce((sum, x, k) => sum + Math.abs(x - target[k]), 0) / p.length;
+  expect(gap(weather.pressure)).toBeLessThan(gap(Array(16200).fill(1005)) * 0.5);
+  // No circulation belts without a heat contrast; only the climatological pressure gradient drives wind, and it is weak near the equator.
+  expect(Math.hypot(weather.u[gridIndex(141, 1)], weather.v[gridIndex(141, 1)])).toBeLessThan(2);
 });
 
 it('sustains pressure belts, trade winds and westerlies from heat contrast after a week', () => {

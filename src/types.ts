@@ -244,6 +244,8 @@ export type WorkerRequest =
   | { type: 'play'; playing: boolean }
   | { type: 'interaction'; active: boolean }
   | { type: 'speed'; speed: number }
+  /** Time skip: the worker steps the world 4 model hours at once. */
+  | { type: 'skip' }
   | { type: 'traffic-view'; tick: number; departures: string[]; visibleVehicles: string[] }
   | { type: 'place'; tool: ToolType; lon: number; lat: number }
   | { type: 'formation'; kind: FormationKind; lon: number; lat: number }
@@ -257,7 +259,8 @@ export type WorkerRequest =
   | { type: 'season'; dayOfYear: number }
   | { type: 'replay'; seed: number; actions: ActionRecord[]; untilTick: number; startDayOfYear: number; trafficDispatches?: TrafficDispatch[]; initialWeather?: LiveWeatherSnapshot };
 export type WorkerResponse =
-  | { type: 'state'; state: GameState; clockHours: number }
+  /** `skipped` marks the single state a time skip posts. */
+  | { type: 'state'; state: GameState; clockHours: number; skipped?: true }
   | { type: 'interaction'; active: boolean; state: GameState; clockHours: number }
   | { type: 'progress'; clockHours: number }
   /** A replay being rebuilt reached `tick` of `untilTick`. */

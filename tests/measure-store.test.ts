@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_POINTS, MIN_SPACING_DAYS, addSample, createSeries, halve, lastValue, nearestIndex, niceRange, axisUnit, elapsedTicks, trimNumber } from '../src/ui/measure-store';
+import { MAX_POINTS, MIN_SPACING_DAYS, addSample, createSeries, halve, lastValue, nearestIndex, niceRange, padSpan, axisUnit, elapsedTicks, trimNumber } from '../src/ui/measure-store';
 
 const fill = (n: number, step = MIN_SPACING_DAYS) => {
   const s = createSeries();
@@ -116,5 +116,33 @@ describe('measure axes', () => {
     expect(r.ticks.length).toBeGreaterThanOrEqual(2);
     expect(niceRange(5, 5).max).toBeGreaterThan(5);
     expect(niceRange(Number.NaN, 1).ticks).toEqual([0, 1]);
+  });
+
+  describe('padSpan', () => {
+    it('centres a small range in the minimum span', () => {
+      const [lo, hi] = padSpan(1023.5, 1024.2, { min: 10 });
+      expect(hi - lo).toBeCloseTo(10);
+      expect((lo + hi) / 2).toBeCloseTo(1023.85);
+    });
+    it('leaves a larger range alone', () => {
+      expect(padSpan(990, 1020, { min: 10 })).toEqual([990, 1020]);
+      expect(padSpan(1, 2, undefined)).toEqual([1, 2]);
+    });
+    it('starts a zero-anchored quantity at its floor', () => {
+      expect(padSpan(0.2, 0.6, { min: 2, floor: 0 })).toEqual([0, 2]);
+      expect(padSpan(3, 3.1, { min: 25, floor: 0 })).toEqual([0, 25]);
+      const [lo, hi] = padSpan(40, 41, { min: 10, floor: 0 }); // far from the floor: centred
+      expect([lo, hi]).toEqual([35.5, 45.5]);
+    });
+    it('keeps a ceiling and a centre', () => {
+      expect(padSpan(98, 99, { min: 10, floor: 0, ceil: 100 })).toEqual([90, 100]);
+      expect(padSpan(-0.1, 0.2, { min: 1, center: 0 })).toEqual([-0.5, 0.5]);
+      expect(padSpan(-2, 0.3, { min: 1, center: 0 })).toEqual([-2, 2]);
+    });
+    it('a tiny pressure change stays a small fraction of the plot after niceRange', () => {
+      const [lo, hi] = padSpan(1023.5, 1024.2, { min: 10 });
+      const r = niceRange(lo, hi, 3);
+      expect(0.7 / (r.max - r.min)).toBeLessThan(0.1);
+    });
   });
 });

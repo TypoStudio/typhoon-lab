@@ -60,6 +60,7 @@ export const zhTW: Record<string, string> = {
   '`': '`', 'Slower': '減速', 'Faster': '加速',
   'Select the previous speed.': '選擇上一級速度。', 'Select the next speed.': '選擇下一級速度。',
   'Reset speed': '重置速度', 'Return only the speed to 10m/s. Shortcut: `.': '僅將速度恢復為10m/s。快捷鍵：`',
+  "Skip ahead 4 hours": "跳過4小時", "Advance the world by 4 hours at once, as if time had run. Works while paused and while playing.": "一次將世界推進4小時，效果與時間自然流逝相同。暫停與播放時皆可使用。", "Time cannot be skipped while the world is loading.": "世界載入期間無法跳過時間。", "Time cannot be skipped while a replay plays.": "重播播放期間無法跳過時間。", "Time cannot be skipped at 7d/s, where the weather is not calculated.": "在不計算天氣的7d/s下無法跳過時間。", "The +4h button in the speed bar jumps the world ahead by exactly 4 hours at once, as if time had run: storms move, damage and news update, and Measure adds one point at the new time. It works while paused (the world stays paused) and while playing. It is off during a replay, while a world is loading, and at 7d/s.": "速度列中的+4h按鈕會一次將世界精確推進4小時，效果與時間自然流逝相同：風暴移動，損失與新聞更新，測量在新時刻增加一個資料點。暫停時可用（維持暫停），播放時也可用。重播期間、世界載入期間以及7d/s下不可用。",
   'Real time': '即時', 'Model time that passes in each second of real time. Change it with the arrows or the 1–9 keys.': '現實中每過一秒，世界裡流逝的時間。可用箭頭或1–9鍵更改。',
   'Real time: 1 second per second': '即時：每秒1秒',
   '10 minutes per second': '每秒10分鐘',

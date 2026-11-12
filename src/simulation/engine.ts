@@ -56,6 +56,8 @@ export const GRID_COLS = Math.round((BOUNDS.east - BOUNDS.west) / GRID_STEP);
 export const GRID_ROWS = Math.round((BOUNDS.north - BOUNDS.south) / GRID_STEP);
 /** Live play has no action cap; these bound replay validation work. */
 export const REPLAY_MAX_HOURS = 24 * 60;
+/** The time skip button: 4 model hours at once. */
+export const SKIP_STEPS = 16;
 export const REPLAY_MAX_TICKS = REPLAY_MAX_HOURS * TICKS_PER_HOUR;
 export const REPLAY_MAX_ACTIONS = 5000;
 export const MAX_ACTIVE_EFFECTS = 64;
@@ -2486,6 +2488,11 @@ function mergeStorms(state: GameState, archive = true): Set<number> {
 }
 
 /** Advance exactly one fixed step of STEP_HOURS. The world never ends. */
+/** Time skip: exactly the steps a running world would take. Nothing is recorded; replays reach the same tick by stepping. */
+export function skipAhead(state: GameState): void {
+  for (let i = 0; i < SKIP_STEPS; i++) stepGame(state);
+}
+
 export function stepGame(state: GameState): void {
   const dt = STEP_HOURS;
   for (const e of state.effects) {
@@ -2507,7 +2514,7 @@ export function stepGame(state: GameState): void {
     }
   }
   state.effects = state.effects.filter(e => e.remainingHours > 1e-9);
-  if (state.weather) stepLiveWeather(state.weather, dt, { dayOfYear: dayOfYear(state), cells: state.grid, climate: anomalySet(state) });
+  if (state.weather) stepLiveWeather(state.weather, dt, { dayOfYear: dayOfYear(state), cells: state.grid, climate: anomalySet(state), seaOffset: climateGrid(state.climate)?.sst });
   state.tick += 1;
   state.hours = state.tick * STEP_HOURS;
   if (state.climateLayer && state.tick % CLIMATE_DAY_TICKS === 0) { stepClimateLayer(state.climateLayer); rebuildClimate(state); } // one climate day per 96 steps

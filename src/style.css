@@ -86,6 +86,7 @@ svg { display: block; }
 .btn--float { background: var(--float-bg); }
 .btn--float.btn--play { background: var(--color-accent); color: var(--color-accent-ink); border-color: var(--color-accent); }
 .btn--float.btn--play:hover:not(:disabled) { background: var(--color-focus); }
+.btn--skip { flex: none; font-family: var(--font-mono); font-weight: 700; color: var(--color-accent); }
 .btn--help { flex: none; width: 2.5rem; height: 2.5rem; padding: 0; border-radius: 50%; font-size: var(--text-md); }
 @media (pointer: coarse) { .btn, .icon-btn, .overlay-toggle, .report-tab, .help-tab, .speed__opt { min-height: 2.75rem; } }
 
@@ -288,7 +289,7 @@ svg { display: block; }
 .tool[data-pair] > .tool__icon:not(.tool__icon--secondary) { position: relative; z-index: 1; }
 .tool[data-pair] > .tool__icon--secondary {
   position: absolute; z-index: 0; top: 0.125rem; right: 0.2rem;
-  width: 0.85rem; height: 0.85rem; color: var(--tool-alt-color); opacity: 0.42;
+  width: 20px; height: 20px; color: var(--tool-alt-color); opacity: 0.42;
 }
 .tool__name { max-width: 100%; font-size: var(--text-xs); font-weight: 600; line-height: 1.2; overflow-wrap: anywhere; text-align: center; pointer-events: none; }
 .tool__key { position: absolute; top: 2px; left: 4px; font-size: 0.65rem; line-height: 1; font-weight: 700; opacity: 0.6; pointer-events: none; }
@@ -911,6 +912,7 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
   .clockbar .btn--play { min-width: 44px; }
   .clockbar .btn--play .btn__icon { width: 1.1rem; height: 1.1rem; }
   .clockbar [data-ref="speedReset"], .clockbar [data-ref="climateReset"] { width: 40px; min-width: 0; }
+  .clockbar .btn--skip { width: 44px; min-width: 44px; padding: 0; font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 700; }
   .clockbar .btn__icon--phone { display: block; }
   .clockbar .btn__label { display: none; }
   .speed, .speed__opt { height: 44px; min-height: 44px; }
@@ -936,6 +938,17 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
   .tool { padding: 1px 2px; }
   .tool__icon { width: 16px; height: 16px; }
   .tool__name { line-height: 1.05; }
+}
+
+/* The opposite-condition icon is 0.9 of the main icon (18 px on phones, 14 px on short screens). On phones the main icon sits at the left of the cell so the two never touch. */
+@media (max-width: 47.9375rem), (max-height: 30rem) {
+  .tool[data-pair] > .tool__icon--secondary { top: 1px; right: 1px; width: 18px; height: 18px; }
+}
+@media (max-width: 47.9375rem) {
+  .tool[data-pair] > .tool__icon:not(.tool__icon--secondary) { justify-self: start; margin-inline-start: 5px; }
+}
+@media (max-height: 30rem) {
+  .tool[data-pair] > .tool__icon--secondary { width: 14px; height: 14px; }
 }
 
 /* ---- First-visit tutorial ---------------------------------------------------------------------- */
@@ -1070,13 +1083,23 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
 .onmap-card__info svg { width: 0.9rem; height: 0.9rem; }
 .onmap-box { position: absolute; pointer-events: none; border: 1px dashed color-mix(in oklch, var(--color-ink) 45%, transparent); border-radius: 2px; }
 
+/* Small phones: the +4h button needs room, so the strip's gaps tighten and the clock keeps its full time. */
+@media (max-width: 25rem) {
+  .clockbar { padding-inline: 4px; gap: 2px; }
+  .clockbar .speed__opt { min-width: 32px; }
+  .clockbar .speed__value { min-width: 3rem; }
+  .clockbar [data-ref="speedReset"], .clockbar [data-ref="climateReset"] { width: 36px; }
+}
+
 /* 320 px: the strip also holds the climate reset, so the controls tighten (heights stay 44 px) and the clock keeps its full time. */
 @media (max-width: 22.5rem) {
   .clockbar { padding-inline: 4px; gap: 2px; }
-  .clockbar .speed__opt { min-width: 30px; padding-inline: 2px; }
-  .clockbar .speed__value { min-width: 2.75rem; }
-  .clockbar [data-ref="speedReset"], .clockbar [data-ref="climateReset"] { width: 32px; }
-  .clockbar .btn--play { min-width: 40px; }
+  .clockbar { padding-inline: 2px; }
+  .clockbar .speed__opt { min-width: 26px; padding-inline: 2px; }
+  .clockbar .speed__value { min-width: 2.2rem; padding-inline: 0; }
+  .clockbar [data-ref="speedReset"], .clockbar [data-ref="climateReset"] { width: 30px; }
+  .clockbar .btn--skip { width: 44px; min-width: 44px; }
+  .clockbar .btn--play { min-width: 36px; }
 }
 
 /* A card with no room for its sparkline shrinks to a chip: icon and value only. On phones every card is smaller and shows its (i) only while focused (after a tap). */

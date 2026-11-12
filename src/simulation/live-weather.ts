@@ -1,4 +1,7 @@
 import type { EnvironmentCell, GameState, LiveWeatherSnapshot, WeatherField } from '../types';
+import { airClimatologyInto } from '../data/climate-air';
+import { sstClimatologyInto } from '../data/climate-normals';
+import { slpClimatologyInto } from '../data/climate-slp';
 import { clamp, cosLat, KM_PER_DEG_LAT, KM_PER_DEG_LON_EQ, smoothstep } from './geo';
 
 export const LIVE_WEATHER_COLS = 180;
@@ -7,7 +10,12 @@ const CELLS = LIVE_WEATHER_COLS * LIVE_WEATHER_ROWS;
 /** Game-model timescales; never relax back toward the downloaded snapshot. */
 const PRESSURE_RELAX_HOURS = 72;
 const WIND_ADJUST_HOURS = 12;
-const REFERENCE_PRESSURE = 1010;
+/** Sea-level pressure the field relaxes toward before heating and climate-layer terms: today's 1991-2020 monthly mean (NCEP/NCAR), reused each step. */
+const climatologyPressure = new Float32Array(CELLS);
+/** Near-surface air temperature (NCEP/NCAR) and SST (ERSST) normals for today, reused each step; SST is NaN over land and ice. */
+const climatologyAir = new Float32Array(CELLS), climatologySst = new Float32Array(CELLS);
+/** Columns converge at the poles (a 2 degree column is 4 km wide at 89 degrees): advect no faster than at 80 degrees, or the pole rows shuffle their noise by a cell per step. */
+const MIN_ADVECTION_COS = Math.cos(80 * Math.PI / 180);
 
 /** Checks both network/cache data and untrusted replay files before they reach the model. */
 export function isLiveWeatherSnapshot(value: unknown): value is LiveWeatherSnapshot {
@@ -57,8 +65,8 @@ export function sampleLiveWeather(weather: WeatherField, lon: number, lat: numbe
 
 /** Climate-layer anomalies (2 degree grid, same layout as the weather): pressure in hPa, direct wind in m/s, sea temperature in degC. */
 interface ClimateForcing { slp: ArrayLike<number>; u: ArrayLike<number>; v: ArrayLike<number>; sst: ArrayLike<number>; air: ArrayLike<number> }
-interface WeatherForcing { dayOfYear?: number; cells?: readonly EnvironmentCell[]; climate?: ClimateForcing | null }
-const gaussian = (x: number, centre: number, width: number) => Math.exp(-(((x - centre) / width) ** 2));
+/** seaOffset: the warming/polar sea-temperature offsets already inside cells[].temperature. The engine adds the matching air offset when it reads the air, so the relaxation target leaves them out. */
+interface WeatherForcing { dayOfYear?: number; cells?: readonly EnvironmentCell[]; climate?: ClimateForcing | null; seaOffset?: ArrayLike<number> | null }
 /** Solar-heating approximation used when no imported air temperature exists (older replays). */
 function radiativeTemperature(lat: number, day: number): number {
   const a = Math.abs(lat), summer = Math.sign(lat) * Math.cos(2 * Math.PI * (day - 172) / 365.25);
@@ -75,6 +83,8 @@ export function stepLiveWeather(weather: WeatherField, dt: number, forcing: Weat
   const decay = Math.exp(-dt / PRESSURE_RELAX_HOURS);
   const adjust = 1 - Math.exp(-dt / WIND_ADJUST_HOURS);
   const day = forcing.dayOfYear ?? 213;
+  slpClimatologyInto(day, climatologyPressure);
+  if (air) { airClimatologyInto(day, climatologyAir); sstClimatologyInto(day, climatologySst); }
   const solarLat = 5 * Math.sin(2 * Math.PI * (day - 80) / 365.25);
   const heat = new Float64Array(CELLS), zonalHeat = new Float64Array(LIVE_WEATHER_ROWS);
   let tropicHeat = 0, polarHeat = 0, tropicWeight = 0, polarWeight = 0;
@@ -95,23 +105,23 @@ export function stepLiveWeather(weather: WeatherField, dt: number, forcing: Weat
   const circulation = clamp(contrast / 35, 0, 1.5);
   for (let row = 0; row < LIVE_WEATHER_ROWS; row++) {
     const lat = -89 + row * 2;
-    const a = Math.abs(lat - solarLat);
-    // Parameterised Hadley/Ferrel/polar pressure belts, sustained by the current heat contrast.
-    const belt = 7 * gaussian(a, 30, 11) - 6 * gaussian(a, 60, 11)
-      - 3 * gaussian(a, 0, 12) + 4 * gaussian(a, 90, 12);
     for (let col = 0; col < LIVE_WEATHER_COLS; col++) {
       const k = row * LIVE_WEATHER_COLS + col, lon = -179 + col * 2;
       const fromLat = clamp(lat - weather.v[k] * 3.6 * dt / KM_PER_DEG_LAT, -89, 89);
-      const fromLon = lon - weather.u[k] * 3.6 * dt / (KM_PER_DEG_LON_EQ * cosLat((lat + fromLat) / 2));
+      const fromLon = lon - weather.u[k] * 3.6 * dt / (KM_PER_DEG_LON_EQ * Math.max(MIN_ADVECTION_COS, cosLat((lat + fromLat) / 2)));
       const from = sampleLiveWeather(weather, fromLon, fromLat);
       const thermalLow = clamp(-0.18 * (heat[k] - zonalHeat[row]), -5, 5);
-      const equilibrium = REFERENCE_PRESSURE + belt * circulation + thermalLow + (forcing.climate ? forcing.climate.slp[k] : 0);
+      const equilibrium = climatologyPressure[k] + thermalLow + (forcing.climate ? forcing.climate.slp[k] : 0);
       pressure[k] = clamp(equilibrium + (from.p - equilibrium) * decay, 800, 1100);
       u[k] = from.u; v[k] = from.v;
       if (air) {
         const sea = forcing.cells ? (forcing.cells[k].land ? null : forcing.cells[k].temperature) : weather.seaTemperature?.[k];
-        const target = (sea == null ? radiativeTemperature(lat, day) : sea - 1.5) + (forcing.cells?.[k]?.airHeating ?? 0);
-        air[k] = clamp(from.air! + (target - from.air!) * (1 - Math.exp(-dt / (sea == null ? 72 : 48))), -100, 65);
+        // Land and ice: today's real monthly mean. Open sea: the sea temperature plus the real air-minus-sea difference of that place and date, so SST anomalies reach the air.
+        const atSea = sea != null && climatologySst[k] === climatologySst[k];
+        // The offsets and climate-layer anomalies in the sea temperature are added to the air again when it is read: leave them out here so they count once.
+        const seaFree = atSea ? sea! - (forcing.seaOffset ? forcing.seaOffset[k] : 0) - (forcing.cells && forcing.climate ? forcing.climate.sst[k] : 0) : 0;
+        const target = (atSea ? seaFree - climatologySst[k] + climatologyAir[k] : climatologyAir[k]) + (forcing.cells?.[k]?.airHeating ?? 0);
+        air[k] = clamp(from.air! + (target - from.air!) * (1 - Math.exp(-dt / (atSea ? 48 : 72))), -100, 65);
       }
     }
   }

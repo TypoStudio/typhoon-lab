@@ -91,6 +91,33 @@ export function elapsedTicks(spanDays: number, count = 5): AxisTick[] {
   });
 }
 
+/** The least a y axis may span, so an ordinary wiggle is not drawn as a cliff. */
+export interface MinSpan {
+  /** Smallest span, in the plot's unit. */
+  min: number;
+  /** Pad symmetrically about this value (0 for anomalies and indices) instead of about the data. */
+  center?: number;
+  /** The quantity cannot go below this (0 for rates and concentrations): a short range starts here. */
+  floor?: number;
+  /** The quantity cannot go above this (100 for humidity): a padded range slides down to stay inside. */
+  ceil?: number;
+}
+
+/** Widens [lo, hi] to at least `span.min`: centred on the data, symmetric about `center`, or starting at `floor`. A wider range is returned unchanged. */
+export function padSpan(lo: number, hi: number, span: MinSpan | undefined): [number, number] {
+  if (!span || !Number.isFinite(lo) || !Number.isFinite(hi)) return [lo, hi];
+  if (span.center !== undefined) {
+    const half = Math.max(span.min / 2, Math.abs(lo - span.center), Math.abs(hi - span.center));
+    return [span.center - half, span.center + half];
+  }
+  if (hi - lo >= span.min) return [lo, hi];
+  if (span.floor !== undefined && lo - (span.min - (hi - lo)) / 2 < span.floor) { lo = span.floor; return [lo, Math.max(hi, lo + span.min)]; }
+  const mid = (lo + hi) / 2;
+  lo = mid - span.min / 2; hi = mid + span.min / 2;
+  if (span.ceil !== undefined && hi > span.ceil) { lo -= hi - span.ceil; hi = span.ceil; }
+  return [lo, hi];
+}
+
 /** Y axis: a rounded range containing [lo, hi] and about `count` tick values. */
 export function niceRange(lo: number, hi: number, count = 4): { min: number; max: number; ticks: number[] } {
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { min: 0, max: 1, ticks: [0, 1] };

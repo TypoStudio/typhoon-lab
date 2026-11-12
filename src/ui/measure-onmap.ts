@@ -138,7 +138,7 @@ export function createMeasureOnMap(o: MeasureOnMapOptions): MeasureOnMap {
       const plot = MEASURE_BY_ID.get(r.id)!.plots[0];
       const n = c.pin ?? 0;
       const style = pinStyle(c.pin ?? 1);
-      drawSparkline(r.canvas, [{ n, color: style.color, dashed: style.dashed, s: o.book.seriesOf(r.id, 0, n) }], plot.zero, r.id === 'measure-nino34' ? o.book.observed : null, colors);
+      drawSparkline(r.canvas, [{ n, color: style.color, dashed: style.dashed, s: o.book.seriesOf(r.id, 0, n) }], plot.zero, plot.span, r.id === 'measure-nino34' ? o.book.observed : null, colors);
     }
   }
 

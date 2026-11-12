@@ -1,4 +1,4 @@
-import type { Series } from './measure-store';
+import { padSpan, type MinSpan, type Series } from './measure-store';
 
 export interface SparkLine { n: number; color: string; dashed: boolean; s: Series | undefined }
 export interface SparkColors { ink: string; rule: string; surface: string }
@@ -15,7 +15,7 @@ export function sparkColors(host: Element): SparkColors {
 }
 
 /** A sparkline of every line on one canvas (its CSS size): no axes, a dashed zero line for anomalies, the observed Niño 3.4 dashed in ink, an end marker per line. */
-export function drawSparkline(canvas: HTMLCanvasElement, lines: SparkLine[], zero: boolean | undefined, observed: Series | null, c: SparkColors): void {
+export function drawSparkline(canvas: HTMLCanvasElement, lines: SparkLine[], zero: boolean | undefined, span: MinSpan | undefined, observed: Series | null, c: SparkColors): void {
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const w = Math.round(canvas.clientWidth), h = Math.round(canvas.clientHeight);
     if (!w || !h) return;
@@ -33,6 +33,7 @@ export function drawSparkline(canvas: HTMLCanvasElement, lines: SparkLine[], zer
     if (observed) observed.t.forEach((time, k) => { if (time >= t0 && time <= t1) { lo = Math.min(lo, observed.v[k]); hi = Math.max(hi, observed.v[k]); } });
     if (zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
     if (!Number.isFinite(lo)) return;
+    [lo, hi] = padSpan(lo, hi, span);
     if (hi - lo < 1e-9) { lo -= 0.5; hi += 0.5; }
     const padX = 4, padY = 4;
     const X = (time: number) => padX + ((time - t0) / (t1 - t0)) * (w - 2 * padX);

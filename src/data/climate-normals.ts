@@ -1,4 +1,5 @@
 import data from './generated/climate-normals.json';
+import { blendMonthsInto, buildMonthGrids } from './climate-grid';
 
 /** 1991-2020 monthly SST climatology (NOAA ERSST v5) on a global 5 degree grid; see scripts/prepare-climate.mjs. */
 export const NORMALS_COLS: number = data.cols;
@@ -47,4 +48,15 @@ export function equatorNormalSst(month: number, lonEast: number): number {
   const v = t === 0 ? a : a * (1 - t) + equatorMonth((m0 + 1) % 12, lonEast) * t;
   if (Number.isNaN(v)) throw new Error(`equatorNormalSst: land at ${lonEast}E`);
   return v;
+}
+
+let sstMonths: Float32Array[] | undefined;
+
+/**
+ * Fills `out` (180 x 90 weather grid, degC) with the 1991-2020 SST normal for a day of the year (same interpolation as the air climatology).
+ * NaN where all four surrounding boxes are land or ice: callers treat that as "no sea".
+ */
+export function sstClimatologyInto(dayOfYear: number, out: Float32Array | number[]): void {
+  sstMonths ??= buildMonthGrids(data, i => (data.sst[i] === data.missing ? NaN : data.sst[i] * data.scale));
+  blendMonthsInto(sstMonths, dayOfYear, out);
 }

@@ -60,6 +60,7 @@ export const ko: Record<string, string> = {
   '`': '₩', 'Slower': '느리게', 'Faster': '빠르게',
   'Select the previous speed.': '이전 속도를 선택합니다.', 'Select the next speed.': '다음 속도를 선택합니다.',
   'Reset speed': '속도 초기화', 'Return only the speed to 10m/s. Shortcut: `.': '속도만 10m/s로 되돌립니다. 단축키: `',
+  "Skip ahead 4 hours": "4시간 건너뛰기", "Advance the world by 4 hours at once, as if time had run. Works while paused and while playing.": "세계를 4시간 뒤로 한 번에 진행합니다. 시간이 흐른 것과 똑같이 반영됩니다. 일시정지 중에도, 재생 중에도 사용할 수 있습니다.", "Time cannot be skipped while the world is loading.": "세계를 불러오는 동안에는 시간을 건너뛸 수 없습니다.", "Time cannot be skipped while a replay plays.": "리플레이가 재생되는 동안에는 시간을 건너뛸 수 없습니다.", "Time cannot be skipped at 7d/s, where the weather is not calculated.": "날씨를 계산하지 않는 7d/s에서는 시간을 건너뛸 수 없습니다.", "The +4h button in the speed bar jumps the world ahead by exactly 4 hours at once, as if time had run: storms move, damage and news update, and Measure adds one point at the new time. It works while paused (the world stays paused) and while playing. It is off during a replay, while a world is loading, and at 7d/s.": "속도 막대의 +4h 버튼은 세계를 정확히 4시간 뒤로 한 번에 보냅니다. 시간이 흐른 것과 똑같이 태풍이 움직이고 피해와 뉴스가 갱신되며, 측정에는 새 시각의 점이 하나 추가됩니다. 일시정지 중에도(일시정지는 유지됩니다) 재생 중에도 사용할 수 있습니다. 리플레이 재생 중, 세계를 불러오는 중, 7d/s에서는 사용할 수 없습니다.",
   'Real time': '실시간', 'Model time that passes in each second of real time. Change it with the arrows or the 1–9 keys.': '실제 1초 동안 세계에서 흐르는 시간입니다. 화살표나 1–9 키로 바꾸십시오.',
   'Real time: 1 second per second': '실시간: 1초에 1초',
   '10 minutes per second': '1초에 10분',

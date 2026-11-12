@@ -7,7 +7,7 @@ import { loadLiveWeather } from './data/live-weather';
 import { focusTraffic } from './simulation/traffic';
 import {
   DEFAULT_START_DOY, REPLAY_MAX_TICKS, STEP_HOURS, CLIMATE_MAX_DAYS, advanceClimateTime, createGame, fastDaysLeft, isValidDayOfYear, isValidSeed, loadHistoric, placeFormation, placeTool, refreshClimateView, replayGame, setClimate, setClimateMode,
-  loadClimateScenario, endClimateScenarioNow, resetClimateNow, setGenesis, setHistoricEnvironment, setSeason, stepGame, validateActions,
+  loadClimateScenario, endClimateScenarioNow, resetClimateNow, setGenesis, setHistoricEnvironment, setSeason, skipAhead, stepGame, validateActions,
 } from './simulation/engine';
 import { DEFAULT_TIME_SPEED, MAX_WEATHER_SPEED, TIME_SPEEDS, isFastClimateSpeed, isTimeSpeed, takeSteps } from './time';
 
@@ -171,6 +171,13 @@ async function handle(msg: WorkerRequest): Promise<void> {
       speed = msg.speed;
       if (playing && !interacting) syncPath();
       return postState();
+    }
+    case 'skip': {
+      advanceTo(performance.now());
+      if (isFastClimateSpeed(speed) || state.climateTime?.active) return fail('Time cannot be skipped at the fast climate speed.');
+      skipAhead(state);
+      lastWallMs = performance.now(); // the skip's own run time is not played time
+      return post({ type: 'state', state, clockHours: state.hours + carry * STEP_HOURS, skipped: true });
     }
     case 'traffic-view': {
       if (!playing || interacting || msg.tick !== state.tick) return;

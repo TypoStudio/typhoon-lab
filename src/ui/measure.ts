@@ -3,7 +3,7 @@ import { OCEAN_LON0, thermoclineMeanDepth } from '../simulation/climate-core';
 import { wrapLon } from '../render/view';
 import type { GameState } from '../types';
 import { observedNino34From } from '../data/climate-observed';
-import { DAYS_PER_YEAR, addSample, createSeries, isDue, lastValue, type Series } from './measure-store';
+import { DAYS_PER_YEAR, type MinSpan, addSample, createSeries, isDue, lastValue, type Series } from './measure-store';
 
 /** One graph inside a card (a card stacks one or two). */
 export interface MeasurePlot {
@@ -14,6 +14,8 @@ export interface MeasurePlot {
   guides?: { value: number; label: string }[];
   /** Keep zero inside the range (anomalies and indices). */
   zero?: boolean;
+  /** Least y-axis span; see `padSpan`. */
+  span?: MinSpan;
 }
 
 /** What a reader gets: the state plus the point, with the point's environment read once however many items use it. */
@@ -53,30 +55,30 @@ const NINO_GUIDES = [{ value: 0.5, label: 'El Niño' }, { value: -0.5, label: 'L
 export const MEASURE_ITEMS = [
   { id: 'measure-sea-temperature', key: 'z', name: 'Sea temperature', basin: false,
     tip: 'Drop on the map to graph the sea surface temperature there. Land shows a gap.',
-    plots: [{ label: 'Sea temperature', unit: '°C', digits: 1 }], read: r => [r.point().seaTemperature ?? NaN] },
+    plots: [{ label: 'Sea temperature', unit: '°C', digits: 1, span: { min: 2 } }], read: r => [r.point().seaTemperature ?? NaN] },
   { id: 'measure-air-temperature', key: 'x', name: 'Air temperature', basin: false,
     tip: 'Drop on the map to graph the air temperature near the surface there.',
-    plots: [{ label: 'Air temperature', unit: '°C', digits: 1 }], read: r => [r.point().airTemperature] },
+    plots: [{ label: 'Air temperature', unit: '°C', digits: 1, span: { min: 2 } }], read: r => [r.point().airTemperature] },
   { id: 'measure-pressure', key: 'c', name: 'Sea-level pressure', basin: false,
     tip: 'Drop on the map to graph the sea-level pressure there.',
-    plots: [{ label: 'Sea-level pressure', unit: 'hPa', digits: 1 }], read: r => [r.point().pressure] },
+    plots: [{ label: 'Sea-level pressure', unit: 'hPa', digits: 1, span: { min: 10 } }], read: r => [r.point().pressure] },
   { id: 'measure-wind', key: 'v', name: 'Wind speed', basin: false,
     tip: 'Drop on the map to graph the surface wind speed there, storms included.',
-    plots: [{ label: 'Wind speed', unit: 'm/s', digits: 1 }], read: r => [r.point().windSpeed] },
+    plots: [{ label: 'Wind speed', unit: 'm/s', digits: 1, span: { min: 5, floor: 0 } }], read: r => [r.point().windSpeed] },
   { id: 'measure-humidity', key: 'b', name: 'Humidity and rainfall', basin: false,
     tip: 'Drop on the map to graph the humidity and the rainfall there, in two plots.',
-    plots: [{ label: 'Humidity', unit: '%', digits: 0 }, { label: 'Rainfall', unit: 'mm/h', digits: 1 }],
+    plots: [{ label: 'Humidity', unit: '%', digits: 0, span: { min: 10, floor: 0, ceil: 100 } }, { label: 'Rainfall', unit: 'mm/h', digits: 1, span: { min: 2, floor: 0 } }],
     read: r => { const p = r.point(); return [p.humidity * 100, p.rainfall]; } },
   { id: 'measure-shear', key: 'n', name: 'Wind shear', basin: false,
     tip: 'Drop on the map to graph the wind shear between 200 and 850 hPa there.',
-    plots: [{ label: 'Wind shear', unit: 'm/s', digits: 1 }], read: r => [r.point().shear] },
+    plots: [{ label: 'Wind shear', unit: 'm/s', digits: 1, span: { min: 5, floor: 0 } }], read: r => [r.point().shear] },
   { id: 'measure-formation', key: 'm', name: 'Formation potential', basin: false,
     tip: 'Drop on the map to graph the typhoon formation score there. Over land it is 0.',
-    plots: [{ label: 'Typhoon formation potential', unit: 'score', digits: 2, guides: [{ value: GENESIS_THRESHOLD, label: 'Formation threshold' }] }],
+    plots: [{ label: 'Typhoon formation potential', unit: 'score', digits: 2, span: { min: 0.5, floor: 0 }, guides: [{ value: GENESIS_THRESHOLD, label: 'Formation threshold' }] }],
     read: r => [r.point().genesisPotential] },
   { id: 'measure-thermocline', key: ',', name: 'Thermocline depth', basin: false, needsLayer: true,
     tip: 'Drop inside the equatorial Pacific, 120°E to 80°W, to graph the thermocline depth and how far it is from normal. It depends on longitude only.',
-    plots: [{ label: 'Thermocline depth', unit: 'm', digits: 0 }, { label: 'Thermocline anomaly', unit: 'm', digits: 1, zero: true }],
+    plots: [{ label: 'Thermocline depth', unit: 'm', digits: 0, span: { min: 20 } }, { label: 'Thermocline anomaly', unit: 'm', digits: 1, zero: true, span: { min: 10, center: 0 } }],
     read: r => {
       const e = lonEast(r.lon);
       const tc = readThermocline(r.state, e);
@@ -84,16 +86,16 @@ export const MEASURE_ITEMS = [
     } },
   { id: 'measure-nino34', key: '.', name: 'Niño 3.4', basin: true, needsLayer: true,
     tip: 'Drop anywhere to graph the Niño 3.4 index, the Pacific temperature anomaly that defines El Niño and La Niña.',
-    plots: [{ label: 'Niño 3.4', unit: '°C', digits: 2, zero: true, guides: NINO_GUIDES }],
+    plots: [{ label: 'Niño 3.4', unit: '°C', digits: 2, zero: true, span: { min: 1.2, center: 0 }, guides: NINO_GUIDES }],
     read: r => [readClimateIndices(r.state)?.nino34 ?? 0] },
   { id: 'measure-soi-wwv', key: '/', name: 'SOI and warm water', basin: true, needsLayer: true,
     tip: 'Drop anywhere to graph the Southern Oscillation Index and the warm water volume of the Pacific.',
-    plots: [{ label: 'Southern Oscillation Index', unit: 'index', digits: 1, zero: true }, { label: 'Warm water volume', unit: 'm', digits: 1, zero: true }],
+    plots: [{ label: 'Southern Oscillation Index', unit: 'index', digits: 1, zero: true, span: { min: 2, center: 0 } }, { label: 'Warm water volume', unit: 'm', digits: 1, zero: true, span: { min: 10, center: 0 } }],
     read: r => { const i = readClimateIndices(r.state); return [i?.soi ?? 0, i?.wwv ?? 0]; } },
   // No shortcut: the keys of the bottom row are all taken, and backslash types ₩ on Korean keyboards (speed reset).
   { id: 'measure-fine-dust', key: '', name: 'Fine dust (PM2.5)', basin: false,
     tip: 'Drop on the map to graph the fine dust concentration there. The lines mark the air quality bands; where there is no fine dust it reads 0.',
-    plots: [{ label: 'Fine dust (PM2.5)', unit: 'µg/m³', digits: 0, guides: [
+    plots: [{ label: 'Fine dust (PM2.5)', unit: 'µg/m³', digits: 0, span: { min: 25, floor: 0 }, guides: [
       { value: 12, label: 'Good up to 12' }, { value: 35.5, label: 'Moderate up to 35' }, { value: 150.5, label: 'Unhealthy up to 150' }, { value: 250.5, label: 'Very unhealthy up to 250' }] }],
     read: r => [pm25At(r.state, r.lon, r.lat)] },
 ] as const satisfies readonly MeasureItem[];

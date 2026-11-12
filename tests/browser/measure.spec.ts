@@ -47,6 +47,9 @@ test('measure tab: drop by drag and by key, compare points, basin indices, rejec
   await expect(card(page, 'sea-temperature').locator('.measure-line')).toHaveCount(1);
   await expect(page.getByTestId('measure-plot-measure-sea-temperature-0')).toHaveAttribute('aria-label', /#1.*°C/);
   expect((await probes(page)).pins).toHaveLength(1);
+  // One pin: only the header locate button; the per-line one appears with a second pin.
+  await expect(page.getByTestId('measure-locate-measure-sea-temperature')).toBeVisible();
+  await expect(page.getByTestId('measure-line-locate-measure-sea-temperature-1')).toHaveCount(0);
   await expect(page.getByTestId('map-stage')).not.toHaveAttribute('data-armed', /measure/);
 
   // The model keeps running and the line gains points.
@@ -61,6 +64,8 @@ test('measure tab: drop by drag and by key, compare points, basin indices, rejec
   const [zx, zy] = await px(page, 150, 2);
   await page.mouse.click(zx, zy);
   await expect(card(page, 'sea-temperature').locator('.measure-line')).toHaveCount(2);
+  await expect(page.locator('[data-testid^="measure-line-locate-measure-sea-temperature-"]')).toHaveCount(2);
+  await expect(page.getByTestId('measure-line-locate-measure-air-temperature-2')).toHaveCount(0);
   expect((await probes(page)).pins.map(p => p.n)).toEqual([1, 2, 3]);
 
   // The same item at the same place does not duplicate.

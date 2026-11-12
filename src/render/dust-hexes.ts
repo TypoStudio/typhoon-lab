@@ -7,19 +7,33 @@ import { MAP_Y1, inOutline, unproject, type FlatView } from './view';
 
 /**
  * Fine dust and yellow dust as a hexagon grid (pointy-top), drawn as vectors on the overlay so the edges stay crisp at any zoom. The hexes are regular on screen: in the flat view the lattice lives in the
- * Equal Earth plane (an affine image of the screen, so a hex is a regular hexagon at every zoom and latitude, and the area it covers is equal everywhere); in the globe view it is a regular lattice in the orthographic plane (screen px, anchored at the disc centre, i.e.
- * tangent to the sphere at the view centre); each centre is mapped back to lon/lat to sample the field. The lattice is regular by construction, so hexes never overlap or leave holes; it is rebuilt whenever the camera changes.
+ * Equal Earth plane (an affine image of the screen, so a hex is a regular hexagon at every zoom and latitude, and the area it covers is equal everywhere), so panning only re-projects it; in the globe view it is a regular lattice in the plane tangent to the sphere at an
+ * anchor (the view centre at build time), lifted onto the sphere orthographically. Centres and corners are stored as unit vectors on the Earth, so each frame only rotates them with the camera: during a rotate or pan the hexes travel rigidly with the ground and keep their colour.
+ * The lattice is one continuous map of the plane, so hexes never overlap or leave holes. The globe lattice is rebuilt only on a new state/field, a zoom step, or when the view has moved far enough from the anchor (see dustHexesFor).
  * The size follows the zoom (about HEX_TARGET_PX across, in steps of √2 from HEX_WIDTH), only the visible area plus a margin is built, and a build is reused until the zoom crosses a step or the view leaves the built area.
  * Fine dust: tight tiling in the stepped FINE_RAMP, a constant 1 px gap and no outline. Yellow dust: smaller, spaced tiles with a dashed edge, sand-yellow.
  */
 export interface DustHex {
   /** Geographic centre (what the field is sampled at). */
   lon: number; lat: number; kind: 'finedust' | 'dust'; level: number;
-  /** Flat view: centre in world units. Globe view: centre in screen px (as of the build). */
+  /** Flat view: centre in world units. Globe view: centre in the anchor's tangent plane, in unit-sphere units (east, north). */
   x: number; y: number;
 }
-/** Hexagons of one build. `width` is the hex width in world units (flat) or in degrees of latitude at the view centre (globe, px = width * scale); `area` is what was built, [x0, y0, x1, y1] in world units (flat; unused in the globe view). */
-export interface DustHexes { hexes: DustHex[]; width: number; space: 'world' | 'screen'; area: readonly [number, number, number, number] }
+/**
+ * Hexagons of one build. `width` is the hex width in world units (flat) or in degrees of latitude at the anchor (globe, px = width * scale); `area` is what was built, [x0, y0, x1, y1] in world units (flat; unused in the globe view).
+ * Globe only: `anchor` is the tangent point [lon, lat], `cap` the angular radius (deg) around it that was built, `thr` how far (deg) the view centre may move before a rebuild, and `geo` holds GLOBE_STRIDE numbers per hex: the unit vector of the centre, then of its six corners.
+ */
+export interface DustHexes {
+  hexes: DustHex[]; width: number; space: 'world' | 'globe'; area: readonly [number, number, number, number];
+  anchor?: readonly [number, number]; cap?: number; thr?: number; geo?: Float64Array;
+}
+export const GLOBE_STRIDE = 21;
+/** The built cap never exceeds this angle from the anchor: beyond it the tangent-plane lift is too stretched (and the limb is skipped). */
+export const GLOBE_CAP_MAX = 82;
+/** The view centre may drift this far (deg, at most; less when zoomed in) from the anchor before the globe lattice is rebuilt. */
+export const GLOBE_REBUILD_MAX = 25;
+/** Without further camera changes for this long (ms) a pending globe rebuild is done; during a gesture the old lattice keeps moving with the ground. */
+export const DUST_SETTLE_MS = 120
 /**
  * Fine-dust ramp, one step per band edge in FINE_EDGES: cream -> peach -> orange -> red -> crimson -> purple -> indigo. Lightness falls
  * steadily and the hue moves from warm to purple, so neighbouring steps differ in both; the hue stays away from yellow dust's sand-yellow.
@@ -105,7 +119,33 @@ function visit(out: DustHex[], sm: Sampler, state: GameState, field: FieldData |
   }
 }
 
-function build(state: GameState, field: FieldData | null, finedust: boolean, view: MapCamera, width: number, area: readonly [number, number, number, number]): DustHex[] {
+const D2R = Math.PI / 180, R2D = 180 / Math.PI;
+interface GlobeFrame { a: Float64Array; e: Float64Array; n: Float64Array }
+/** Anchor, east and north unit vectors at a geographic point (same axes as geoToUnit). */
+function globeFrame(lon: number, lat: number): GlobeFrame {
+  const l = lon * D2R, p = lat * D2R, sl = Math.sin(l), cl = Math.cos(l), sp = Math.sin(p), cp = Math.cos(p);
+  return { a: Float64Array.of(cp * sl, sp, cp * cl), e: Float64Array.of(cl, 0, -sl), n: Float64Array.of(-sp * sl, cp, -sp * cl) };
+}
+/** Tangent-plane point (u, v) on the sphere: a·√(1−ρ²) + e·u + n·v, ρ clamped just inside the limb. */
+function planeToUnit(f: GlobeFrame, u: number, v: number, out: Float64Array, o: number): void {
+  let r2 = u * u + v * v;
+  if (r2 > 0.9998) { const k = Math.sqrt(0.9998 / r2); u *= k; v *= k; r2 = 0.9998; }
+  const c = Math.sqrt(1 - r2);
+  for (let k = 0; k < 3; k++) out[o + k] = f.a[k] * c + f.e[k] * u + f.n[k] * v;
+}
+/** Angular radius (deg) of the cap around the disc centre that can reach the viewport. */
+function viewCap(g: GlobeView): number {
+  const cx = g.width / 2 + g.offsetX, cy = g.height / 2, d = Math.hypot(Math.max(cx, g.width - cx), Math.max(cy, g.height - cy));
+  return d >= g.radius ? 90 : Math.asin(d / g.radius) * R2D;
+}
+/** Angle (deg) between two geographic points. */
+function arcDeg(lon1: number, lat1: number, lon2: number, lat2: number): number {
+  const a = lat1 * D2R, b = lat2 * D2R, c = Math.sin(a) * Math.sin(b) + Math.cos(a) * Math.cos(b) * Math.cos((lon1 - lon2) * D2R);
+  return Math.acos(Math.max(-1, Math.min(1, c))) * R2D;
+}
+const globeThreshold = (theta: number): number => Math.max(8, Math.min(GLOBE_REBUILD_MAX, theta));
+
+function build(state: GameState, field: FieldData | null, finedust: boolean, view: MapCamera, width: number, area: readonly [number, number, number, number], anchor?: readonly [number, number], cap?: number): DustHex[] {
   const out: DustHex[] = [];
   const sm = sampler(state, field, finedust);
   if (!sm.fine && !sm.hazards.length) return out;
@@ -124,49 +164,95 @@ function build(state: GameState, field: FieldData | null, finedust: boolean, vie
     }
     return out;
   }
-  // Globe: a regular pointy-top lattice in screen px about the disc centre, kept inside the disc.
-  const g = view as GlobeView, cx = g.width / 2 + g.offsetX, cy = g.height / 2;
-  const pitch = width * g.scale, pr = pitch / Math.sqrt(3), rowPx = 1.5 * pr, reach = g.radius - pr;
-  for (let j = Math.floor(-cy / rowPx); j <= Math.ceil((g.height - cy) / rowPx); j++) {
-    const y = cy + rowPx * j, dy = rowPx * j;
-    if (Math.abs(dy) > reach) continue;
-    const shift = j & 1 ? pitch / 2 : 0, half = Math.sqrt(reach * reach - dy * dy);
-    for (let i = Math.ceil((-half - shift) / pitch); i <= Math.floor((half - shift) / pitch); i++) {
-      const x = cx + shift + pitch * i;
-      if (x < -pitch || x > g.width + pitch || y < -pitch || y > g.height + pitch) continue;
-      const ll = g.pxToLonLat(x, y);
-      if (!ll || !rowHasDust(sm, ll[1])) continue;
-      visit(out, sm, state, field, ll[0], ll[1], x, y);
+  // Globe: a regular pointy-top lattice in the plane tangent at the anchor, lifted onto the sphere (orthographic inverse), out to angular radius `cap`.
+  const f = globeFrame(anchor![0], anchor![1]), w = width * D2R, pr = w / Math.sqrt(3), gRow = 1.5 * pr, rho = Math.sin(cap! * D2R), p = new Float64Array(3);
+  for (let j = Math.floor(-rho / gRow); j <= Math.ceil(rho / gRow); j++) {
+    const v = gRow * j;
+    if (Math.abs(v) > rho) continue;
+    const shift = j & 1 ? w / 2 : 0, half = Math.sqrt(rho * rho - v * v);
+    for (let i = Math.ceil((-half - shift) / w); i <= Math.floor((half - shift) / w); i++) {
+      const u = shift + w * i;
+      planeToUnit(f, u, v, p, 0);
+      const lat = Math.asin(p[1]) * R2D;
+      if (!rowHasDust(sm, lat)) continue;
+      visit(out, sm, state, field, Math.atan2(p[0], p[2]) * R2D, lat, u, v);
     }
   }
   return out;
 }
 
-/** Hexagons for a width, coarsened by √2 steps while a build would pass MAX_HEXES. */
+/** Hexagons for a width, coarsened by √2 steps while a build would pass MAX_HEXES. The globe lattice is anchored at the current view centre and built out to the visible cap plus a margin. */
 export function buildDustHexes(state: GameState, field: FieldData | null, finedust: boolean, view: MapCamera, width = dustHexWidth(view.scale), margin = 0.3): DustHexes {
   const flat = view.kind === 'flat', v = viewArea(view);
   const mx = flat ? (v[2] - v[0]) * margin : 0, my = flat ? (v[3] - v[1]) * margin : 0;
   const area = [v[0] - mx, v[1] - my, v[2] + mx, v[3] + my] as const;
-  let w = width, hexes = build(state, field, finedust, view, w, area);
-  while (hexes.length > MAX_HEXES && w < HEX_WIDTH_MAX * 2) { w *= Math.SQRT2; hexes = build(state, field, finedust, view, w, area); }
-  return { hexes, width: w, space: flat ? 'world' : 'screen', area };
+  let anchor: [number, number] | undefined, cap: number | undefined, thr: number | undefined;
+  if (!flat) {
+    const g = view as GlobeView, theta = viewCap(g);
+    anchor = g.centerLonLat(); thr = globeThreshold(theta); cap = Math.min(GLOBE_CAP_MAX, theta + thr);
+  }
+  let w = width, hexes = build(state, field, finedust, view, w, area, anchor, cap);
+  while (hexes.length > MAX_HEXES && w < HEX_WIDTH_MAX * 2) { w *= Math.SQRT2; hexes = build(state, field, finedust, view, w, area, anchor, cap); }
+  if (flat) return { hexes, width: w, space: 'world', area };
+  const f = globeFrame(anchor![0], anchor![1]), geo = new Float64Array(hexes.length * GLOBE_STRIDE), r = w * D2R / Math.sqrt(3);
+  hexes.forEach((h, i) => {
+    const o = i * GLOBE_STRIDE;
+    planeToUnit(f, h.x, h.y, geo, o);
+    for (let c = 0; c < 6; c++) planeToUnit(f, h.x + r * Math.cos(Math.PI / 6 + c * Math.PI / 3), h.y + r * Math.sin(Math.PI / 6 + c * Math.PI / 3), geo, o + 3 + 3 * c);
+  });
+  return { hexes, width: w, space: 'globe', area, anchor, cap, thr, geo };
+}
+
+let screen = new Float64Array(0);
+/**
+ * Screen position of every globe hexagon with the current camera: 14 numbers per hex (centre x, y, then six corner x, y); cx is NaN for a hex that is not wholly on the visible side.
+ * Only a rotation per point, no trig: this is the whole per-frame cost, and it is why hexes move with the ground.
+ */
+export function projectGlobeHexes(g: GlobeView, built: DustHexes): Float64Array {
+  const n = built.hexes.length, geo = built.geo!, m = g.rotation(), R = g.radius, ox = g.width / 2 + g.offsetX, oy = g.height / 2;
+  if (screen.length < n * 14) screen = new Float64Array(n * 14);
+  for (let i = 0; i < n; i++) {
+    const o = i * 14, q = i * GLOBE_STRIDE;
+    let ok = true;
+    for (let k = 0; k < 7 && ok; k++) {
+      const x = geo[q + 3 * k], y = geo[q + 3 * k + 1], z = geo[q + 3 * k + 2];
+      if (m[6] * x + m[7] * y + m[8] * z <= 0.02) { ok = false; break; } // limb: skip the whole hexagon
+      screen[o + 2 * k] = ox + R * (m[0] * x + m[1] * y + m[2] * z);
+      screen[o + 2 * k + 1] = oy - R * (m[3] * x + m[4] * y + m[5] * z);
+    }
+    if (!ok) screen[o] = NaN;
+  }
+  return screen;
 }
 
 const EMPTY: DustHexes = { hexes: [], width: HEX_WIDTH, space: 'world', area: [0, 0, 0, 0] };
-let cached: { state: GameState; field: FieldData | null; finedust: boolean; kind: string; want: number; key: string; built: DustHexes } | null = null;
-/** Hexagons for the drawn state and view, rebuilt only when the state, its field, the fine-dust switch or the zoom step changed, or the view left the built area (globe: whenever the camera changed). */
-export function dustHexesFor(state: GameState, field: FieldData | null, finedust: boolean, view: MapCamera): DustHexes {
+let cached: { state: GameState; field: FieldData | null; finedust: boolean; kind: string; want: number; built: DustHexes } | null = null;
+let seenVersion = -1, changedAt = 0;
+/**
+ * Hexagons for the drawn state and view. Flat: rebuilt only when the state, its field, the fine-dust switch or the zoom step changed, or the view left the built area (panning just re-projects).
+ * Globe: also rebuilt when the view centre is more than `thr` (8..25 deg, by zoom) from the anchor or the visible cap is no longer covered; that rebuild waits until the camera has been still for DUST_SETTLE_MS
+ * (unless the centre is over GLOBE_FAR deg from the anchor), so a gesture never makes the lattice jump.
+ */
+export function dustHexesFor(state: GameState, field: FieldData | null, finedust: boolean, view: MapCamera, now = performance.now()): DustHexes {
   if (!(state.fineDustRows || state.weatherHazards?.some(hazard => hazard.kind === 'dust'))) return EMPTY;
   const want = dustHexWidth(view.scale), globe = view.kind === 'globe';
-  const key = globe ? `${view.version} ${view.width} ${view.height} ${(view as GlobeView).offsetX}` : '';
-  if (cached && cached.state === state && cached.field === field && cached.finedust === finedust && cached.kind === view.kind && cached.want === want && cached.key === key) {
-    const v = viewArea(view), a = cached.built.area;
-    if (globe || (v[0] >= a[0] && v[1] >= a[1] && v[2] <= a[2] && v[3] <= a[3])) return cached.built;
+  if (view.version !== seenVersion) { seenVersion = view.version; changedAt = now; }
+  if (cached && cached.state === state && cached.field === field && cached.finedust === finedust && cached.kind === view.kind && cached.want === want) {
+    const b = cached.built;
+    if (!globe) {
+      const v = viewArea(view), a = b.area;
+      if (v[0] >= a[0] && v[1] >= a[1] && v[2] <= a[2] && v[3] <= a[3]) return b;
+    } else {
+      const g = view as GlobeView, [lon, lat] = g.centerLonLat(), dist = arcDeg(lon, lat, b.anchor![0], b.anchor![1]);
+      const stale = dist > b.thr! || Math.min(GLOBE_CAP_MAX, dist + viewCap(g)) > b.cap! + 1e-9;
+      if (!stale || (now - changedAt < DUST_SETTLE_MS && dist < GLOBE_FAR)) return b;
+    }
   }
   const built = buildDustHexes(state, field, finedust, view, want);
-  cached = { state, field, finedust, kind: view.kind, want, key, built };
+  cached = { state, field, finedust, kind: view.kind, want, built };
   return built;
 }
+const GLOBE_FAR = 50;
 
 /** Yellow-dust tiles are drawn smaller than their cell, so the gaps between them tell them from the solid fine-dust tiling even when they are tiny. */
 const YELLOW_SHRINK = 0.82;
@@ -175,12 +261,12 @@ export function drawDustHexes(ctx: CanvasRenderingContext2D, view: MapCamera, bu
   const { hexes, width, space } = built;
   if (!hexes.length) return;
   const flat = space === 'world', f = view as FlatView;
+  const proj = flat ? null : projectGlobeHexes(view as GlobeView, built);
   const r = width / Math.sqrt(3);
   const corners = Array.from({ length: 6 }, (_, k) => [r * Math.cos(Math.PI / 6 + k * Math.PI / 3), r * Math.sin(Math.PI / 6 + k * Math.PI / 3)] as const);
   const hexPx = width * view.scale;
   // Fine dust keeps a 1 px gap whatever the zoom; yellow dust 0.82 of the cell, but never a gap under 2 px, so it stays looser than the fine-dust grid.
   const fineShrink = Math.max(0.5, 1 - 1 / hexPx), yellowShrink = Math.max(0.4, Math.min(YELLOW_SHRINK, 1 - 2 / hexPx));
-  const xs = new Float64Array(6), ys = new Float64Array(6);
   ctx.save();
   ctx.lineJoin = 'miter';
   for (const kind of ['finedust', 'dust'] as const) {
@@ -188,7 +274,8 @@ export function drawDustHexes(ctx: CanvasRenderingContext2D, view: MapCamera, bu
     for (let level = 1; level <= (kind === 'dust' ? DUST_LEVELS : FINE_RAMP.length); level++) {
       ctx.beginPath();
       let any = false;
-      for (const hex of hexes) {
+      for (let hi = 0; hi < hexes.length; hi++) {
+        const hex = hexes[hi];
         if (hex.kind !== kind || hex.level !== level) continue;
         if (flat) {
           // The lattice is in world units, so a hexagon is a regular hexagon on screen: scale and shift only.
@@ -201,12 +288,13 @@ export function drawDustHexes(ctx: CanvasRenderingContext2D, view: MapCamera, bu
           any = true;
           continue;
         }
-        // Globe: the centre is already in screen px (the lattice is regular there), so the hexagon is regular too.
-        if (hex.x < -20 || hex.x > view.width + 20 || hex.y < -20 || hex.y > view.height + 20) continue;
-        const k = shrink * view.scale;
-        for (let c = 0; c < 6; c++) { xs[c] = hex.x + corners[c][0] * k; ys[c] = hex.y - corners[c][1] * k; }
-        ctx.moveTo(xs[0], ys[0]);
-        for (let c = 1; c < 6; c++) ctx.lineTo(xs[c], ys[c]);
+        // Globe: centre and corners were rotated with the camera; shrink each corner towards the centre on screen for the gap.
+        const o = hi * 14, px = proj![o];
+        if (px !== px) continue; // limb
+        const py = proj![o + 1];
+        if (px < -40 || px > view.width + 40 || py < -40 || py > view.height + 40) continue;
+        ctx.moveTo(px + (proj![o + 2] - px) * shrink, py + (proj![o + 3] - py) * shrink);
+        for (let c = 1; c < 6; c++) ctx.lineTo(px + (proj![o + 2 + 2 * c] - px) * shrink, py + (proj![o + 3 + 2 * c] - py) * shrink);
         ctx.closePath();
         any = true;
       }

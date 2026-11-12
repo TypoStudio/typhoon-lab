@@ -199,6 +199,8 @@ for (const renderer of ['canvas', 'webgl'] as const) {
 }
 
 test('snapshot export/import reproduces the moment and reload resumes live play', async ({ page }) => {
+  // Two reloads, an import and a download in a base world (`start=` pins the date, so there is no GFS fetch): about 15 s on an idle machine, over 45 s when the machine is loaded.
+  test.setTimeout(180_000);
   await ready(page);
   await hideSidebar(page);
   await page.getByTestId('play-toggle').click();

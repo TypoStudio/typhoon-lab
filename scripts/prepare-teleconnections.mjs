@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Builds ENSO teleconnection regression maps from NCEP/NCAR Reanalysis 1 monthly means.
 //   src/data/generated/climate-teleconnections.json   per-season slope of slp/air/rhum/200-850 hPa shear 3-month anomaly on Nino-3.4, 5 degree grid (shipped)
+//   src/data/generated/climate-slp.json                1991-2020 monthly sea-level-pressure climatology, 5 degree grid (shipped; the live weather relaxes toward it)
+//   src/data/generated/climate-air.json                1991-2020 monthly near-surface air temperature climatology, 5 degree grid (shipped; the live weather relaxes toward it)
 // Needs tests/fixtures/enso-observed.json (npm run prepare:climate). Usage: node scripts/prepare-teleconnections.mjs
 // Source: NOAA PSL OPeNDAP ASCII responses, one request per field and year, cached in .cache/climate/. Output is deterministic for a given cache.
 
@@ -12,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CACHE_DIR = resolve(ROOT, '.cache/climate');
 const OUT = resolve(ROOT, 'src/data/generated/climate-teleconnections.json');
+const OUT_SLP = resolve(ROOT, 'src/data/generated/climate-slp.json');
+const OUT_AIR = resolve(ROOT, 'src/data/generated/climate-air.json');
 const FIXTURE = resolve(ROOT, 'tests/fixtures/enso-observed.json');
 
 const BASE_URL = 'https://psl.noaa.gov/thredds/dodsC/Datasets/ncep.reanalysis.derived/surface/';
@@ -31,6 +35,9 @@ const YEAR_MAX = 2024;
 const CLIM_MIN = 1991;
 const CLIM_MAX = 2020;
 const MIN_R = 0.3;
+const SLP_SCALE = 0.1; // hPa per stored unit of the climatology
+const SLP_OFFSET = 1000; // hPa added back to the stored integers
+const AIR_SCALE = 0.2; // degC per stored unit of the air temperature climatology
 
 const STEP = 5;
 const COLS = 72;
@@ -257,6 +264,60 @@ function regress(anom) {
   return result;
 }
 
+// 1991-2020 monthly mean per 5 degree box (area-weighted over the 2.5 degree cells) -> Float64Array[12 * ROWS * COLS]
+function boxClimatology(raw, label) {
+  const means = new Float64Array(12 * ROWS * COLS);
+  for (let m = 0; m < 12; m++) {
+    const sum = new Float64Array(ROWS * COLS);
+    const wsum = new Float64Array(ROWS * COLS);
+    for (let c = 0; c < CELL; c++) {
+      let s = 0;
+      for (let y = CLIM_MIN; y <= CLIM_MAX; y++) s += raw[((y - YEAR_MIN) * 12 + m) * CELL + c];
+      s /= CLIM_MAX - CLIM_MIN + 1;
+      if (Number.isNaN(s)) continue;
+      sum[boxOf[c]] += s * weightOf[c];
+      wsum[boxOf[c]] += weightOf[c];
+    }
+    for (let b = 0; b < ROWS * COLS; b++) {
+      if (!(wsum[b] > 0)) throw new Error(`no ${label} data in box ${b}, month ${m}`);
+      means[m * ROWS * COLS + b] = sum[b] / wsum[b];
+    }
+  }
+  return means;
+}
+
+const gridMeta = { period: `${CLIM_MIN}-${CLIM_MAX}`, lonStart: -180 + STEP / 2, latStart: -90 + STEP / 2, step: STEP, cols: COLS, rows: ROWS };
+
+// sea-level pressure -> climate-slp.json
+async function writeSlpClimatology(raw) {
+  const means = boxClimatology(raw, 'SLP');
+  const slpOut = {
+    source: 'NCEP/NCAR Reanalysis 1 monthly mean sea-level pressure (NOAA PSL), 1991-2020 monthly climatology, area-weighted box average from 2.5 degree to 5 degree cells',
+    ...gridMeta,
+    scale: SLP_SCALE,
+    offset: SLP_OFFSET,
+    slp: Array.from(means, (v) => Math.round((v - SLP_OFFSET) / SLP_SCALE)),
+  };
+  return writeFile(OUT_SLP, JSON.stringify(slpOut) + '\n');
+}
+
+// near-surface (sigma 0.995) air temperature -> climate-air.json. Month 0 is stored in full; each later month as the change from the month before
+// (of the quantised values, so decoding by running sum is exact), which keeps the numbers short and the gzip small.
+async function writeAirClimatology(raw) {
+  const means = boxClimatology(raw, 'air temperature');
+  const n = ROWS * COLS;
+  const q = Array.from(means, (v) => Math.round(v / AIR_SCALE));
+  const steps = q.map((v, i) => (i < n ? v : v - q[i - n]));
+  const airOut = {
+    source: 'NCEP/NCAR Reanalysis 1 monthly mean near-surface (sigma 0.995) air temperature (NOAA PSL), 1991-2020 monthly climatology, area-weighted box average from 2.5 degree to 5 degree cells',
+    ...gridMeta,
+    scale: AIR_SCALE,
+    encoding: 'steps: month 0 absolute, months 1-11 the change from the previous month, in units of scale',
+    air: steps,
+  };
+  return writeFile(OUT_AIR, JSON.stringify(airOut) + '\n');
+}
+
 const out = {
   source:
     'NCEP/NCAR Reanalysis 1 monthly means (NOAA PSL): per-season regression of 3-month-mean anomalies (vs 1991-2020, linearly detrended per grid point) on the Nino-3.4 index (NOAA ERSST v5), box-averaged to 5 degrees; slopes with |r| < 0.3 set to 0',
@@ -279,6 +340,8 @@ for (const f of FIELDS) {
   // slp in the monthly file may be Pa; anomalies must end up in hPa
   const factor = f.name === 'slp' && Math.abs(mean) > 5000 ? 0.01 : f.factor;
   for (let i = 0; i < raw.length; i++) raw[i] *= factor;
+  if (f.name === 'slp') await writeSlpClimatology(raw);
+  if (f.name === 'air') await writeAirClimatology(raw);
   out[f.name] = Array.from(regress(anomalyDetrended(raw)));
 }
 // vertical wind shear magnitude between 200 and 850 hPa
@@ -298,3 +361,5 @@ for (const f of FIELDS) {
 await mkdir(dirname(OUT), { recursive: true });
 await writeFile(OUT, JSON.stringify(out) + '\n');
 console.log(`wrote ${OUT}`);
+console.log(`wrote ${OUT_SLP}`);
+console.log(`wrote ${OUT_AIR}`);
