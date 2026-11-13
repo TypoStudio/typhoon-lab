@@ -10,7 +10,7 @@ import { CLIMATE_SOURCE, createClimateLayer, createLiveClimateLayer, rebuildAnom
 import {
   STEP_HOURS, climateAnomalyContext, createGame, gridIndex, loadHistoric, placeFormation, placeTool, replayGame, sampleEnvironment, setClimate, setHistoricEnvironment, setSeason, stepGame, totalPressure, totalWind,
 } from '../src/simulation/engine';
-import { windowCells } from '../src/simulation/historic';
+import { windowCells, windowWeights } from '../src/simulation/historic';
 import type { GameState, HistoricEnvironment, LiveWeatherSnapshot } from '../src/types';
 import { atlanticShear, fullDays, genesisCentroid, skipDays } from './climate-helpers';
 import fixtureJson from './fixtures/environment-fixture.json';
@@ -317,7 +317,10 @@ describe('D. a recorded reanalysis field already holds the real ENSO state', () 
     const [a, b] = twin(AUG_1, s => { setClimate(s, 'enso', 2); stack(s, 'warm', 2); });
     for (const s of [a, b]) expect(loadHistoric(s, 'maemi-2003').ok).toBe(true);
     fullDays(a, 2.1); fullDays(b, 2.1);
-    const cells = Array.from(windowCells(fixtureJson as unknown as HistoricEnvironment));
+    // The record fades out over the window's edge band (the whole of this tiny window), so only cells it fully covers are free of the layer.
+    const weights = windowWeights(fixtureJson as unknown as HistoricEnvironment);
+    const cells = Array.from(windowCells(fixtureJson as unknown as HistoricEnvironment)).filter((_, w) => weights[w] > 1 - 1e-9);
+    expect(cells.length).toBeGreaterThan(0);
     let worst = 0;
     for (const k of cells) {
       for (const key of ['temperature', 'airTemperature', 'shear', 'humidity', 'pressure', 'u', 'v'] as const) {
@@ -347,7 +350,8 @@ describe('D. a recorded reanalysis field already holds the real ENSO state', () 
     setClimate(a, 'enso', 2);
     for (const s of [a, b]) { expect(loadHistoric(s, 'maemi-2003').ok).toBe(true); expect(placeTool(s, 'warm', 129, 33).ok).toBe(true); placeTool(s, 'cool', 129, 31); }
     fullDays(a, 2.1); fullDays(b, 2.1);
-    for (const k of Array.from(windowCells(fixtureJson as unknown as HistoricEnvironment))) {
+    const fullyRecorded = windowWeights(fixtureJson as unknown as HistoricEnvironment);
+    for (const k of Array.from(windowCells(fixtureJson as unknown as HistoricEnvironment)).filter((_, w) => fullyRecorded[w] > 1 - 1e-9)) { // the edge band blends the layer's response back in
       for (const key of ['temperature', 'airTemperature', 'shear', 'humidity', 'pressure', 'u', 'v'] as const) expect(a.grid[k][key], `${k} ${key}`).toBeCloseTo(b.grid[k][key], 9);
     }
     expect(sampleEnvironment(a, 129, 33).temperature).toBeCloseTo(sampleEnvironment(b, 129, 33).temperature, 9);

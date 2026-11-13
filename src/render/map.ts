@@ -4,8 +4,8 @@ import { windAnimationMultiplier } from '../time';
 import type { BaseRenderer } from './base';
 import { CanvasBase } from './canvas2d';
 import { dustHexesFor, yellowDustLoad } from './dust-hexes';
-import { buildContours, buildFieldData, buildCombinedImage, buildSurfaceImages, FIELD_IMAGE_COLS, FIELD_IMAGE_ROWS, sampleGrid, sampleWind, type Contours, type FieldData } from './fields';
-import { attachStormWind } from './storm-wind';
+import { buildContours, buildFieldData, buildCombinedImage, buildSurfaceImages, FIELD_IMAGE_COLS, FIELD_IMAGE_ROWS, sampleGrid, samplePressure, sampleWind, type Contours, type FieldData } from './fields';
+import { attachStormPressure, attachStormWind } from './storm-wind';
 import { DEFAULT_LABELS, EMPTY_OVERLAY, OverlayPainter, type MapLabels, type MapOverlay } from './overlay';
 import { ParticleSystem } from './particles';
 import { loadTheme, type Theme } from './theme';
@@ -189,7 +189,7 @@ export class MapRenderer {
     this.traffic.update(state, this.animationClock.read(performance.now()));
     this.thunderstorms.update(state, this.animationClock.read(performance.now()));
     this.field = buildFieldData(state.grid);
-    if (this.field) attachStormWind(this.field, state);
+    if (this.field) { attachStormWind(this.field, state); attachStormPressure(this.field, state); }
     this.contoursDirty = true;
     this.pushImage();
   }
@@ -234,7 +234,7 @@ export class MapRenderer {
     return {
       land: isLand(wl, lat),
       wind: Math.hypot(wind[0], wind[1]),
-      pressure: sampleGrid(f, f.pressure, wl, lat),
+      pressure: samplePressure(f, wl, lat),
       temperature: sampleGrid(f, f.temperature, wl, lat),
       airTemperature: sampleGrid(f, f.airTemperature, wl, lat),
       updraft: sampleGrid(f, f.updraft, wl, lat),

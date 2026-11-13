@@ -1,5 +1,5 @@
 import type { EnvironmentCell, Layer, MapOverlays } from '../types';
-import { BOUNDS, GRID_COLS, GRID_ROWS, GRID_STEP } from '../simulation/engine';
+import { BOUNDS, GRID_COLS, GRID_ROWS, GRID_STEP, outerRadiusKm, pressureDeficit, stormPressureAt } from '../simulation/engine';
 import { smoothstep } from '../simulation/geo';
 import { hexAlpha } from './hexes';
 import type { Theme } from './theme';
@@ -21,7 +21,12 @@ export interface FieldData {
   windAnimationRadiusKm?: (lon: number, lat: number) => number;
   /** Display visibility inside a mature cyclone's calm eye (0) and at its eyewall (1). */
   windVisibilityAt?: (lon: number, lat: number) => number;
+  /** Display pressure: `pressureEnv` is `pressure` with every storm's analytic deficit taken out; each storm's deficit is then added back at the exact point, so the low sits on the storm. */
+  pressureEnv?: Float32Array;
+  pressureStorms?: PressureStorm[];
 }
+export interface PressureStorm { storm: Parameters<typeof stormPressureAt>[0]; deficit: number; outerKm: number }
+export function pressureStorm(storm: PressureStorm['storm']): PressureStorm { return { storm, deficit: pressureDeficit(storm.wind), outerKm: outerRadiusKm(storm) }; }
 
 export function buildFieldData(grid: EnvironmentCell[]): FieldData | null {
   const n = GRID_COLS * GRID_ROWS;
@@ -73,6 +78,14 @@ export function sampleGrid(f: FieldData, arr: Float32Array, lon: number, lat: nu
   const a = arr[r0 + i] + (arr[r0 + i2] - arr[r0 + i]) * tx;
   const b = arr[r1 + i] + (arr[r1 + i2] - arr[r1 + i]) * tx;
   return a + (b - a) * ty;
+}
+
+/** Display sea-level pressure at a point: the storm-free field interpolated from the grid plus each storm's exact deficit (plain grid interpolation where no storm is attached). */
+export function samplePressure(f: FieldData, lon: number, lat: number): number {
+  if (!f.pressureStorms || !f.pressureEnv) return sampleGrid(f, f.pressure, lon, lat);
+  let p = sampleGrid(f, f.pressureEnv, lon, lat);
+  for (const s of f.pressureStorms) p += stormPressureAt(s.storm, lon, lat, s.deficit);
+  return p;
 }
 
 /** Shared by particle movement, streak direction, lifetime and map inspection. */
@@ -245,18 +258,117 @@ export function isobarLevels(lo: number, hi: number): number[] {
 /** One isobar as a polyline of lon,lat pairs; longitudes are unwrapped so the path never jumps at ±180°. */
 export interface Isobar { level: number; closed: boolean; points: Float64Array }
 
+/** Contour lattice refinement around storms: nodes every 0.1° out to 1.0° from the centre (about 110 km), then every 0.2° out to 2.6° (about 290 km); longitude steps are widened by 1/cos(lat). */
+const FINE_STEPS: readonly [step: number, to: number][] = [[0.1, 1.0], [0.2, 2.6]];
+/** Nodes closer than this (degrees) to an existing node are dropped, so overlapping bands leave no sliver cells. */
+const NODE_MERGE_DEG = 0.03;
+
+/** Rectilinear contour lattice: the 2° cell centres plus fine nodes around each storm. `xs` has one extra entry (the first column again, +360). */
+export interface ContourLattice { xs: Float64Array; ys: Float64Array; values: Float32Array | Float64Array }
+
+/** `base` plus fine nodes around each centre (`scale` stretches the steps), each folded by `fold` first and dropped when outside [lo, hi] or within NODE_MERGE_DEG of a node already kept. */
+function refinedAxis(base: number[], centres: number[], scale: number[], lo: number, hi: number, fold: (x: number) => number = x => x): Float64Array {
+  const extra: number[] = [];
+  centres.forEach((c, n) => {
+    extra.push(c);
+    for (const sign of [-1, 1]) {
+      let from = 0;
+      for (const [step, to] of FINE_STEPS) {
+        for (let d = from + step; d <= to + 1e-9; d += step) extra.push(c + sign * d * scale[n]);
+        from = to;
+      }
+    }
+  });
+  const sorted = base.slice();
+  for (const raw of extra) {
+    const x = fold(raw);
+    if (x < lo || x > hi) continue;
+    const at = lowerBound(sorted, x);
+    if ((at < sorted.length && sorted[at] - x < NODE_MERGE_DEG) || (at > 0 && x - sorted[at - 1] < NODE_MERGE_DEG)) continue;
+    sorted.splice(at, 0, x);
+  }
+  return Float64Array.from(sorted);
+}
+
 /**
- * Marching squares on the 2° cell-centre lattice, with segments chained through shared cell edges
+ * The grid for contouring. Without attached storms it is the 2° lattice and `f.pressure` itself.
+ * With storms it is that lattice refined in bands around each storm (full-width rows and full-height
+ * columns, so cells stay rectangular), holding the interpolated storm-free pressure plus every
+ * storm's exact deficit at each node.
+ */
+export function contourLattice(f: FieldData): ContourLattice {
+  const { cols, rows } = f;
+  const lonOf = (x: number) => BOUNDS.west + (x + 0.5) * GRID_STEP;
+  const latOf = (y: number) => BOUNDS.south + (y + 0.5) * GRID_STEP;
+  const baseX: number[] = []; for (let i = 0; i < cols; i++) baseX.push(lonOf(i));
+  const baseY: number[] = []; for (let j = 0; j < rows; j++) baseY.push(latOf(j));
+  const storms = f.pressureStorms ?? [];
+  if (!storms.length || !f.pressureEnv) {
+    const xs = new Float64Array(cols + 1); for (let i = 0; i < cols; i++) xs[i] = baseX[i]; xs[cols] = baseX[0] + 360;
+    return { xs, ys: Float64Array.from(baseY), values: f.pressure };
+  }
+  const west = baseX[0];
+  const wrap = (x: number) => { while (x < west) x += 360; while (x >= west + 360) x -= 360; return x; };
+  const cx = storms.map(s => wrap(s.storm.lon));
+  const cy = storms.map(s => s.storm.lat);
+  const scaleX = storms.map(s => 1 / Math.max(0.2, Math.cos(s.storm.lat * Math.PI / 180)));
+  const xs0 = refinedAxis(baseX, cx, scaleX, west, west + 360 - NODE_MERGE_DEG, wrap); // a band crossing the seam folds back into [west, west + 360)
+  const xs = new Float64Array(xs0.length + 1); xs.set(xs0); xs[xs0.length] = xs0[0] + 360;
+  const ys = refinedAxis(baseY, cy, cy.map(() => 1), baseY[0], baseY[rows - 1]);
+  const nx = xs0.length, ny = ys.length;
+  const values = new Float32Array(nx * ny);
+  // Storm-free pressure, bilinear from the grid, separable over columns and rows.
+  const gi = new Int32Array(nx), gi2 = new Int32Array(nx), gtx = new Float64Array(nx);
+  for (let i = 0; i < nx; i++) {
+    const gx = ((xs[i] - BOUNDS.west) / GRID_STEP - 0.5 + cols) % cols;
+    gi[i] = Math.floor(gx); gi2[i] = gi[i] + 1 >= cols ? 0 : gi[i] + 1; gtx[i] = gx - gi[i];
+  }
+  const env = f.pressureEnv;
+  for (let j = 0; j < ny; j++) {
+    const gy = Math.min(rows - 1, Math.max(0, (ys[j] - BOUNDS.south) / GRID_STEP - 0.5));
+    const j0 = Math.min(rows - 2, Math.floor(gy)), ty = gy - j0, r0 = j0 * cols, r1 = r0 + cols;
+    for (let i = 0; i < nx; i++) {
+      const a = env[r0 + gi[i]] + (env[r0 + gi2[i]] - env[r0 + gi[i]]) * gtx[i];
+      const b = env[r1 + gi[i]] + (env[r1 + gi2[i]] - env[r1 + gi[i]]) * gtx[i];
+      values[j * nx + i] = a + (b - a) * ty;
+    }
+  }
+  // Each storm's exact deficit, only on the nodes inside its outer radius.
+  for (const s of storms) {
+    const reachLat = s.outerKm / 111 + 0.5;
+    const reachLon = reachLat / Math.max(0.05, Math.cos(Math.min(89, Math.abs(s.storm.lat) + reachLat) * Math.PI / 180));
+    const j0 = lowerBound(ys, s.storm.lat - reachLat), j1 = lowerBound(ys, s.storm.lat + reachLat);
+    const x0 = wrap(s.storm.lon - reachLon);
+    const wholeWorld = reachLon >= 180;
+    const i0 = wholeWorld ? 0 : lowerBound(xs0, x0);
+    for (let j = j0; j < j1 && j < ny; j++) {
+      for (let k = 0; k < nx; k++) {
+        const i = i0 + k;
+        const x = xs[i % nx] + 360 * Math.floor(i / nx);
+        if (!wholeWorld && x > x0 + 2 * reachLon) break;
+        values[j * nx + (i % nx)] += stormPressureAt(s.storm, x, ys[j], s.deficit);
+      }
+    }
+  }
+  return { xs, ys, values };
+}
+function lowerBound(a: ArrayLike<number>, x: number): number {
+  let lo = 0, hi = a.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] < x) lo = m + 1; else hi = m; }
+  return lo;
+}
+
+/**
+ * Marching squares on the contour lattice (2° cell centres, refined around storms), with segments chained through shared cell edges
  * (edge identities, so paths join across the dateline) and Chaikin-smoothed twice. Lines are kept
  * whole, never clipped, so a closed low stays a closed ring. Non-finite cells are skipped.
  */
 export function buildIsobars(f: FieldData, smoothing = 2): Isobar[] {
-  const { cols, rows, pressure: p } = f;
+  const { xs, ys, values: p } = contourLattice(f);
+  const cols = xs.length - 1, rows = ys.length;
   let lo = Infinity;
   let hi = -Infinity;
   for (let k = 0; k < p.length; k++) { const v = p[k]; if (Number.isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; } }
-  const lonOf = (x: number) => BOUNDS.west + (x + 0.5) * GRID_STEP;
-  const latOf = (y: number) => BOUNDS.south + (y + 0.5) * GRID_STEP;
   // Edge ids: horizontal edge from node (i, j) eastward = 2(j·cols+i); vertical edge from (i, j) northward = +1.
   const edges = 2 * cols * rows;
   const ex = new Float64Array(edges);
@@ -281,10 +393,11 @@ export function buildIsobars(f: FieldData, smoothing = 2): Isobar[] {
         if (a0 === a1 && a1 === a2 && a2 === a3) continue;
         const B = 2 * k; const T = 2 * (k + cols); const W = 2 * k + 1; const E = 2 * (j * cols + i2) + 1;
         const hit: number[] = []; // edges in order B, E, T, W
-        if (a0 !== a1) { ex[B] = lonOf(i + (L - v0) / (v1 - v0)); ey[B] = latOf(j); hit.push(B); }
-        if (a1 !== a2) { ex[E] = lonOf(i + 1); ey[E] = latOf(j + (L - v1) / (v2 - v1)); hit.push(E); }
-        if (a3 !== a2) { ex[T] = lonOf(i + (L - v3) / (v2 - v3)); ey[T] = latOf(j + 1); hit.push(T); }
-        if (a0 !== a3) { ex[W] = lonOf(i); ey[W] = latOf(j + (L - v0) / (v3 - v0)); hit.push(W); }
+        const x0 = xs[i], dx = xs[i + 1] - xs[i], y0 = ys[j], dy = ys[j + 1] - ys[j];
+        if (a0 !== a1) { ex[B] = x0 + dx * (L - v0) / (v1 - v0); ey[B] = y0; hit.push(B); }
+        if (a1 !== a2) { ex[E] = x0 + dx; ey[E] = y0 + dy * (L - v1) / (v2 - v1); hit.push(E); }
+        if (a3 !== a2) { ex[T] = x0 + dx * (L - v3) / (v2 - v3); ey[T] = y0 + dy; hit.push(T); }
+        if (a0 !== a3) { ex[W] = x0; ey[W] = y0 + dy * (L - v0) / (v3 - v0); hit.push(W); }
         if (hit.length === 2) link(hit[0], hit[1]);
         else if (hit.length === 4) {
           const [b, r, t, l] = hit;

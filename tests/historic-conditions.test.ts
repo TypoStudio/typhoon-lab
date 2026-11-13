@@ -53,10 +53,10 @@ describe('historic typhoons: conditions on a recorded typhoon', () => {
     expect(s.storms[0].pressure).toBeLessThan(recordedPressure(s));
   });
 
-  it('keeps the recorded track', () => {
+  it('keeps the recorded track when the conditions do not touch the pressure field', () => {
     const a = historic();
     const b = historic();
-    place(b, WEAKEN);
+    place(b, ['dry', 'downdraft']);
     stepHours(a, 24); stepHours(b, 24);
     expect(b.storms[0].lon).toBe(a.storms[0].lon);
     expect(b.storms[0].lat).toBe(a.storms[0].lat);

@@ -12,7 +12,7 @@ import type { MapOverlay } from '../render/overlay';
 import { wrapLon } from '../render/view';
 import { RESET_WAIT, replayWait, waitVerdict } from './replay-wait';
 import { SEAS, seaName } from '../data/seas';
-import { GENESIS_HOURS, GENESIS_THRESHOLD, climateIsNormal, TICKS_PER_HOUR, TOOLS, dayOfYear, historicEnvironmentReady, setHistoricEnvironment } from '../simulation/engine';
+import { GENESIS_HOURS, GENESIS_THRESHOLD, disastersActive, TICKS_PER_HOUR, TOOLS, dayOfYear, historicEnvironmentReady, setHistoricEnvironment } from '../simulation/engine';
 import { pm25Band } from '../simulation/fine-dust';
 import { loadEnvironment } from '../data/environment';
 import { distanceKm } from '../simulation/geo';
@@ -511,7 +511,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     const btn = ref<HTMLButtonElement>('skip');
     const why = skipBlock();
     btn.disabled = why !== '';
-    btn.dataset.tip = why || 'Advance the world by 4 hours at once, as if time had run. Works while paused and while playing.';
+    btn.dataset.tip = why || 'Advance the world by 4 hours at once, as if time had run. Works while paused and while playing. Shortcut: Enter.';
     localizeTree(btn);
   }
   function skipAhead(): void {
@@ -752,6 +752,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   function renderStorms(): void {
     const s = ui.state;
     if (!s) return;
+    syncResets();
     const disasters = s.disasters ?? [];
     const activeDisasters = s.storms.length + disasters.filter(record => record.endedHour === undefined).length;
     setText(ref('stormSummary'), `${t('Disasters')}: ${activeDisasters} · ${t('Forming patches')}: ${s.candidates.length}`);
@@ -964,6 +965,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     setMetric('peak', `${sel.peakWind.toFixed(0)} m/s`, detail);
     setMetric('loss', fmtMoney(stormTotalLossUsd(sel)), detail);
     for (const n of metrics.get('windDelta') ?? []) n.parentElement!.hidden = !sel.record;
+    for (const n of metrics.get('trackOffset') ?? []) n.parentElement!.hidden = !sel.record;
+    setMetric('trackOffset', `${Math.hypot(sel.trackOffset?.east ?? 0, sel.trackOffset?.north ?? 0).toFixed(0)} km`, detail);
     setMetric('windDelta', `${sel.windDelta > 0.5 ? '+' : sel.windDelta < -0.5 ? '\u2212' : ''}${Math.abs(sel.windDelta) < 0.5 ? 0 : Math.abs(sel.windDelta).toFixed(0)} m/s`, detail);
     const spark = ref<HTMLElement>('spark') as unknown as SVGSVGElement;
     const [line, area] = spark.querySelectorAll('path');
@@ -998,6 +1001,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       ]);
     }));
     ref('effectEmpty').hidden = s.effects.length > 0;
+    syncResets();
     const scope = ref('panel-environment');
     setMetric('score', fmtInt(s.score), scope);
     setMetric('exposed', fmtInt(s.exposedPopulation), scope);
@@ -1142,21 +1146,23 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     const text = climateText(key, value);
     setText(output, text);
     input.setAttribute('aria-valuetext', t(text));
-    syncClimateReset();
+    syncResets();
   }
   function syncClimateDisabled(): void {
     for (const { input } of climateInputs.values()) input.disabled = ui.expect === 'replay';
     for (const b of seasonButtons) b.disabled = ui.expect === 'replay';
     for (const [key, b] of experienceButtons) if (key.startsWith('scenario:')) b.setAttribute('aria-disabled', String(ui.expect === 'replay'));
-    syncClimateReset();
+    syncResets();
   }
-  /** Reset is only useful while anything climate-related differs from normal (a slider, a scenario, the ENSO layer) and the climate can still be changed. */
-  function syncClimateReset(): void {
-    const btn = ref<HTMLButtonElement>('climateReset');
+  /** The World and Disasters tab resets: each is on only while there is something to reset, and never during a replay. */
+  function syncResets(): void {
     const replay = ui.expect === 'replay';
-    const normal = (ui.latest ? climateIsNormal(ui.latest) : true) && [...climateInputs.values()].every(({ input }) => Number(input.value) === 0);
-    btn.disabled = replay || normal;
-    btn.dataset.tip = replay ? 'The climate cannot be reset while a replay plays.' : normal ? 'The climate is already normal.' : 'Return the whole climate to normal: sliders, scenario and El Niño / La Niña';
+    const conditions = ref<HTMLButtonElement>('conditionsReset'), disasters = ref<HTMLButtonElement>('disastersReset');
+    const noConditions = !ui.latest || ui.latest.effects.length === 0, noDisasters = !ui.latest || !disastersActive(ui.latest);
+    conditions.disabled = replay || noConditions;
+    conditions.dataset.tip = replay ? 'Conditions cannot be reset while a replay plays.' : noConditions ? 'No condition is active.' : 'Take every condition off the map: placed, recipe and natural-formation conditions. Storms and disasters keep running.';
+    disasters.disabled = replay || noDisasters;
+    disasters.dataset.tip = replay ? 'Disasters cannot be reset while a replay plays.' : noDisasters ? 'No disaster is active.' : 'End every active storm and disaster. The damage already done stays on record.';
   }
   function renderClimate(state: GameState): void {
     const { warming, enso, polar } = state.climate;
@@ -1360,7 +1366,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         <p>Open Typhoon experience or Climate experience in the palette to start a past typhoon or a climate scenario with one click, or drag its tile onto the map.</p>
         <h3 class="dialog__sub">Time</h3>
         <p>Use the arrows to choose a speed. Real time runs the world at the speed of the clock. 10m/s is 10 minutes of world time per second, 30m/s is 30 minutes, 1h/s is 1 hour, 2h/s is 2 hours and 4h/s is 4 hours; 1d/s, 2d/s and 7d/s are 1, 2 and 7 days per second. Number keys 1–9 select the same nine steps, - and + step slower and faster, and the \` key (₩ on a Korean keyboard) resets the speed. Reset speed returns to 10m/s without changing the world or pause state.</p>
-        <p>The +4h button in the speed bar jumps the world ahead by exactly 4 hours at once, as if time had run: storms move, damage and news update, and Measure adds one point at the new time. It works while paused (the world stays paused) and while playing. It is off during a replay, while a world is loading, and at 7d/s.</p>
+        <p>The +4h button in the speed bar jumps the world ahead by exactly 4 hours at once, as if time had run: storms move, damage and news update, and Measure adds one point at the new time. It works while paused (the world stays paused) and while playing. It is off during a replay, while a world is loading, and at 7d/s. Press Enter to skip when no tool is armed on the map and no button, field or dialog has focus.</p>
         <p class="fine">On a slow device the faster weather steps may not be fully reached, and the clock shows the time that was really simulated, so it can lag behind the speed you chose.</p>
         <p class="fine">At 7d/s the weather is not calculated. The world runs on the fast climate calculation instead: the map, the date and the seasons keep changing, but active storms and tools end without further damage. New storms can form again after you slow down. A world that started from live weather continues on the base climate from then on. See Long-term simulation in the Climate tab.</p>
         <h3 class="dialog__sub">The map</h3>
@@ -1373,7 +1379,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         </ul>
         <h3 class="dialog__sub">Without a mouse</h3>
         <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L, ; and ' select the formation tools in order, and Z, X, C, V, B, N, M, comma, period and slash select the measurement tools. 1–9 set the speed steps, - and + step it slower and faster, and \` (₩ on a Korean keyboard) resets it to 10m/s. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
-        <p class="fine">Shortcuts work from anywhere on the page, except while you type in a field or a dialog is open; with a button or tab focused, Space and Enter press it instead of playing or pausing.</p>`,
+        <p class="fine">Shortcuts work from anywhere on the page, except while you type in a field or a dialog is open; with a button or tab focused, Space and Enter press it instead of playing or pausing or skipping ahead.</p>`,
       conditions: `
         <p>The bottom palette has seven paired condition buttons. The large icon is the selected setting; the small faded icon shows the opposite. Click or tap once to select, then again to switch, or use Q–U. Drag the large icon onto the map.</p>
         <ul class="help__tools">${toolItems}</ul>
@@ -1410,7 +1416,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         <h3 class="dialog__sub">Reading a graph</h3>
         <ul class="help__list">
           <li>The horizontal axis is model time, starting at 0 when measuring began, with five labels in hours, days, months or years. Move the pointer over a graph to read its values at that time.</li>
-          <li>Each card shows its unit and the latest value of every pin. The × button removes the card, and Clear all removes every card and pin. A pin disappears when no chart uses it.</li>
+          <li>Each card shows its unit and the latest value of every pin. The × button removes the card, and Delete all removes every card and pin. A pin disappears when no chart uses it.</li>
           <li>You can use up to 12 pins. Drops within a quarter of a degree of each other share one pin.</li>
           <li>Recording runs only while time is playing. A new world or a loaded replay clears everything. Very long runs are thinned automatically so the graph stays readable.</li>
         </ul>
@@ -1443,7 +1449,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <dt>Polar temperature</dt>
           <dd>Polar cooling chills the sea and air poleward of about 35° latitude, so storms that curve out of the tropics weaken sooner. Polar warming does the reverse. The effect is full strength from about 50°.</dd>
         </dl>
-        <p>Reset climate in the speed bar returns the whole climate to normal at once: the three sliders go to 0, a loaded scenario switches off, and the El Niño / La Niña layer starts again from a neutral ocean. Storms, fine dust and other disasters keep running.</p>
+        <p>The three sliders move the whole climate at once. There is no one-click slider reset: drag each back to 0, or press Restart in the speed bar to start the world over as a page reload would (it asks first, and the current world, its disasters and measurements are lost).</p>
+        <p>The Reset button at the top of the World tab takes every condition off the map: placed, recipe and natural-formation conditions. The Reset button of the Disasters tab ends every active storm, hazard, thunderstorm, tornado and blizzard, including fine dust. Both keep the damage already done, the records, the score and the date, and neither works during a replay.</p>
         <h3 class="dialog__sub">Scenarios</h3>
         <p>The Climate experience tab of the palette loads a historic El Niño or La Niña: press a tile, or drag it onto the map. The world jumps to 1 January of that year, storms, weather hazards and tools already running carry on as they are, and the Pacific starts in the ocean state of the time, with the winds that drove the event added by date. The speed is set to 4h/s so that the weather runs, and Natural typhoon formation is on while the scenario is loaded. Watch it on the map and in the Measure tab. You can change the speed afterwards: at 7d/s the weather is not calculated, so storms and the events below do not form, but the record of real events still appears.</p>
         <p>While a scenario is loaded the model starts weather disasters by itself where its own climate calls for them. During an El Niño these are heavy rain on coastal Peru and Ecuador, in East Africa and in the southern United States, and drought or heat in Indonesia, Australia, India and southern Africa. A La Niña brings the opposite pattern: heavy rain in eastern Australia, Indonesia, South Asia and Colombia, and drought in the Horn of Africa and the southwestern United States. Each event follows the sea temperature, air temperature or humidity of its place, so it stops when the anomaly does. The News tab marks it as El Niño or La Niña, and its damage is counted like any other disaster. A place rests for several weeks after an event, and at most four run at once.</p>
@@ -1468,7 +1475,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <dt>Environment data</dt>
           <dd>The sea temperature, air, humidity, pressure and wind follow NCEP/NCAR Reanalysis 1 and ERSST v5 for those dates; damage and news are simulated. Storms outside the western Pacific have no environment record and use the base climate.</dd>
           <dt>Your conditions</dt>
-          <dd>Conditions you place change its strength but not its path.</dd>
+          <dd>Conditions you place change its strength and can also bend its path: a High or Low beside it pushes it off the record, and it stays off after the condition ends. The dashed line keeps the real path for comparison.</dd>
         </dl>`,
       data: `
         <h3 class="dialog__sub">Current weather data</h3>
@@ -2208,20 +2215,24 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     ui.placementQueue.push(result => { if (!result.ok) toast(result.reason ?? 'The season could not be changed.', 'error'); });
     post({ type: 'season', dayOfYear: SEASONS.find(s => s.id === b.dataset.season)!.doy });
   });
-  ref('climateReset').addEventListener('click', () => {
-    for (const [key, { input }] of climateInputs) {
-      input.value = '0';
-      climateDirty.delete(key);
-      showClimateValue(key, 0);
-    }
-    const hadScenario = !!ui.latest?.climateScenario;
+  const restartDialog = ref<HTMLDialogElement>('restartDialog');
+  ref('restart').addEventListener('click', () => { localizeTree(restartDialog); restartDialog.showModal(); });
+  ref('restartCancel').addEventListener('click', () => restartDialog.close());
+  // The same as reloading the page: the seed and start date in the URL stay, nothing else of the world does.
+  ref('restartConfirm').addEventListener('click', () => location.reload());
+  ref('conditionsReset').addEventListener('click', () => {
     ui.placementQueue.push(result => {
-      if (result.ok) { if (hadScenario) ui.scenarioProbes = 'remove'; toast('Climate reset to normal.', 'ok'); }
-      else toast(result.reason ?? 'The climate could not be reset.', 'error');
+      if (result.ok) toast('Conditions reset.', 'ok');
+      else toast(result.reason ?? 'The conditions could not be reset.', 'error');
     });
-    post({ type: 'climate-reset' });
-    // The button disables itself now, so hand keyboard focus to the first slider instead of dropping it.
-    climateInputs.get('warming')!.input.focus({ preventScroll: true });
+    post({ type: 'conditions-reset' });
+  });
+  ref('disastersReset').addEventListener('click', () => {
+    ui.placementQueue.push(result => {
+      if (result.ok) toast('All disasters reset.', 'ok');
+      else toast(result.reason ?? 'The disasters could not be reset.', 'error');
+    });
+    post({ type: 'disaster-reset' });
   });
     /** Pressing the loaded scenario's tile again: the climate goes back to normal at once. */
   function switchScenarioOff(id: ClimateScenarioId): void {
@@ -2239,7 +2250,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     if (!typhoon) return;
     ui.lastPlacementAt = performance.now();
     ui.placementQueue.push(result => {
-      if (result.ok) toast(`${typhoon.name} (${typhoon.year}) loaded. Its path is recorded; conditions change its strength.`, 'ok');
+      if (result.ok) toast(`${typhoon.name} (${typhoon.year}) loaded. It follows the record; conditions change its strength and path.`, 'ok');
       else toast(result.reason ?? `${typhoon.name} could not be loaded.`, 'error');
     });
     post({ type: 'historic', typhoonId: typhoon.id });
@@ -2683,6 +2694,11 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
       ev.preventDefault();
       if (ui.tool) moveCursor(d[0] * step, d[1] * step);
       else renderer.view.panPx(-d[0] * (ev.shiftKey ? 240 : 60), d[1] * (ev.shiftKey ? 240 : 60));
+    } else if (ev.key === 'Enter' && !(renderer && ui.tool && t === stage)) {
+      // Nothing armed on the stage and nothing that presses itself: Enter skips ahead 4 hours.
+      if (ev.shiftKey || ev.altKey || ev.repeat || t.closest(PRESSABLE) || (t !== stage && t.matches('[tabindex]:not(.report-panel, .stage)'))) return;
+      ev.preventDefault();
+      skipAhead();
     } else if (renderer && ev.key === 'Enter' && ui.tool && t === stage) {
       ev.preventDefault();
       const [centreLon, centreLat] = renderer.view.centerLonLat();

@@ -302,9 +302,9 @@ export function shellHtml(): string {
       <button type="button" class="btn btn--float btn--play" data-ref="play" data-testid="play-toggle" aria-label="Pause" aria-keyshortcuts="Space" data-tip-title="Pause" data-tip="Stop or resume time. Shortcut: Space."><span class="key-hint" aria-hidden="true">Space</span>Pause</button>
       <div class="speed" role="group" aria-label="Simulation speed" data-ref="speedGroup">${speeds}</div>
       <button type="button" class="btn btn--float" data-ref="speedReset" data-testid="speed-reset" aria-label="Reset speed" aria-keyshortcuts="\`" data-tip-title="Reset speed" data-tip="Return only the speed to 10m/s. Shortcut: \`."><span class="key-hint key-hint--tick" aria-hidden="true">\`</span><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/></svg><span class="btn__label">Reset speed</span></button>
-      <button type="button" class="btn btn--float btn--skip" data-ref="skip" data-testid="skip-4h" aria-label="Skip ahead 4 hours" data-tip-title="Skip ahead 4 hours" data-tip="Advance the world by 4 hours at once, as if time had run. Works while paused and while playing." disabled>+4h</button>
+      <button type="button" class="btn btn--float btn--skip" data-ref="skip" data-testid="skip-4h" aria-label="Skip ahead 4 hours" aria-keyshortcuts="Enter" data-tip-title="Skip ahead 4 hours" data-tip="Advance the world by 4 hours at once, as if time had run. Works while paused and while playing. Shortcut: Enter." disabled><span class="key-hint key-hint--enter" aria-hidden="true">Enter</span>+4h</button>
       <p class="clock__text" data-ref="clockText" data-testid="clock" data-short="D1 00:00">Day 1 · 00:00:00</p>
-      <button type="button" class="btn btn--float" data-ref="climateReset" data-testid="climate-reset" aria-label="Reset climate" data-tip-title="Reset climate" data-tip="The climate is already normal." disabled><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14V5.5a2 2 0 0 1 4 0V14a3.5 3.5 0 1 1-4 0Z"/><path d="M16.5 4.5a5 5 0 0 1 3.2 4.6M20 5v4.2h-4.2"/></svg><span class="btn__label">Reset climate</span></button>
+      <button type="button" class="btn btn--float" data-ref="restart" data-testid="restart" aria-label="Restart" data-tip-title="Restart" data-tip="Start the world over, as if you reloaded the page. A confirmation comes first."><svg class="btn__icon btn__icon--phone" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4.5h-4.5"/><circle cx="12" cy="12" r="1.6"/></svg><span class="btn__label">Restart</span></button>
     </div>
 
     <div class="notes">
@@ -360,6 +360,7 @@ export function shellHtml(): string {
         </section>
         <section class="storm-section storm-section--active" aria-labelledby="storms-active-title">
           <h2 class="panel-title storm-section__title" id="storms-active-title"><span class="live-dot" aria-hidden="true"></span><span data-ref="stormActiveTitle" data-testid="storm-active-title">Active disasters</span></h2>
+          <button type="button" class="btn btn--small" data-ref="disastersReset" data-testid="disasters-reset" data-tip-title="Reset" data-tip="No disaster is active." disabled>Reset</button>
           <p class="fine" data-ref="stormSummary">No storms yet.</p>
           <p class="fine" data-testid="storm-wind-note">Movement speed measures travel, not wind. Gale radius estimates the area with winds of at least 17.2 m/s.</p>
           <ul class="storm-list storm-list--active" data-ref="stormList" data-testid="storm-list"></ul>
@@ -379,6 +380,7 @@ export function shellHtml(): string {
             ${metric('peak', 'Peak wind')}
             ${metric('loss', 'Estimated loss')}
             ${metric('windDelta', 'Player effect')}
+            ${metric('trackOffset', 'Off recorded path')}
           </dl>
           <h3 class="panel-title">Development stages</h3>
           <ol class="storm-stages" data-ref="stormStages" data-testid="storm-stages"></ol>
@@ -418,6 +420,7 @@ export function shellHtml(): string {
 
       <div class="report-panel" role="tabpanel" id="panel-environment" data-ref="panel-environment" aria-labelledby="tab-environment" data-panel="environment" tabindex="0" hidden>
         <h2 class="panel-title">Active conditions</h2>
+        <button type="button" class="btn btn--small" data-ref="conditionsReset" data-testid="reset-conditions" data-tip-title="Reset" data-tip="No condition is active." disabled>Reset</button>
         <ul class="effect-list" data-ref="effectList" data-testid="effect-list"></ul>
         <p class="empty" data-ref="effectEmpty">Nothing placed. Conditions fade after a while.</p>
         <h2 class="panel-title">World totals</h2>
@@ -437,7 +440,7 @@ export function shellHtml(): string {
       <div class="report-panel measure" role="tabpanel" id="panel-measure" aria-labelledby="tab-measure" data-panel="measure" data-testid="measure-panel" tabindex="0" hidden>
         <div class="measure__head">
           <p class="fine" data-ref="measureHint">Nothing measured yet. Open the Measure tab of the palette and drop an icon on the map to graph that point over time.</p>
-          <button type="button" class="btn btn--small" data-ref="measureClear" data-testid="measure-clear" hidden>Clear all</button>
+          <button type="button" class="btn btn--small" data-ref="measureClear" data-testid="measure-clear" hidden>Delete all</button>
         </div>
         <div class="measure__cards" data-ref="measureCards" data-testid="measure-cards"></div>
       </div>
@@ -522,6 +525,14 @@ export function shellHtml(): string {
       <div class="dialog__actions">
         <button type="button" class="btn" data-ref="lbDeleteCancel" data-testid="lb-delete-cancel">Cancel</button>
         <button type="button" class="btn btn--danger" data-ref="lbDeleteConfirm" data-testid="lb-delete-confirm">Delete</button>
+      </div>
+    </dialog>
+
+    <dialog class="dialog dialog--confirm" data-ref="restartDialog" data-testid="restart-dialog" aria-labelledby="restart-text">
+      <p id="restart-text" class="dialog__text">Start over? The current world, its disasters and measurements will be lost. Save a replay first if you want to keep it.</p>
+      <div class="dialog__actions">
+        <button type="button" class="btn" data-ref="restartCancel" data-testid="restart-cancel">Cancel</button>
+        <button type="button" class="btn btn--danger" data-ref="restartConfirm" data-testid="restart-confirm">Restart</button>
       </div>
     </dialog>
 

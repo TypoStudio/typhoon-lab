@@ -194,11 +194,12 @@ svg { display: block; }
 .speed__opt { display: grid; place-items: center; border: 0; border-radius: 0; min-width: 2.1rem; padding: 0 var(--space-xs); background: transparent; }
 .speed__icon { display: block; width: 1rem; height: 1rem; }
 .speed__value { display: grid; place-items: center; min-width: 3.5rem; padding-inline: var(--space-2xs); border-inline: var(--rule-width) solid var(--color-rule); color: var(--color-accent); font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 700; white-space: nowrap; }
-.btn--play, .speed, .speed__opt, [data-ref="speedReset"] { position: relative; }
+.btn--play, .btn--skip, .speed, .speed__opt, [data-ref="speedReset"] { position: relative; }
 /* Keycaps for the speed bar shortcuts: tucked into a corner so the bar keeps its size. Hidden without a keyboard, like .tool__key. */
 .key-hint { position: absolute; top: 1px; left: 3px; font-size: 0.55rem; line-height: 1; font-weight: 700; opacity: 0.6; pointer-events: none; }
 .key-hint--tick { top: 3px; font-family: var(--font-mono); font-size: 1.15rem; font-weight: 700; opacity: 0.9; }
 :lang(ko) .key-hint--tick { top: 1px; font-size: 0.7rem; }
+.key-hint--enter { left: 50%; top: 1px; transform: translateX(-50%); font-size: 0.5rem; letter-spacing: 0; }
 .key-hint--steps { left: 50%; top: auto; bottom: 1px; transform: translateX(-50%); white-space: nowrap; }
 @media (hover: none) { .key-hint { display: none; } }
 .speed__opt:disabled { cursor: not-allowed; opacity: 0.45; }
@@ -911,7 +912,7 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
   .clockbar .btn { height: 44px; min-height: 0; padding: 0; }
   .clockbar .btn--play { min-width: 44px; }
   .clockbar .btn--play .btn__icon { width: 1.1rem; height: 1.1rem; }
-  .clockbar [data-ref="speedReset"], .clockbar [data-ref="climateReset"] { width: 40px; min-width: 0; }
+  .clockbar [data-ref="speedReset"], .clockbar [data-ref="restart"] { width: 40px; min-width: 0; }
   .clockbar .btn--skip { width: 44px; min-width: 44px; padding: 0; font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 700; }
   .clockbar .btn__icon--phone { display: block; }
   .clockbar .btn__label { display: none; }
@@ -1088,7 +1089,7 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
   .clockbar { padding-inline: 4px; gap: 2px; }
   .clockbar .speed__opt { min-width: 32px; }
   .clockbar .speed__value { min-width: 3rem; }
-  .clockbar [data-ref="speedReset"], .clockbar [data-ref="climateReset"] { width: 36px; }
+  .clockbar [data-ref="speedReset"], .clockbar [data-ref="restart"] { width: 36px; }
 }
 
 /* 320 px: the strip also holds the climate reset, so the controls tighten (heights stay 44 px) and the clock keeps its full time. */
@@ -1097,7 +1098,7 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
   .clockbar { padding-inline: 2px; }
   .clockbar .speed__opt { min-width: 26px; padding-inline: 2px; }
   .clockbar .speed__value { min-width: 2.2rem; padding-inline: 0; }
-  .clockbar [data-ref="speedReset"], .clockbar [data-ref="climateReset"] { width: 30px; }
+  .clockbar [data-ref="speedReset"], .clockbar [data-ref="restart"] { width: 30px; }
   .clockbar .btn--skip { width: 44px; min-width: 44px; }
   .clockbar .btn--play { min-width: 36px; }
 }

@@ -121,9 +121,24 @@ test('live map labels show storm identifiers, grades, radius and movement speed'
     return { grade: stormGradeLabel(storm), title: `#${storm.id} · ${stormGradeLabel(storm)}`,
       details: `Radius ${storm.galeRadiusKm.toFixed(0)} km · Moving ${storm.movementSpeedKmh.toFixed(1)} km/h` };
   });
-  for (const label of [expected.title, expected.details]) {
-    await expect.poll(() => page.evaluate(text => (window as any).__mapLabels.includes(text), label)).toBe(true);
-  }
+  const hasLabel = (text: string) => page.evaluate(t => (window as any).__mapLabels.includes(t), text);
+  // Far out only the one-line label shows; the radius/speed line waits for regional zoom (or a selected/hovered storm).
+  await expect.poll(() => hasLabel(expected.title)).toBe(true);
+  expect(await hasLabel(expected.details)).toBe(false);
+  // Zoom in to regional scale (web zoom 5.4), re-centring on the storm each step.
+  await page.evaluate(() => {
+    const lab = (window as any).__typhoonLab;
+    const v = lab.mapView;
+    const s = lab.state.storms[0];
+    const target = (Math.pow(2, 5.6) * 256) / 360;
+    for (let i = 0; i < 40 && v.scale < target * 0.99; i++) {
+      const [px, py] = v.lonLatToPx(s.lon, s.lat);
+      v.dragPx?.(px, py, v.width / 2, v.height / 2);
+      v.zoomAt(Math.min(1.3, target / v.scale), v.width / 2, v.height / 2);
+    }
+  });
+  await expect.poll(() => hasLabel(expected.details)).toBe(true);
+  expect(await hasLabel(expected.title)).toBe(true);
   await page.getByTestId('storm-row').click();
   await expect(page.getByTestId('storm-detail').locator('[data-metric="stage"]')).toContainText(expected.grade);
   await page.getByTestId('language-select').selectOption('ko');

@@ -81,6 +81,8 @@ export interface Storm extends GeoPoint {
   transportLossUsd?: number;
   /** Player-driven departure from the recorded wind (m/s); loaded historic storms only, 0 elsewhere. */
   windDelta: number;
+  /** Player-driven displacement (km east/north) from the recorded position; loaded historic storms only, never relaxed back. */
+  trackOffset?: { east: number; north: number };
   /** Set on loaded historic storms: the recorded typhoon they follow and the world hour it was loaded. */
   record?: { typhoonId: string; startHour: number };
 }
@@ -135,7 +137,11 @@ export interface ClimateScenarioAction { tick: number; type: 'climate-scenario';
 export interface ClimateScenarioOffAction { tick: number; type: 'climate-scenario-off' }
 /** Returns the whole climate to normal: sliders at 0, scenario off, ENSO layer neutral (see `resetClimateNow`). */
 export interface ClimateResetAction { tick: number; type: 'climate-reset' }
-export type ActionRecord = PlaceAction | GenesisAction | HistoricAction | ClimateAction | SeasonAction | ClimateModeAction | ClimateAdvanceAction | ClimateScenarioAction | ClimateScenarioOffAction | ClimateResetAction;
+/** Ends every active disaster at once, keeping the damage and records (see `resetDisastersNow`). */
+export interface DisasterResetAction { tick: number; type: 'disaster-reset' }
+/** Takes every condition off the map at once (see `resetConditionsNow`). */
+export interface ConditionsResetAction { tick: number; type: 'conditions-reset' }
+export type ActionRecord = PlaceAction | GenesisAction | HistoricAction | ClimateAction | SeasonAction | ClimateModeAction | ClimateAdvanceAction | ClimateScenarioAction | ClimateScenarioOffAction | ClimateResetAction | DisasterResetAction | ConditionsResetAction;
 /** The climate scenario that last started the world: its calendar year, for the clock. */
 export interface ClimateScenarioInfo {
   id: string;
@@ -256,6 +262,8 @@ export type WorkerRequest =
   | { type: 'climate-scenario'; scenarioId: string }
   | { type: 'climate-scenario-off' }
   | { type: 'climate-reset' }
+  | { type: 'disaster-reset' }
+  | { type: 'conditions-reset' }
   | { type: 'season'; dayOfYear: number }
   | { type: 'replay'; seed: number; actions: ActionRecord[]; untilTick: number; startDayOfYear: number; trafficDispatches?: TrafficDispatch[]; initialWeather?: LiveWeatherSnapshot };
 export type WorkerResponse =

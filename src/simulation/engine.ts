@@ -35,7 +35,7 @@ import type { WeatherHazardKind } from '../types';
 import { applyTrafficDispatch, createTraffic, stepTraffic, validateTrafficDispatches } from './traffic';
 import { CITIES, LAND_POLYGONS, SCENARIO } from '../data/world';
 import { AGENCY_NAMES, typhoonById } from '../data/typhoons';
-import { fieldsAt, sampleHistoric, windowCells } from './historic';
+import { fieldsAt, sampleHistoric, windowCells, windowWeights } from './historic';
 import { currentWeather, isLiveWeatherSnapshot, sampleLiveWeather, stepLiveWeather } from './live-weather';
 import { climateIndices, nino34Of, releaseToolPatches, setSstHold, stackHeatPatch, stackSstPatch, thermoclineAt, type ClimateIndices } from './climate-core';
 import {
@@ -475,12 +475,13 @@ function anomalySet(state: GameState): AnomalySet | null {
   return state.climateLayer ? anomaliesFor(state.climateLayer, climateAnomalyContext()) : null;
 }
 /** Anomaly fields for a base world only: a live game carries them in its evolving weather instead. */
-interface SteeringClimate { set: AnomalySet; recorded: ((lon: number, lat: number) => boolean) | null }
+/** `recorded` is the weight (0 to 1) of the recorded environment at a point, which stands in for the layer's anomaly. */
+interface SteeringClimate { set: AnomalySet; recorded: ((lon: number, lat: number) => number) | null }
 function baseModeAnomalies(state: GameState): SteeringClimate | null {
   const set = state.climateLayer && !currentWeather(state) ? anomalySet(state) : null;
   if (!set) return null;
   const active = activeHistoric(state);
-  return { set, recorded: active ? (lon, lat) => sampleHistoric(active.data, active.hours, active.startIso, lon, lat) !== null : null };
+  return { set, recorded: active ? (lon, lat) => sampleHistoric(active.data, active.hours, active.startIso, lon, lat)?.w ?? 0 : null };
 }
 function rebuildClimate(state: GameState): void {
   if (state.climateLayer) rebuildAnomalies(state.climateLayer, climateAnomalyContext());
@@ -498,7 +499,7 @@ function ensureClimateLayer(state: GameState) {
   return state.climateLayer;
 }
 const warmScratch = new Float64Array(GRID_COLS * GRID_ROWS);
-const recordedScratch = new Uint8Array(GRID_COLS * GRID_ROWS);
+const recordedScratch = new Float64Array(GRID_COLS * GRID_ROWS);
 
 /** E-folding time (h) with which a player-driven wind departure relaxes back to the record. */
 const WIND_DELTA_RELAX_HOURS = 72;
@@ -571,22 +572,24 @@ function environmentAt(state: GameState, systems: PressureSystem[], lon: number,
   const h = active && sampleHistoric(active.data, active.hours, active.startIso, lon, lat);
   if (h) { // a historic typhoon is loaded: the recorded field is the base where it has data; player effects stack on top
     const added = systemsAt(currentWeather(state) ? systems : systems.slice(baseSystems(state.seed).length), lon, lat);
-    if (!Number.isNaN(h.t)) temperature = h.t;
-    if (!Number.isNaN(h.air)) airTemperature = h.air;
-    if (!Number.isNaN(h.h)) humidity = h.h;
-    if (!Number.isNaN(h.p)) pressure = h.p + added.p;
-    if (!Number.isNaN(h.u) && !Number.isNaN(h.v)) { u = h.u + added.u; v = h.v + added.v; }
+    const w = h.w; // fades out over the window's edge band: base and record are blended there
+    if (!Number.isNaN(h.t)) temperature += w * (h.t - temperature);
+    if (!Number.isNaN(h.air)) airTemperature += w * (h.air - airTemperature);
+    if (!Number.isNaN(h.h)) humidity += w * (h.h - humidity);
+    if (!Number.isNaN(h.p)) pressure += w * (h.p + added.p - pressure);
+    if (!Number.isNaN(h.u) && !Number.isNaN(h.v)) { u += w * (h.u + added.u - u); v += w * (h.v + added.v - v); }
   }
   const climate = climateAt(state.climate, lon, lat); // world climate adds on top of the base and of any recorded field
   if (!land) temperature += climate.sst;
   airTemperature += climate.air;
   humidity += climate.humidity;
   // ENSO layer: not where a recorded field holds the real ENSO state. A live game's pressure and wind already carry it.
-  const ca = h || !state.climateLayer ? null : climateAnomalyAt(state, lon, lat);
+  const free = h ? 1 - h.w : 1; // share of the layer's anomaly that is not already in the recorded field
+  const ca = free <= 0 || !state.climateLayer ? null : climateAnomalyAt(state, lon, lat);
   if (ca) {
-    airTemperature += ca.air;
-    humidity += ca.hum;
-    if (!background) { pressure += ca.slp; u += ca.u + ca.ug; v += ca.v + ca.vg; }
+    airTemperature += free * ca.air;
+    humidity += free * ca.hum;
+    if (!background) { pressure += free * ca.slp; u += free * (ca.u + ca.ug); v += free * (ca.v + ca.vg); }
   }
   if (withEffects) for (const e of state.effects) {
     if (e.type === 'warm' && !land) { const dT = EFFECT_STRENGTH.warm * effectWeight(e) * effectFalloff(e, lon, lat); temperature += dT; warmSum += dT; }
@@ -618,7 +621,7 @@ function environmentAt(state: GameState, systems: PressureSystem[], lon: number,
   }
   const coolCap = capEffect(cooling, unlimited.cooling, EFFECT_STACK_LIMITS.cooling, 0);
   return {
-    temperature: ca && !land ? temperature - coolCap + sstUnionAdjustment(warmSum - coolCap, ca.sst) : temperature - coolCap, airTemperature: airTemperature + capEffect(airHeating, unlimited.air, EFFECT_STACK_LIMITS.air), airHeating: capEffect(airHeating, unlimited.air, EFFECT_STACK_LIMITS.air), updraft: capEffect(updraft, unlimited.vertical, EFFECT_STACK_LIMITS.vertical), instability: capEffect(instability, unlimited.instability, EFFECT_STACK_LIMITS.instability), drying: capEffect(drying, unlimited.drying, EFFECT_STACK_LIMITS.drying, 0), cooling: capEffect(cooling, unlimited.cooling, EFFECT_STACK_LIMITS.cooling, 0), humidity: clamp(humidity - drying, 0, 1), shear: Math.max(0, baseShear(state.seed, lon, lat) + climate.shear + (ca ? ca.shear : 0) + capEffect(shearDelta, unlimited.shear, SHEAR_STACK_CAP)), land,
+    temperature: ca && !land ? temperature - coolCap + sstUnionAdjustment(warmSum - coolCap, free * ca.sst) : temperature - coolCap, airTemperature: airTemperature + capEffect(airHeating, unlimited.air, EFFECT_STACK_LIMITS.air), airHeating: capEffect(airHeating, unlimited.air, EFFECT_STACK_LIMITS.air), updraft: capEffect(updraft, unlimited.vertical, EFFECT_STACK_LIMITS.vertical), instability: capEffect(instability, unlimited.instability, EFFECT_STACK_LIMITS.instability), drying: capEffect(drying, unlimited.drying, EFFECT_STACK_LIMITS.drying, 0), cooling: capEffect(cooling, unlimited.cooling, EFFECT_STACK_LIMITS.cooling, 0), humidity: clamp(humidity - drying, 0, 1), shear: Math.max(0, baseShear(state.seed, lon, lat) + climate.shear + (ca ? free * ca.shear : 0) + capEffect(shearDelta, unlimited.shear, SHEAR_STACK_CAP)), land,
     pressure, u, v,
   };
 }
@@ -990,12 +993,24 @@ export function stageFor(wind: number, lon = 140, lat = 15): string {
 /** Cyclonic rotation sign: +1 counter-clockwise (north), -1 clockwise (south). */
 const spinSign = (lat: number) => (lat >= 0 ? 1 : -1);
 
+/** Pressure change (hPa, <= 0) at `r` km from a vortex centre inside its outer radius. */
+function vortexDp(storm: Vortex, r: number, outer: number, deficit: number): number {
+  return -deficit * (1 - Math.exp(-((storm.radiusKm / Math.max(r, 1)) ** 1.5))) * (1 - smoothstep(outer * 0.6, outer, r));
+}
+/** The vortex's pressure change at a point, exactly as stormVortexAt().dp; pass `deficit` (pressureDeficit of its wind) when sampling many points. */
+export function stormPressureAt(storm: Vortex, lon: number, lat: number, deficit = pressureDeficit(storm.wind)): number {
+  const { dx, dy } = offsetKm(storm.lon, storm.lat, lon, lat);
+  const r = Math.hypot(dx, dy);
+  const outer = outerRadiusKm(storm);
+  return r > outer ? 0 : vortexDp(storm, r, outer, deficit);
+}
+
 export function stormVortexAt(storm: Vortex, motion: { u: number; v: number }, lon: number, lat: number): { u: number; v: number; dp: number } {
   const { dx, dy } = offsetKm(storm.lon, storm.lat, lon, lat);
   const r = Math.hypot(dx, dy);
   const outer = outerRadiusKm(storm);
   if (r > outer) return { u: 0, v: 0, dp: 0 };
-  const dp = -pressureDeficit(storm.wind) * (1 - Math.exp(-((storm.radiusKm / Math.max(r, 1)) ** 1.5))) * (1 - smoothstep(outer * 0.6, outer, r));
+  const dp = vortexDp(storm, r, outer, pressureDeficit(storm.wind));
   if (r < 0.5) return { u: 0, v: 0, dp };
   const speed = vortexSpeed(storm, r);
   const sgn = spinSign(storm.lat);
@@ -1021,7 +1036,8 @@ function steeringAt(systems: PressureSystem[], p0: GeoPoint, wind: number, day: 
     const initial = weather && sampleLiveWeather(weather, p.lon, p.lat);
     u += s.u + (initial ? initial.u : zonalBackground(p.lat) + seasonalAt(day, p.lat, false).jet);
     v += s.v + (initial ? initial.v : 0);
-    if (climate && !climate.recorded?.(p.lon, p.lat)) { const ca = anomalyAt(climate.set, p.lon, p.lat, anomalyScratch); u += ca.u + ca.ug; v += ca.v + ca.vg; } // recorded winds already hold the real ENSO state
+    const free = climate ? 1 - (climate.recorded?.(p.lon, p.lat) ?? 0) : 0;
+    if (free > 0) { const ca = anomalyAt(climate!.set, p.lon, p.lat, anomalyScratch); u += free * (ca.u + ca.ug); v += free * (ca.v + ca.vg); } // recorded winds already hold the real ENSO state
   }
   // Game beta drift: westward and poleward, stronger for stronger vortices.
   const beta = 0.6 + 0.6 * clamp(wind / 40, 0, 1);
@@ -1085,16 +1101,23 @@ export function totalWind(state: GameState, lon: number, lat: number): { u: numb
   const systems = allSystems(state);
   const active = activeHistoric(state);
   const h = active && sampleHistoric(active.data, active.hours, active.startIso, x, lat);
-  const rec = h && !Number.isNaN(h.u) && !Number.isNaN(h.v) ? h : null; // recorded base replaces the base systems and background, as in refreshGrid
+  const rec = h && !Number.isNaN(h.u) && !Number.isNaN(h.v) ? h : null; // recorded base replaces the base systems and background, as in refreshGrid; fades out over the window's edge band
+  const w = rec ? rec.w : 0;
   const background = currentWeather(state);
-  const initial = rec ?? (background && sampleLiveWeather(background, x, lat));
-  const s = systemsAt(rec && !currentWeather(state) ? systems.slice(baseSystems(state.seed).length) : systems, x, lat);
-  const ur = initial ? initial.u : 0;
-  const vr = initial ? initial.v : 0;
-  let u = initial ? ur + s.u : s.u + zonalBackground(lat) + seasonalAt(seasonDay(state), lat, false).jet;
-  let v = initial ? vr + s.v : s.v;
-  const ca = h || background || !state.climateLayer ? null : climateAnomalyAt(state, x, lat); // a live game's wind already carries the ENSO layer
-  if (ca) { u += ca.u + ca.ug; v += ca.v + ca.vg; }
+  const initial = background && sampleLiveWeather(background, x, lat);
+  const s = systemsAt(systems, x, lat);
+  let u = initial ? initial.u + s.u : s.u + zonalBackground(lat) + seasonalAt(seasonDay(state), lat, false).jet;
+  let v = initial ? initial.v + s.v : s.v;
+  let ur = initial ? initial.u : 0;
+  let vr = initial ? initial.v : 0;
+  if (rec) {
+    const added = systemsAt(background ? systems : systems.slice(baseSystems(state.seed).length), x, lat);
+    u += w * (rec.u + added.u - u); v += w * (rec.v + added.v - v);
+    ur += w * (rec.u - ur); vr += w * (rec.v - vr);
+  }
+  const free = h ? 1 - h.w : 1; // share of the layer's anomaly that is not already in the recorded field
+  const ca = free <= 0 || background || !state.climateLayer ? null : climateAnomalyAt(state, x, lat); // a live game's wind already carries the ENSO layer
+  if (ca) { u += free * (ca.u + ca.ug); v += free * (ca.v + ca.vg); }
   const motions = stormMotions(state, systems);
   state.storms.forEach((storm, k) => {
     const w = stormVortexAt(storm, motions[k], x, lat);
@@ -1119,11 +1142,12 @@ export function totalPressure(state: GameState, lon: number, lat: number): numbe
   const background = currentWeather(state);
   const active = activeHistoric(state);
   const h = active && sampleHistoric(active.data, active.hours, active.startIso, x, lat);
-  const recorded = h && !Number.isNaN(h.p) ? h.p : null;
+  const recorded = h && !Number.isNaN(h.p) ? h.p : null; // fades out over the window's edge band
   const systems = allSystems(state);
-  let p = (recorded ?? (background ? sampleLiveWeather(background, x, lat).p : REFERENCE_PRESSURE))
-    + systemsAt(recorded !== null && !currentWeather(state) ? systems.slice(baseSystems(state.seed).length) : systems, x, lat).p;
-  if (!h && !background && state.climateLayer) p += climateAnomalyAt(state, x, lat)!.slp;
+  let p = (background ? sampleLiveWeather(background, x, lat).p : REFERENCE_PRESSURE) + systemsAt(systems, x, lat).p;
+  if (recorded !== null) p += h!.w * (recorded + systemsAt(background ? systems : systems.slice(baseSystems(state.seed).length), x, lat).p - p);
+  const free = h ? 1 - h.w : 1; // share of the layer's anomaly that is not already in the recorded field
+  if (free > 0 && !background && state.climateLayer) p += free * climateAnomalyAt(state, x, lat)!.slp;
   for (const storm of state.storms) p += stormVortexAt(storm, NO_MOTION, x, lat).dp;
   for (const r of state.remnants) p += stormVortexAt(r, NO_MOTION, x, lat).dp;
   return p;
@@ -1454,6 +1478,53 @@ export function resetClimateNow(state: GameState): PlacementResult {
   return { ok: true };
 }
 
+/** Whether any storm, remnant, forming low, thunderstorm, tornado, blizzard, weather hazard (fine dust included) or recipe in the making is active. */
+export function disastersActive(state: GameState): boolean {
+  return state.storms.length > 0 || state.remnants.length > 0 || state.candidates.length > 0 || state.thunderstorms.length > 0
+    || state.weatherHazards.length > 0 || !!state.fineDustRows || state.blizzardCells > 0
+    || state.effects.some(e => !!e.formation) || (state.disasters ?? []).some(r => r.endedHour === undefined);
+}
+
+/**
+ * Ends every disaster at once (a recorded action, rejected when none is active): storms go to the archive, remnants, forming lows, thunderstorms
+ * (tornadoes with them), weather hazards, the fine-dust field, blizzard cells and the recipe placements that were making them stop. The damage already done,
+ * the records, the score, the news, natural formation, plain placed conditions and the date stay.
+ */
+export function resetDisastersNow(state: GameState): PlacementResult {
+  if (!disastersActive(state)) return { ok: false, reason: 'No disaster is active.' };
+  state.actions.push({ tick: state.tick, type: 'disaster-reset' });
+  for (const storm of state.storms) archiveStorm(state, storm, 'dissipated');
+  state.storms = []; state.remnants = []; state.candidates = []; state.thunderstorms = []; state.weatherHazards = [];
+  state.effects = state.effects.filter(e => !e.formation);
+  for (const load of state.historic) load.finished = true;
+  state.phase = 'seeding';
+  delete state.fineDustRows;
+  refreshGrid(state);
+  for (const c of state.grid) { c.pm25 = 0; c.snow = 0; c.blizzard = false; }
+  state.blizzardCells = 0;
+  syncDisasters(state, point => state.grid[gridIndex(point.lon, point.lat)]);
+  for (const r of state.disasters ?? []) if (r.endedHour === undefined) { r.endedHour = state.hours; r.ageHours = state.hours - r.startedHour; r.intensity = 0; }
+  refreshForecasts(state);
+  addNews(state, { id: `disaster-reset-${state.tick}-${state.actions.length}`, kind: 'info', title: 'Disasters reset', text: 'Every storm, hazard and thunderstorm has ended. The damage already done stays on record.' });
+  return { ok: true };
+}
+
+/**
+ * Takes every condition off the map at once (a recorded action, rejected when none is active): placed conditions, formation-recipe conditions and
+ * natural-formation wave conditions. The climate patches the placed tools made end with them. Storms and other disasters are not touched.
+ */
+export function resetConditionsNow(state: GameState): PlacementResult {
+  if (!state.effects.length) return { ok: false, reason: 'No condition is active.' };
+  state.actions.push({ tick: state.tick, type: 'conditions-reset' });
+  state.effects = [];
+  if (state.climateLayer) releaseToolPatches(state.climateLayer.core);
+  refreshGrid(state);
+  syncDisasters(state, point => state.grid[gridIndex(point.lon, point.lat)]);
+  refreshForecasts(state);
+  addNews(state, { id: `conditions-reset-${state.tick}-${state.actions.length}`, kind: 'info', title: 'Conditions reset', text: 'Every condition on the map has ended. Storms and other disasters keep running.' });
+  return { ok: true };
+}
+
 // ---- Fast climate path ----
 /** Total fast-path time one run may spend (model days, 200 years); validateActions enforces it on replays. */
 export const CLIMATE_MAX_DAYS = 200 * 365;
@@ -1579,6 +1650,7 @@ export function loadHistoric(state: GameState, typhoonId: string): PlacementResu
   storm.galeRadiusKm = galeRadius(storm);
   storm.stage = stageFor(storm.wind, storm.lon, storm.lat);
   storm.record = { typhoonId: typhoon.id, startHour: state.hours };
+  storm.trackOffset = { east: 0, north: 0 };
   const environment = historicEnvironments.has(typhoon.id) ? 'loaded' : 'missing';
   state.actions.push({ tick: state.tick, type: 'historic', typhoonId: typhoon.id });
   state.storms.push(storm);
@@ -1697,18 +1769,21 @@ function refreshGrid(state: GameState): void {
     if (!c.land && sea != null) c.temperature = sea + seaSeasonOffsets![Math.floor(k / GRID_COLS)] + (anom ? anom.sst[k] : 0);
   }
   const active = activeHistoric(state);
-  const recorded = anom && active ? recordedScratch.fill(0) : null; // cells whose recorded fields already hold the real ENSO state
-  if (active) { // a historic typhoon is loaded: recorded fields replace the fictional ones inside the dataset window (NaN = missing, keep the base value)
+  const recorded = anom && active ? recordedScratch.fill(0) : null; // per cell, the share of the layer's anomaly that the recorded fields replace (their weight)
+  if (active) { // a historic typhoon is loaded: recorded fields replace the fictional ones inside the dataset window, fading out over its edge band (NaN = missing, keep the base value)
     const f = fieldsAt(active.data, active.hours, active.startIso);
+    const weights = windowWeights(active.data);
     windowCells(active.data).forEach((k, w) => {
       const c = g[k];
-      // The recorded field already holds the real ENSO state: it replaces the value (layer anomaly included); where a field is missing the layer's anomaly is taken out of the kept base value.
-      if (anom) { recorded![k] = 1; c.shear -= anom.shear[k]; } // shear is not recorded
-      if (!Number.isNaN(f.t[w])) c.temperature = f.t[w]; else if (anom) c.temperature -= anom.sst[k];
-      if (!Number.isNaN(f.p[w])) c.pressure = f.p[w]; else if (anom && !background) c.pressure -= anom.slp[k];
-      if (!Number.isNaN(f.u[w]) && !Number.isNaN(f.v[w])) { c.u = recU[k] = f.u[w]; c.v = recV[k] = f.v[w]; } else if (anom && !background) { c.u -= anom.u[k] + anom.ug[k]; c.v -= anom.v[k] + anom.vg[k]; }
-      if (!Number.isNaN(f.h[w])) hum[k] = f.h[w]; else if (anom) hum[k] -= anom.hum[k];
-      if (!Number.isNaN(f.air[w])) air[k] = f.air[w]; else if (anom) air[k] -= anom.air[k];
+      const rw = weights[w];
+      if (rw <= 0) return;
+      // The recorded field already holds the real ENSO state: it replaces the value (layer anomaly included); where a field is missing the layer's anomaly is taken out of the kept base value. All of it scaled by the weight, so the edge band blends base and record.
+      if (anom) { recorded![k] = rw; c.shear -= rw * anom.shear[k]; } // shear is not recorded
+      if (!Number.isNaN(f.t[w])) c.temperature += rw * (f.t[w] - c.temperature); else if (anom) c.temperature -= rw * anom.sst[k];
+      if (!Number.isNaN(f.p[w])) c.pressure += rw * (f.p[w] - c.pressure); else if (anom && !background) c.pressure -= rw * anom.slp[k];
+      if (!Number.isNaN(f.u[w]) && !Number.isNaN(f.v[w])) { c.u += rw * (f.u[w] - c.u); c.v += rw * (f.v[w] - c.v); recU[k] += rw * (f.u[w] - recU[k]); recV[k] += rw * (f.v[w] - recV[k]); } else if (anom && !background) { c.u -= rw * (anom.u[k] + anom.ug[k]); c.v -= rw * (anom.v[k] + anom.vg[k]); }
+      if (!Number.isNaN(f.h[w])) hum[k] += rw * (f.h[w] - hum[k]); else if (anom) hum[k] -= rw * anom.hum[k];
+      if (!Number.isNaN(f.air[w])) air[k] += rw * (f.air[w] - air[k]); else if (anom) air[k] -= rw * anom.air[k];
     });
   }
   const climate = climateGrid(state.climate); // world climate adds on top of the base and of any recorded field
@@ -1758,7 +1833,7 @@ function refreshGrid(state: GameState): void {
     const coolCap = capEffect(cooling[k], freeCooling[k], EFFECT_STACK_LIMITS.cooling, 0);
     g[k].temperature -= coolCap;
     // Where the player's own warm/cool tools act on a cell, the layer's SST anomaly (already in the base) and the tools are a union, not a sum.
-    if (warmAcc && (warmAcc[k] !== 0 || coolCap !== 0) && recorded?.[k] !== 1) g[k].temperature += sstUnionAdjustment(warmAcc[k] - coolCap, anom!.sst[k]) - anom!.sst[k];
+    if (warmAcc && (warmAcc[k] !== 0 || coolCap !== 0) && (recorded?.[k] ?? 0) < 1) g[k].temperature += (1 - (recorded?.[k] ?? 0)) * (sstUnionAdjustment(warmAcc[k] - coolCap, anom!.sst[k]) - anom!.sst[k]);
     g[k].shear = Math.max(0, g[k].shear + capEffect(shearDelta[k], freeShear[k], SHEAR_STACK_CAP));
     g[k].humidity = clamp(hum[k], 0, 1);
     g[k].airHeating = capEffect(g[k].airHeating, freeAir[k], EFFECT_STACK_LIMITS.air);
@@ -2372,6 +2447,25 @@ function stepRemnants(state: GameState, systems: PressureSystem[], dt: number): 
   });
 }
 
+/** Largest steering change (m/s) the player's conditions can add to a recorded storm: about a typical typhoon translation speed (~5 m/s, 430 km/day), so a stack of tools cannot throw it across the map in one step. */
+export const TRACK_STEER_CAP_MS = 5;
+
+/** Recorded storms: adds to the track offset what the player's conditions change in the steering at the storm's current (displaced) position, with and without them. Never relaxed back. */
+function steerRecorded(state: GameState, storm: Storm, systems: PressureSystem[], motion: { u: number; v: number }, dt: number): void {
+  if (!state.effects.some(e => isPressureTool(e.type)) && !(state.weatherHazards ?? []).length) return; // nothing of the player's in the pressure field: exactly 0
+  const day = seasonDay(state);
+  const base = currentWeather(state) ? [] : baseSystems(state.seed);
+  const without = coupledSteering(base, storm, state.storms, day, currentWeather(state), baseModeAnomalies(state));
+  let du = motion.u - without.u;
+  let dv = motion.v - without.v;
+  const mag = Math.hypot(du, dv);
+  if (mag > TRACK_STEER_CAP_MS) { du *= TRACK_STEER_CAP_MS / mag; dv *= TRACK_STEER_CAP_MS / mag; }
+  if (du === 0 && dv === 0) return;
+  const off = storm.trackOffset ??= { east: 0, north: 0 };
+  off.east += (du * dt * 3600) / 1000;
+  off.north += (dv * dt * 3600) / 1000;
+}
+
 /** Moves and evolves one storm. Returns false when it dissipates. */
 function stepStorm(state: GameState, storm: Storm, systems: PressureSystem[], motion: { u: number; v: number }, dt: number): boolean {
   const label = storm.name ?? `#${storm.id}`;
@@ -2388,7 +2482,10 @@ function stepStorm(state: GameState, storm: Storm, systems: PressureSystem[], mo
   }
   const wasLand = isLand(storm.lon, storm.lat);
   const prevRank = stageRank(storm.peakWind);
-  const next = recorded ?? moveKm(storm.lon, storm.lat, (motion.u * dt * 3600) / 1000, (motion.v * dt * 3600) / 1000);
+  if (recorded) steerRecorded(state, storm, systems, motion, dt);
+  const off = storm.trackOffset;
+  const next = recorded ? (off && (off.east !== 0 || off.north !== 0) ? moveKm(recorded.lon, recorded.lat, off.east, off.north) : recorded)
+    : moveKm(storm.lon, storm.lat, (motion.u * dt * 3600) / 1000, (motion.v * dt * 3600) / 1000);
   // Actual model displacement per model hour, independent of playback speed. The later
   // merger centre adjustment is not travel and deliberately does not inflate this reading.
   storm.movementSpeedKmh = distanceKm(storm.lon, storm.lat, next.lon, next.lat) / dt;
@@ -2661,7 +2758,7 @@ export function validateActions(actions: unknown, untilTick: number = REPLAY_MAX
       clean.push({ tick, type, scenarioId });
     } else if (type === 'climate-scenario-off') {
       clean.push({ tick, type });
-    } else if (type === 'climate-reset') {
+    } else if (type === 'climate-reset' || type === 'disaster-reset' || type === 'conditions-reset') {
       clean.push({ tick, type });
     } else if (type === 'season') {
       if (!isValidDayOfYear(day)) return { ok: false, reason: `Action ${k + 1} needs a day of the year between 0 and 366.` };
@@ -2709,6 +2806,8 @@ export function replayGame(seed: unknown, actions: unknown, untilTick: unknown, 
         : a.type === 'climate-scenario' ? loadClimateScenario(state, a.scenarioId)
         : a.type === 'climate-scenario-off' ? endClimateScenarioNow(state)
         : a.type === 'climate-reset' ? resetClimateNow(state)
+        : a.type === 'disaster-reset' ? resetDisastersNow(state)
+        : a.type === 'conditions-reset' ? resetConditionsNow(state)
         : a.type === 'historic' ? loadHistoric(state, a.typhoonId)
         : placeTool(state, a.type, a.lon, a.lat, a.formation);
       if (!r.ok) return `Action ${k + 1} was rejected at hour ${state.hours}: ${r.reason}`;

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { GameState, HistoricEnvironment } from '../src/types';
 import { TICKS_PER_HOUR, createGame, gridIndex, isLand, loadHistoric, placeTool, replayGame, sampleEnvironment, setHistoricEnvironment, stepGame, totalWind } from '../src/simulation/engine';
-import { sampleHistoric } from '../src/simulation/historic';
+import { sampleHistoric, windowWeight } from '../src/simulation/historic';
 import fixtureJson from './fixtures/environment-fixture.json';
 
 // 3×3 cells at 127/129/131°E, 31/33/35°N; days 4-6 Sep 2003 (Maemi starts 2003-09-04T00Z); sea-level pressure 990/1000/1010 by day; the SW cell has no SST.
@@ -82,14 +82,16 @@ describe('historic typhoons: environment', () => {
     const fictional = world();
     setHistoricEnvironment(ID, fixture);
     const s = world();
-    expect(s.grid[k].u).toBeCloseTo(5, 6); // recorded wind, factor not applied
-    expect(s.grid[k].v).toBeCloseTo(-2, 6);
-    expect(totalWind(s, s.grid[k].lon, s.grid[k].lat).u).toBeCloseTo(5, 6);
+    const rw = windowWeight(fixture, land.lon, land.lat); // the tiny 3x3 window blends from its edge: only its centre cell is fully recorded
     const [fu, fv] = [fictional.grid[k].u, fictional.grid[k].v];
+    const [u0, v0] = [rw * 5 + (1 - rw) * fu, rw * -2 + (1 - rw) * fv]; // recorded wind, factor not applied to it
+    expect(s.grid[k].u).toBeCloseTo(u0, 6);
+    expect(s.grid[k].v).toBeCloseTo(v0, 6);
+    expect(totalWind(s, s.grid[k].lon, s.grid[k].lat).u).toBeCloseTo(u0, 6);
     const low = [land.lon + 3, land.lat];
     for (const w of [fictional, s]) { expect(placeTool(w, 'low', low[0], low[1]).ok).toBe(true); stepTo(w, w.hours + 12); } // the Low ramps up
-    const du = s.grid[k].u - 5;
-    const dv = s.grid[k].v + 2;
+    const du = s.grid[k].u - u0;
+    const dv = s.grid[k].v - v0;
     expect(Math.hypot(du, dv)).toBeGreaterThan(0.5);
     // the Low's own wind is reduced exactly as without a recording
     expect(du).toBeCloseTo(fictional.grid[k].u - fu, 6);
@@ -121,8 +123,9 @@ describe('historic typhoons: environment', () => {
       expect([a.temperature, a.airTemperature, a.humidity, a.pressure, a.u, a.v]).toEqual([b.temperature, b.airTemperature, b.humidity, b.pressure, b.u, b.v]);
     }
     const nullSst = gridIndex(127, 31);
+    const rw = windowWeight(fixture, 127, 31); // a corner of the tiny window: mostly the fictional climate
     expect(s.grid[nullSst].temperature).toBe(fictional.grid[nullSst].temperature);
-    expect(s.grid[nullSst].pressure).toBeCloseTo(990, 6);
+    expect(s.grid[nullSst].pressure).toBeCloseTo(rw * 990 + (1 - rw) * fictional.grid[nullSst].pressure, 6);
     expect(sampleEnvironment(s, 128, 32).temperature).toBeGreaterThan(0);
     expect(sampleEnvironment(s, 80, 0)).toEqual(sampleEnvironment(fictional, 80, 0));
   });

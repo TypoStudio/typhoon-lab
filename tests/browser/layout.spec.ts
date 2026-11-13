@@ -59,8 +59,8 @@ for (const width of [1440, 768, 414, 375, 320]) {
     expect(layout.outside).toEqual([]);
     expect(layout.unnamed).toBe(0);
     {
-      // The climate reset sits in the speed bar after the clock: inside the bar and the viewport, 44 px tall on phones.
-      const reset = (await page.getByTestId('climate-reset').boundingBox())!;
+      // Restart sits in the speed bar after the clock: inside the bar and the viewport, 44 px tall on phones.
+      const reset = (await page.getByTestId('restart').boundingBox())!;
       const bar = (await page.locator('.clockbar').boundingBox())!;
       expect(reset.x).toBeGreaterThanOrEqual(bar.x - 1);
       expect(reset.x + reset.width).toBeLessThanOrEqual(Math.min(bar.x + bar.width, width) + 1);

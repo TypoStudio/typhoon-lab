@@ -1,6 +1,6 @@
 import type { GameState } from '../types';
-import { isLand, LAND_WIND_FACTOR, steeringFlow, stormVortexAt } from '../simulation/engine';
-import { sampleGrid, type FieldData } from './fields';
+import { isLand, LAND_WIND_FACTOR, steeringFlow, stormPressureAt, stormVortexAt } from '../simulation/engine';
+import { pressureStorm, sampleGrid, type FieldData } from './fields';
 import { distanceKm, smoothstep } from '../simulation/geo';
 
 /** Replace only the coarse cyclone contribution; preserve the surrounding weather field. */
@@ -57,4 +57,18 @@ export function attachStormWind(field: FieldData, state: GameState): void {
     out[0] += sampleGrid(field, backgroundU, lon, lat);
     out[1] += sampleGrid(field, backgroundV, lon, lat);
   };
+}
+
+/** Separates every storm's analytic pressure deficit from the grid's pressure, so isobars and readouts can add it back at the exact point (see samplePressure and contourLattice). */
+export function attachStormPressure(field: FieldData, state: GameState): void {
+  field.pressureEnv = undefined;
+  field.pressureStorms = undefined;
+  const storms = [...state.storms, ...state.remnants].map(storm => pressureStorm({ ...storm }));
+  if (!storms.length) return;
+  const env = field.pressure.slice();
+  state.grid.forEach((cell, k) => {
+    for (const s of storms) env[k] -= stormPressureAt(s.storm, cell.lon, cell.lat, s.deficit);
+  });
+  field.pressureEnv = env;
+  field.pressureStorms = storms;
 }

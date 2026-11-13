@@ -274,7 +274,7 @@ describe('groundCircle', () => {
   it('still paints a storm and its rings on the flat map', () => {
     const f = flat();
     const t = setup(f);
-    t.priv.storm(f, mkStorm(1, 150, 20), false, 0);
+    t.priv.storm(f, mkStorm(1, 150, 20), true, 0); // selected: both label lines show whatever the zoom
     expect(t.count('ellipse')).toBe(2); // gale and radius of maximum wind
     expect(t.count('fillText')).toBe(2);
   });

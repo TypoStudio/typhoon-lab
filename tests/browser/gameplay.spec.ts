@@ -445,22 +445,61 @@ test('shortcuts work with focus in the sidebar, except Space on a focused contro
   expect(await zoom()).toBeGreaterThan(z0);
 });
 
-test('World climate Reset is disabled at 0, returns every slider to 0 and clears the HUD line', async ({ page }) => {
+test('Restart is always enabled, asks first, and reloads the world fresh (sliders back to 0)', async ({ page }) => {
   await ready(page);
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
-  const reset = page.getByTestId('climate-reset');
-  await expect(reset).toBeDisabled();
-  await expect(reset).toHaveAccessibleName('Reset climate'); // in the speed bar now, after the clock
-  await page.getByTestId('climate-warming').fill('2');
+  const restart = page.getByTestId('restart');
+  await expect(restart).toBeEnabled();
+  await expect(restart).toHaveAccessibleName('Restart');
   await page.getByTestId('climate-polar').fill('-1.5');
-  await expect(reset).toBeEnabled();
-  await expect(page.getByTestId('climate-hud')).toBeVisible();
-  await reset.click();
-  for (const key of ['warming', 'enso', 'polar']) await expect(page.getByTestId(`climate-${key}`)).toHaveValue('0');
-  await expect(page.getByTestId('climate-warming-value')).toHaveText('0 °C');
-  await expect(page.getByTestId('climate-hud')).toBeHidden();
+  await expect.poll(async () => (await state(page)).climate.polar).toBe(-1.5);
+  await restart.click();
+  await page.getByTestId('restart-cancel').click();
+  expect((await state(page)).climate.polar).toBe(-1.5);
+  await restart.click();
+  await page.getByTestId('restart-confirm').click();
+  await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
+  await expect.poll(async () => (await state(page)).climate).toEqual({ warming: 0, enso: 0, polar: 0 });
+  await expect(page.getByTestId('climate-polar')).toHaveValue('0');
+});
+
+test('World tab Reset removes every placed condition and disables itself', async ({ page }) => {
+  await ready(page);
+  const reset = page.getByTestId('reset-conditions');
+  await page.getByTestId('tab-environment').click();
   await expect(reset).toBeDisabled();
-  expect((await state(page)).climate).toEqual({ warming: 0, enso: 0, polar: 0 });
+  await page.getByTestId('palette-tab-conditions').click();
+  await page.getByTestId('tool-warm').click();
+  const box = (await page.getByTestId('map-stage').boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect.poll(async () => (await state(page)).effects.length).toBeGreaterThan(0);
+  await expect(reset).toBeEnabled();
+  await reset.click();
+  await expect.poll(async () => (await state(page)).effects.length).toBe(0);
+  expect((await state(page)).actions.at(-1).type).toBe('conditions-reset');
+  await expect(reset).toBeDisabled();
+});
+
+test('Disasters tab Reset ends a recipe storm and disables itself', async ({ page }) => {
+  test.setTimeout(120_000);
+  await ready(page);
+  const reset = page.getByTestId('disasters-reset');
+  await expect(reset).toBeDisabled();
+  await page.getByTestId('palette-tab-formation').click();
+  await page.getByTestId('tool-genesis-typhoon').click();
+  await page.evaluate(() => (window as any).__typhoonLab.mapView.centerOn(140, 16));
+  const box = (await page.getByTestId('map-stage').boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.getByTestId('spot-place').click();
+  await page.keyboard.press('Escape');
+  await setSpeed(page, 14_400);
+  await expect.poll(async () => (await state(page)).storms.length, { timeout: 60_000 }).toBeGreaterThan(0);
+  await page.getByTestId('tab-storms').click();
+  await expect(reset).toBeEnabled();
+  await reset.click();
+  await expect.poll(async () => { const s = await state(page); return [s.storms.length, s.candidates.length, s.effects.filter((e: any) => e.formation).length]; }).toEqual([0, 0, 0]);
+  expect((await state(page)).actions.at(-1).type).toBe('disaster-reset');
+  await expect(reset).toBeDisabled();
 });
 
 test('Season icons show the calendar season, move the calendar and keep the world running', async ({ page }) => {
@@ -583,4 +622,34 @@ test('combined overlays independently toggle wind and preserve replay state acro
   await expectOverlays(page, ['wind', 'humidity', 'rain', 'finedust', 'pressure', 'temperature', 'population']);
   await expect(page.getByTestId('map-stage')).toHaveAttribute('data-wind', 'visible');
   expect(errors).toEqual([]);
+});
+
+test('Enter skips 4 h only when nothing else owns it', async ({ page }) => {
+  test.setTimeout(90_000);
+  await ready(page);
+  await expect(page.getByTestId('skip-4h')).toHaveAttribute('aria-keyshortcuts', 'Enter');
+  await expect(page.getByTestId('skip-4h').locator('.key-hint')).toHaveText('Enter');
+  await page.keyboard.press('Space'); // pause so only the skip moves time
+  await expect(page.getByTestId('skip-4h')).toBeEnabled();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  const tick0 = (await state(page)).tick;
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await state(page)).tick).toBe(tick0 + 16);
+  // A focused button keeps its own meaning: Enter presses only that button.
+  await page.getByTestId('palette-tab-formation').focus();
+  const tick1 = (await state(page)).tick;
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('palette-tab-formation')).toHaveAttribute('aria-selected', 'true');
+  await page.waitForTimeout(500);
+  expect((await state(page)).tick).toBe(tick1);
+  // An armed tool on the stage is placed, not skipped.
+  await page.getByTestId('palette-tab-conditions').click();
+  await page.getByTestId('tool-warm').click();
+  await page.getByTestId('map-stage').focus();
+  const before = (await state(page)).effects.length;
+  const tick2 = (await state(page)).tick;
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await state(page)).effects.length).toBeGreaterThan(before);
+  await page.waitForTimeout(500);
+  expect((await state(page)).tick).toBe(tick2);
 });

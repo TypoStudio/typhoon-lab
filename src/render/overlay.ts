@@ -20,6 +20,7 @@ import { each, geoPolyline, geoPolylineLL, groundCircle, isGlobe, segmentsUnit, 
 import { COAST_THIN_ZOOM, COAST_TIER_MIN_ZOOM, LAKE_TIER_MIN_ZOOM, RIVER_LABEL_MIN_ZOOM, RIVER_TIER_MIN_ZOOM, visibleTierCount } from './detail';
 import { coastTierSegments, coastTierSegmentsLonLat, riverTierSegments, riverTierSegmentsLonLat, type CoastTiers } from './geometry';
 import { cityLabelEligible, minPopForDot, visiblePlaces, webZoom } from './places';
+import { stormDetailLine, stormGlyphRadiusAt, stormLabelSize } from './storm-scale';
 import { visibleLakes, visibleSeas } from './seas';
 import type { GlobeView } from './globe-view';
 import type { Theme } from './theme';
@@ -100,9 +101,11 @@ class LabelOccupancy {
 }
 
 /** Glyph radius in px: grows with wind and with the storm's age, so a young depression reads small. */
-interface StormSpot { x: number; y: number; a: number; labels: string[]; flip: boolean; labelX: number; ly: number }
+interface StormSpot { x: number; y: number; a: number; labels: string[]; flip: boolean; labelX: number; ly: number; fontSize: number }
 interface IsobarLabel { text: string; x: number; y: number; angle: number }
-const stormGlyphRadius = (s: Storm): number => Math.max(6, Math.min(16, 5 + s.wind * 0.14 + Math.min(4, s.ageHours / 16)));
+const stormGlyphRadiusFull = (s: Storm): number => Math.max(6, Math.min(16, 5 + s.wind * 0.14 + Math.min(4, s.ageHours / 16)));
+/** On-screen glyph radius: the full size at regional zoom, smaller when the map is zoomed out. */
+const stormGlyphRadius = (s: Storm, view: MapCamera): number => stormGlyphRadiusAt(stormGlyphRadiusFull(s), webZoom(view));
 const REFERENCE_PARALLELS = [
   { lat: 0, label: 'Equator · 0°', equator: true },
   { lat: 23.44, label: 'Tropic of Cancer · 23.4°N', equator: false },
@@ -177,7 +180,7 @@ export class OverlayPainter {
       if (P[2] < 0.05) continue;
       const d = Math.hypot(P[0] - px, P[1] - py);
       // The pick area covers the whole glyph, tails included.
-      if (d < Math.max(radius, stormGlyphRadius(s) * 1.5) && d < bestD) { bestD = d; best = s.id; }
+      if (d < Math.max(radius, stormGlyphRadius(s, view) * 1.5) && d < bestD) { bestD = d; best = s.id; }
     }
     return best;
   }
@@ -204,7 +207,7 @@ export class OverlayPainter {
     if (state?.weatherHazards?.length) drawWeatherHazards(ctx, view, state.weatherHazards, this.theme.font, this.theme.paper, this.hard);
     // Pass 1: reference-parallel, storm and isobar labels claim their rectangles first, without drawing, so cities and places yield to them.
     const parallelLabels = this.referenceParallelLabelLayout(view, overlay.rightInset);
-    const spots = state ? state.storms.map(s => this.stormLayout(view, s, s.id === overlay.selectedStormId)) : [];
+    const spots = state ? state.storms.map(s => this.stormLayout(view, s, s.id === overlay.selectedStormId, this.stormHovered(view, s, overlay))) : [];
     const isobarLabels = overlays.pressure && labels.isobars && contours ? this.isobarLabelLayout(view, contours, overlay.rightInset) : [];
     this.graticuleLabels(view, overlay.rightInset);
     const reserved = this.occ.snapshot();
@@ -746,8 +749,17 @@ export class OverlayPainter {
     ctx.lineWidth = 1.2;
     ctx.globalAlpha = 0.85;
     ctx.setLineDash([3, 4]);
+    const route = typhoon.points.map(p => ({ lon: wrapLon(p.lon), lat: p.lat }));
+    const displaced = !!s.trackOffset && (s.trackOffset.east !== 0 || s.trackOffset.north !== 0);
+    if (displaced) { // the storm left the record: a dark under-stroke and a thicker line keep the real path readable for comparison
+      ctx.strokeStyle = 'rgba(8, 12, 20, 0.6)';
+      ctx.lineWidth = 3.6;
+      ctx.beginPath(); geoPolyline(view, ctx, route); ctx.stroke();
+      ctx.strokeStyle = theme.recordedPath;
+      ctx.lineWidth = 2;
+    }
     ctx.beginPath();
-    geoPolyline(view, ctx, typhoon.points.map(p => ({ lon: wrapLon(p.lon), lat: p.lat })));
+    geoPolyline(view, ctx, route);
     ctx.stroke();
     ctx.setLineDash([]);
     const last = typhoon.points[typhoon.points.length - 1];
@@ -1077,18 +1089,28 @@ export class OverlayPainter {
     });
   }
 
+  private stormHovered(view: MapCamera, s: Storm, overlay: MapOverlay): boolean {
+    if (overlay.hover === null || overlay.tool) return false;
+    view.projectZ(s.lon, s.lat, P);
+    view.projectZ(overlay.hover.lon, overlay.hover.lat, Q);
+    return P[2] > 0 && Math.hypot(P[0] - Q[0], P[1] - Q[1]) <= Math.max(14, stormGlyphRadius(s, view) * 1.5);
+  }
+
   /** Pass 1 for a storm: places its label beside each copy of the glyph, claims the rectangles, and returns the layout to draw later. */
-  private stormLayout(view: MapCamera, s: Storm, selected: boolean): StormSpot[] {
+  private stormLayout(view: MapCamera, s: Storm, selected: boolean, hovered = false): StormSpot[] {
     const { ctx, theme } = this;
     const [galeX] = view.kmRadiiPx(s.galeRadiusKm, s.lat);
-    const R = stormGlyphRadius(s);
+    const R = stormGlyphRadius(s, view);
+    const zoom = webZoom(view);
+    const fontSize = stormLabelSize(zoom);
+    const detail = stormDetailLine(zoom, selected, hovered);
     const spots: StormSpot[] = [];
     each(view, s.lon, s.lat, Math.max(galeX, R) + 120, this.w, this.h, (x, y, a) => {
       ctx.save();
-      ctx.font = `600 12px ${theme.font}`;
+      ctx.font = `600 ${fontSize}px ${theme.font}`;
       const labels = [
         `${s.name ? translate(s.name) : `#${s.id}`} · ${translate(stormGradeLabel(s))}${selected ? ` · ${translate(s.stage)}` : ''}`,
-        `${translate('Radius')} ${s.galeRadiusKm.toFixed(0)} km · ${translate('Moving')} ${s.movementSpeedKmh.toFixed(1)} km/h`,
+        ...(detail ? [`${translate('Radius')} ${s.galeRadiusKm.toFixed(0)} km · ${translate('Moving')} ${s.movementSpeedKmh.toFixed(1)} km/h`] : []),
       ];
       const tw = Math.max(...labels.map(label => ctx.measureText(label).width));
       ctx.restore();
@@ -1098,9 +1120,10 @@ export class OverlayPainter {
       const ly = Math.min(this.h - 24, Math.max(14, y + 4));
       const labelX = Math.max(flip ? tw + 4 : 4, lx);
       this.occ.add([x - R * 1.5, y - R * 1.5, x + R * 1.5, y + R * 1.5]);
-      this.occ.add([flip ? labelX - tw : labelX, ly - 12, flip ? labelX : labelX + tw, ly + 20]);
-      this.hard.push([x - R * 1.5, y - R * 1.5, x + R * 1.5, y + R * 1.5], [flip ? labelX - tw : labelX, ly - 12, flip ? labelX : labelX + tw, ly + 20]);
-      spots.push({ x, y, a, labels, flip, labelX, ly });
+      const bottom = ly + (labels.length > 1 ? 20 : 6);
+      this.occ.add([flip ? labelX - tw : labelX, ly - 12, flip ? labelX : labelX + tw, bottom]);
+      this.hard.push([x - R * 1.5, y - R * 1.5, x + R * 1.5, y + R * 1.5], [flip ? labelX - tw : labelX, ly - 12, flip ? labelX : labelX + tw, bottom]);
+      spots.push({ x, y, a, labels, flip, labelX, ly, fontSize });
     });
     return spots;
   }
@@ -1109,11 +1132,11 @@ export class OverlayPainter {
     const { ctx, theme } = this;
     const [, galeY] = view.kmRadiiPx(s.galeRadiusKm, s.lat);
     const [, rmwY] = view.kmRadiiPx(s.radiusKm, s.lat);
-    const R = stormGlyphRadius(s);
+    const R = stormGlyphRadius(s, view);
     const rank = stageRank(s.wind);
     const dir = s.lat >= 0 ? 1 : -1;
     const rot = (now / 1800) % TAU;
-    for (const { x, y, a, labels, flip, labelX, ly } of spots) {
+    for (const { x, y, a, labels, flip, labelX, ly, fontSize } of spots) {
       ctx.save();
       ctx.strokeStyle = theme.storm;
       if (galeY > 6) {
@@ -1132,7 +1155,7 @@ export class OverlayPainter {
         ctx.strokeStyle = theme.storm;
       }
       this.cycloneSymbol(x, y, R, rank, dir, rot, a);
-      ctx.font = `600 12px ${theme.font}`;
+      ctx.font = `600 ${fontSize}px ${theme.font}`;
       ctx.textAlign = flip ? 'right' : 'left';
       labels.forEach((label, i) => this.halo(label, labelX, ly + i * 16, theme.ink, a));
       ctx.restore();

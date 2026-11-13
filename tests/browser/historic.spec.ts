@@ -29,7 +29,7 @@ test('loading a past typhoon adds its recorded storm, keeps the palette and show
   expect(await page.evaluate(() => (window as any).__typhoonLab.state.historic)).toEqual([]);
   await maemi.click();
   await expect.poll(() => page.evaluate(() => (window as any).__typhoonLab.state.historic.map((h: any) => h.typhoonId))).toEqual(['maemi-2003']);
-  await expect(page.getByTestId('status')).toContainText('Maemi (2003) loaded. Its path is recorded; conditions change its strength.');
+  await expect(page.getByTestId('status')).toContainText('Maemi (2003) loaded. It follows the record; conditions change its strength and path.');
   await checkWeatherData(page, /Maemi \(2003\) · 2003-09-0[45] \d\d:\d\d UTC · (NCEP\/NCAR R1 \+ ERSST v5|base climate)$/);
   await expect(page.getByTestId('weather-palette')).toBeVisible();
   await page.getByTestId('palette-tab-conditions').click();
@@ -56,7 +56,7 @@ test('Korean labels follow the language and the toast names the typhoon in Korea
   await page.getByTestId('experience-typhoon-maemi-2003').hover();
   await expect(page.locator('#tip')).toContainText('서북태평양');
   await page.getByTestId('experience-typhoon-maemi-2003').click();
-  await expect(page.getByTestId('status')).toContainText('매미 (2003) 태풍을 불러왔습니다. 경로는 기록을 따르며 조건은 세기만 바꿉니다.');
+  await expect(page.getByTestId('status')).toContainText('매미 (2003) 태풍을 불러왔습니다. 경로는 기록을 따르며 조건은 세기와 경로를 바꿉니다.');
   await checkWeatherData(page, '매미 (2003)');
   await page.getByTestId('language-select').selectOption('en');
   await expect(page.getByTestId('experience-typhoon-maemi-2003')).toContainText('Maemi');

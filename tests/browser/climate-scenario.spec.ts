@@ -46,38 +46,27 @@ test('a climate scenario loads from the panel, sets the date and year, and the N
   expect(errors).toEqual([]);
 });
 
-test('Reset climate switches a loaded scenario off at once: tile cleared, Nino 3.4 neutral, the button disables', async ({ page }) => {
+test('Restart asks first: Cancel keeps the world, Restart reloads a fresh one', async ({ page }) => {
   test.setTimeout(90_000);
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
-  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   await page.goto(LAB);
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   const get = (expr: string) => page.evaluate(`(() => { const s = window.__typhoonLab.state; return ${expr}; })()`);
-  const reset = page.getByTestId('climate-reset');
-  await expect(reset).toBeDisabled();
+  const restart = page.getByTestId('restart');
+  await expect(restart).toBeEnabled();
+  await expect(restart).toHaveAccessibleName('Restart');
   await page.getByTestId('palette-tab-climate').click();
-  const nino = page.getByTestId('experience-scenario-nino-1997');
-  await nino.click();
+  await page.getByTestId('experience-scenario-nino-1997').click();
   await expect.poll(() => get('s.climateScenario?.id')).toBe('nino-1997');
-  await expect(nino).toHaveAttribute('aria-pressed', 'true');
-  await expect(reset).toBeEnabled(); // every slider is 0, yet the climate is not normal
-  await page.getByTestId('palette-tab-measure').click();
-  await page.keyboard.press('.');
-  const [x, y] = await px(page, 110, 25);
-  await page.mouse.click(x, y);
-  const card = page.getByTestId('measure-card-measure-nino34');
-  await expect(card).toBeVisible();
-  await reset.click();
-  await expect.poll(() => get('s.climateScenario === undefined')).toBe(true);
-  expect(await get('s.actions.at(-1).type')).toBe('climate-reset');
-  expect(await get('s.climateLayer === null')).toBe(true);
-  expect(await get('s.climate')).toEqual({ warming: 0, enso: 0, polar: 0 });
-  await page.getByTestId('palette-tab-climate').click();
-  await expect(nino).toHaveAttribute('aria-pressed', 'false');
-  await expect(nino).not.toHaveClass(/is-live/);
-  await page.getByTestId('palette-tab-measure').click();
-  await expect(card).toContainText('No ENSO climate layer'); // neutral: nothing is simulated any more
-  await expect(reset).toBeDisabled();
+  await restart.click();
+  await expect(page.getByTestId('restart-dialog')).toBeVisible();
+  await page.getByTestId('restart-cancel').click();
+  await expect(page.getByTestId('restart-dialog')).toBeHidden();
+  expect(await get('s.climateScenario?.id')).toBe('nino-1997');
+  await restart.click();
+  await page.getByTestId('restart-confirm').click();
+  await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
+  await expect.poll(() => get('s.climateScenario === undefined && s.tick < 100')).toBe(true);
   expect(errors).toEqual([]);
 });
