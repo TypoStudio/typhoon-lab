@@ -45,7 +45,7 @@ import { BASIN_SPOTS, createMeasureOnMap, type MeasureOnMap } from './measure-on
 import { dockToPalette } from './dock';
 import { configureDragFocus } from './drag-focus';
 import { shortcutChar, speedKey } from './shortcuts';
-import { CLIMATE_ROWS, CONDITION_GROUPS, CYCLONE_PATH, FORMATION_TOOLS, PALETTE_TABS, FORMATION_KEYS, TOOL_KEYS, footerHtml, shellHtml, terrainIconSvg, toolIconSvg, type FormationToolId, type Terrain } from './shell';
+import { CLIMATE_ROWS, helpSub, withIcon, CONDITION_GROUPS, CYCLONE_PATH, FORMATION_TOOLS, PALETTE_TABS, FORMATION_KEYS, TOOL_KEYS, footerHtml, shellHtml, terrainIconSvg, toolIconSvg, type FormationToolId, type Terrain } from './shell';
 import { MAX_REPLAY_BYTES, actionKey, buildReplay, downloadJson, parseReplay, parseSeedParam, randomSeed, replayExportProblem } from './storage';
 import { deleteMyData, queuedCount, flushQueue, resultFromRecord, resultFromDisaster, setNickname, storedNickname, defaultNickname, subscribe as subscribeLeaderboard, submit as submitResult, type LbView, type LbWindow } from '../net/leaderboard';
 import { entryFromStorm, entryFromDisaster, localRankingStore, rankBy, upsert, type RankingEntry, type RankingMetric } from './rankings';
@@ -820,7 +820,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     });
     const more = ref('stormArchiveMore');
     more.hidden = ui.archiveOpen || ended.length <= ARCHIVE_VISIBLE;
-    setText(more, `Show all (${ended.length})`);
+    setText(more.querySelector('.ui-lbl__text')!, `Show all (${ended.length})`);
     const sel = findStorm(ui.selectedStormId);
     detail.hidden = !sel;
     if (sel) renderStormDetail(sel, detail);
@@ -1364,12 +1364,12 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         </ol>
         <p>Open Formation for typhoons, blizzards, tornadoes, heatwaves, droughts, downpours, cold waves, hail, yellow dust, wind gusts and fine dust. Tap a map spot to prepare the conditions. The eight weather phenomena begin after six model hours.</p>
         <p>Open Typhoon experience or Climate experience in the palette to start a past typhoon or a climate scenario with one click, or drag its tile onto the map.</p>
-        <h3 class="dialog__sub">Time</h3>
+        ${helpSub('clock', 'Time')}
         <p>Use the arrows to choose a speed. Real time runs the world at the speed of the clock. 10m/s is 10 minutes of world time per second, 30m/s is 30 minutes, 1h/s is 1 hour, 2h/s is 2 hours and 4h/s is 4 hours; 1d/s, 2d/s and 7d/s are 1, 2 and 7 days per second. Number keys 1–9 select the same nine steps, - and + step slower and faster, and the \` key (₩ on a Korean keyboard) resets the speed. Reset speed returns to 10m/s without changing the world or pause state.</p>
         <p>The +4h button in the speed bar jumps the world ahead by exactly 4 hours at once, as if time had run: storms move, damage and news update, and Measure adds one point at the new time. It works while paused (the world stays paused) and while playing. It is off during a replay, while a world is loading, and at 7d/s. Press Enter to skip when no tool is armed on the map and no button, field or dialog has focus.</p>
         <p class="fine">On a slow device the faster weather steps may not be fully reached, and the clock shows the time that was really simulated, so it can lag behind the speed you chose.</p>
         <p class="fine">At 7d/s the weather is not calculated. The world runs on the fast climate calculation instead: the map, the date and the seasons keep changing, but active storms and tools end without further damage. New storms can form again after you slow down. A world that started from live weather continues on the base climate from then on. See Long-term simulation in the Climate tab.</p>
-        <h3 class="dialog__sub">The map</h3>
+        ${helpSub('globe', 'The map')}
         <ul class="help__list">
           <li>The map is a globe by default: drag to rotate it and use the wheel or pinch to zoom. Turn Globe view off in Map mode, at the top of the right panel, for the flat Equal Earth map.</li>
           <li>Open the right panel for the storm list, forming patches, news and replay files. Pan and zoom freely: the weather freezes while you move the camera and catches up when you let go.</li>
@@ -1377,22 +1377,22 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <li>Humidity colours the wind streaks: higher humidity is brighter. Turn on Wind to see the colours.</li>
           <li>Choose a nickname in the Ranking tab to appear on the online leaderboard. Nicknames are public.</li>
         </ul>
-        <h3 class="dialog__sub">Without a mouse</h3>
+        ${helpSub('keyboard', 'Without a mouse')}
         <p class="fine">Drag a condition button to place its large icon. Click or tap once to select, then again to switch to its opposite; keys Q–U do the same. Click or tap the map to place. A, S, D, F, G, H, J, K, L, ; and ' select the formation tools in order, and Z, X, C, V, B, N, M, comma, period and slash select the measurement tools. 1–9 set the speed steps, - and + step it slower and faster, and \` (₩ on a Korean keyboard) resets it to 10m/s. Arrow keys move an armed map target (Shift ×5, Alt ¼°), Enter places, Space plays or pauses, and Esc puts the tool away.</p>
         <p class="fine">Shortcuts work from anywhere on the page, except while you type in a field or a dialog is open; with a button or tab focused, Space and Enter press it instead of playing or pausing or skipping ahead.</p>`,
       conditions: `
         <p>The bottom palette has seven paired condition buttons. The large icon is the selected setting; the small faded icon shows the opposite. Click or tap once to select, then again to switch, or use Q–U. Drag the large icon onto the map.</p>
         <ul class="help__tools">${toolItems}</ul>
         <p>A condition from the palette lasts 10 days. Formation recipes and natural formation waves use shorter lives, so typhoons are as easy to make as before.</p>
-        <h3 class="dialog__sub">Making a storm</h3>
+        ${helpSub('cyclone', 'Making a storm')}
         <ul class="help__list">
           <li>Formation recipe: overlap Warm water, Moisture and Low pressure on the same tropical ocean spot, ideally with Low shear. High pressure does not start a storm; it steers one.</li>
           <li>Warm air and Updraft support formation and growth. They do not replace warm water, moisture or a low.</li>
           <li>Warm air, Moisture and Updraft can form thunderstorms over land or sea. Their gusts add city damage. Dry air, Cold air and Downdraft suppress them.</li>
         </ul>
-        <h3 class="dialog__sub">Weakening a storm</h3>
+        ${helpSub('cool', 'Weakening a storm')}
         <p>Weakening recipe: overlap Cool water, Dry air, Cold air, Downdraft and Strong shear on a storm or in its path. The more of them overlap, the faster it dissipates.</p>
-        <h3 class="dialog__sub">Mergers</h3>
+        ${helpSub('merge', 'Mergers')}
         <p>Nearby storms in the same hemisphere affect each other’s movement: they can rotate around each other and draw closer. They merge within 100 km once both are at least 24 model hours old with winds of 17.2 m/s or more. The stronger storm keeps its ID and wind speed. Forming lows keep their own progress. Overlapping wind areas alone do not trigger a merger.</p>`,
       formation: `
         <p>The Formation tab of the palette holds ten probes, one for each event you can make. Instead of placing conditions one by one, a probe works out what a spot needs and places it for you.</p>
@@ -1413,25 +1413,25 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <li>A numbered pin appears at that spot, and a card with a graph appears in the Measure tab of the right panel. On a phone the panel stays closed so you can keep placing pins; open its Measure tab to see the graphs.</li>
           <li>Drop the same icon at another place to add a line to that chart, with its own pin colour and number. A different icon gets its own chart.</li>
         </ol>
-        <h3 class="dialog__sub">Reading a graph</h3>
+        ${helpSub('graphs', 'Reading a graph')}
         <ul class="help__list">
           <li>The horizontal axis is model time, starting at 0 when measuring began, with five labels in hours, days, months or years. Move the pointer over a graph to read its values at that time.</li>
           <li>Each card shows its unit and the latest value of every pin. The × button removes the card, and Delete all removes every card and pin. A pin disappears when no chart uses it.</li>
           <li>You can use up to 12 pins. Drops within a quarter of a degree of each other share one pin.</li>
           <li>Recording runs only while time is playing. A new world or a loaded replay clears everything. Very long runs are thinned automatically so the graph stays readable.</li>
         </ul>
-        <h3 class="dialog__sub">The ten items</h3>
+        ${helpSub('bars', 'The ten items')}
         <ul class="help__tools">${measureItems}</ul>`,
       disasters: `
         <p>${DISASTER_HELP_INTRO}</p>
         <p class="fine">${DISASTER_HELP_TIMING}</p>
         <ul class="help-disasters">${disasterItems}</ul>`,
       climate: `
-        <h3 class="dialog__sub">Natural formation</h3>
+        ${helpSub('genesis', 'Natural formation')}
         <p>Turn on Natural typhoon formation in the right panel and nature starts storms for you: a wave of formation conditions appears over warm tropical ocean somewhere in the world every two to three days. Use Cool water, Dry air, Cold air and Downdraft to weaken them before a depression forms, or let them grow. Turn it off to stop new waves.</p>
-        <h3 class="dialog__sub">The El Niño / La Niña layer</h3>
+        ${helpSub('enso', 'The El Niño / La Niña layer')}
         <p>An El Niño / La Niña climate layer runs under the weather. The ocean waves, the sea temperature and the winds of the tropical Pacific are calculated. The effects far from there, over land, in the other tropical oceans and at higher latitudes, and the wind shear everywhere, come from observed statistics: maps of how past El Niño and La Niña years changed the world. Together they change the sea temperature, air temperature, pressure, wind, humidity and wind shear, and so the typhoons.</p>
-        <h3 class="dialog__sub">Conditions and the climate</h3>
+        ${helpSub('wind', 'Conditions and the climate')}
         <p>Conditions you place within 30° of the equator also feed the climate layer. Warm water and Cool water change the sea temperature. Low pressure, Updraft, Warm air and Unstable air heat the air above them; High pressure, Downdraft, Cold air and Stable air cool it. Moisture, Dry air and the shear conditions do not feed it, and neither do formation recipes.</p>
         <ul class="help__list">
           <li>Low pressure or an updraft near the equator pulls in westerly wind on its west side and starts an ocean wave.</li>
@@ -1439,31 +1439,31 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <li>One condition stays local. Stacking many spreads the effect across the Pacific, and stacked warm water makes the biggest El Niño.</li>
           <li>The ocean answers over weeks, so the Measure tab is the best way to watch it.</li>
         </ul>
-        <h3 class="dialog__sub">World climate</h3>
+        ${helpSub('globe', 'World climate')}
         <p>The Warming, La Niña / El Niño and Polar temperature sliders in the right panel change the whole planet: Warming raises sea and air temperature, La Niña / El Niño holds the Pacific in one phase, and Polar temperature warms or cools the high latitudes. Low shear calms the upper winds around a storm so it can stay upright; Strong shear adds upper-level wind that tilts and tears it apart.</p>
         <dl class="help__defs">
-          <dt>Warming</dt>
+          <dt>${withIcon('warming', 'Warming')}</dt>
           <dd>Warming runs from −2 to +4 °C. More warming makes more of the ocean warm enough to feed storms. A negative value cools the world.</dd>
-          <dt>La Niña / El Niño</dt>
+          <dt>${withIcon('enso', 'La Niña / El Niño')}</dt>
           <dd>An experiment that holds Niño 3.4, the Pacific temperature index that defines El Niño and La Niña, at the value you choose, from −2 to +2 °C. The map responds at once, even when paused. El Niño warms the central and eastern Pacific and moves the typhoon formation area east; La Niña does the reverse. Setting it back to 0 releases the hold and the ocean then evolves by itself.</dd>
-          <dt>Polar temperature</dt>
+          <dt>${withIcon('winter', 'Polar temperature')}</dt>
           <dd>Polar cooling chills the sea and air poleward of about 35° latitude, so storms that curve out of the tropics weaken sooner. Polar warming does the reverse. The effect is full strength from about 50°.</dd>
         </dl>
         <p>The three sliders move the whole climate at once. There is no one-click slider reset: drag each back to 0, or press Restart in the speed bar to start the world over as a page reload would (it asks first, and the current world, its disasters and measurements are lost).</p>
         <p>The Reset button at the top of the World tab takes every condition off the map: placed, recipe and natural-formation conditions. The Reset button of the Disasters tab ends every active storm, hazard, thunderstorm, tornado and blizzard, including fine dust. Both keep the damage already done, the records, the score and the date, and neither works during a replay.</p>
-        <h3 class="dialog__sub">Scenarios</h3>
+        ${helpSub('calendar', 'Scenarios')}
         <p>The Climate experience tab of the palette loads a historic El Niño or La Niña: press a tile, or drag it onto the map. The world jumps to 1 January of that year, storms, weather hazards and tools already running carry on as they are, and the Pacific starts in the ocean state of the time, with the winds that drove the event added by date. The speed is set to 4h/s so that the weather runs, and Natural typhoon formation is on while the scenario is loaded. Watch it on the map and in the Measure tab. You can change the speed afterwards: at 7d/s the weather is not calculated, so storms and the events below do not form, but the record of real events still appears.</p>
         <p>While a scenario is loaded the model starts weather disasters by itself where its own climate calls for them. During an El Niño these are heavy rain on coastal Peru and Ecuador, in East Africa and in the southern United States, and drought or heat in Indonesia, Australia, India and southern Africa. A La Niña brings the opposite pattern: heavy rain in eastern Australia, Indonesia, South Asia and Colombia, and drought in the Horn of Africa and the southwestern United States. Each event follows the sea temperature, air temperature or humidity of its place, so it stops when the anomaly does. The News tab marks it as El Niño or La Niña, and its damage is counted like any other disaster. A place rests for several weeks after an event, and at most four run at once.</p>
         <p>The News tab also posts real events of the period on their dates, marked as a historical record. They are not model results, cause no damage here and appear at every speed. Click such an item to see its place on the map.</p>
         <p>The Niño 3.4 chart draws the real monthly values of the same months as a dashed line labelled Observed, so you can compare. The slider and your conditions still work on a running scenario, and the model goes on by itself once the script ends.</p>
         <p>Press the tile of the loaded scenario again to switch it off: the world returns to the normal climate at once, and storms that already formed keep running. Changing the season ends a scenario too.</p>
         <p class="fine">This is a simplified model that reproduces the causes of the event, not the exact event. Dates and strengths of the winds are approximate, and the years after the script will not match history.</p>
-        <h3 class="dialog__sub">Long-term simulation</h3>
+        ${helpSub('hourglass', 'Long-term simulation')}
         <p>Choose 7d/s to watch the climate over years. At this speed one year takes about 52 seconds. The map, the date with its year, and the seasons keep changing. Individual storms are not simulated: active storms and tools end without further damage, and new storms can form again once you slow down to 2d/s or below.</p>
         <p>At this speed El Niño and La Niña come and go on their own, in a cycle of roughly 2 to 3 years in this model. The real cycle is longer, and big El Niño events happen about twice as often here as in reality.</p>
         <p>To experiment, set up conditions or the La Niña / El Niño slider, then go fast and watch with Measure pins: Niño 3.4, SOI, warm water volume, or the sea temperature at points you choose. Then slow down to see typhoons form on the changed climate.</p>
         <p class="fine">One run allows 200 years of fast time, and a world that started from live weather continues on the base climate from then on. The Warming and Polar temperature sliders are fixed offsets for now, and greenhouse gases, sea ice and volcanoes are not simulated yet.</p>
-        <h3 class="dialog__sub">Limits</h3>
+        ${helpSub('alert', 'Limits')}
         <p class="fine">This is a simplified teaching model, not a forecast.</p>
         <p class="fine">Replays saved by an older version cannot be opened if they used the La Niña / El Niño slider, a Warm water, Cool water, Low pressure, High pressure, Updraft, Downdraft, Warm air, Cold air, Unstable air or Stable air condition within 30° of the equator, or a live-weather start. The new climate layer would not reproduce them.</p>`,
       historic: `
@@ -1478,11 +1478,11 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <dd>Conditions you place change its strength and can also bend its path: a High or Low beside it pushes it off the record, and it stays off after the condition ends. The dashed line keeps the real path for comparison.</dd>
         </dl>`,
       data: `
-        <h3 class="dialog__sub">Current weather data</h3>
+        ${helpSub('rain', 'Current weather data')}
         <div data-help-weather data-testid="help-weather-data"></div>
-        <h3 class="dialog__sub">About the data</h3>
+        ${helpSub('info', 'About the data')}
         <p>Coastlines and city positions are real (Natural Earth). Weather, population and damage numbers are simulated.</p>
-        <h3 class="dialog__sub">Sources</h3>
+        ${helpSub('archive', 'Sources')}
         <dl class="help__defs">
           <dt>JMA RSMC Tokyo</dt>
           <dd>Best track of recorded typhoons: 6-hourly positions, central pressure and 10-minute wind.</dd>
@@ -1497,17 +1497,17 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
           <dt>Natural Earth</dt>
           <dd>Coastlines, and the positions and populations of cities.</dd>
         </dl>
-        <h3 class="dialog__sub">Acknowledgements</h3>
+        ${helpSub('heart', 'Acknowledgements')}
         <p>Japan Meteorological Agency (JMA) best-track data. TypoStudio edited and processed this data for the game; JMA did not create the edited version.</p>
         <p>NCEP Reanalysis data provided by the NOAA PSL, Boulder, Colorado, USA, from their website at https://psl.noaa.gov.</p>
         <p>NOAA IBTrACS: Knapp, K. R. et al., 2010, doi:10.1175/2009BAMS2755.1.</p>
-        <h3 class="dialog__sub">License</h3>
+        ${helpSub('file', 'License')}
         <p>This game is licensed under CC BY-NC-SA 4.0: free to use and modify, no commercial use, and modified versions must be shared under the same license with credit to TypoStudio.</p>
         <p>Open-source libraries keep their own licenses. Data sources keep their own terms, listed under Sources above.</p>
         <p><a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener license">CC BY-NC-SA 4.0</a> <span aria-hidden="true">·</span> <a href="/third-party-licenses.txt" target="_blank" rel="noopener">Third-party licenses</a></p>
-        <h3 class="dialog__sub">Damage estimates</h3>
+        ${helpSub('coin', 'Damage estimates')}
         <p>Damage figures are fictional story estimates, not hydrology or insurance models. Their rates are gameplay constants fitted to public records of Typhoon Maemi (2003) and cross-checked with Rusa (2002), Hinnamnor (2022) and Haiyan (2013), so they land at the right order of magnitude. Counts are city totals at the time of the report.</p>
-        <h3 class="dialog__sub">Online leaderboard and privacy</h3>
+        ${helpSub('trophy', 'Online leaderboard and privacy')}
         <p>When a disaster ends, its estimated loss and duration are added to the online leaderboard under this device's anonymous ID. Typhoon grades are included for typhoons. Your public nickname can be changed in Ranking.</p>
         <p>You can delete your nickname and all your uploaded results yourself: open the Ranking tab and press Delete my records. It takes effect immediately. If you no longer have the device, email us at the address in the privacy policy.</p>
         ${footerHtml()}`,

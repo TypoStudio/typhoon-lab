@@ -78,6 +78,17 @@ svg { display: block; }
   font-size: var(--text-sm); font-weight: 600; white-space: nowrap;
 }
 .btn__icon { width: 1rem; height: 1rem; flex: none; }
+
+/* Leading icon + label (withIcon in shell.ts): one gap, icon scales with the text and inherits its colour. */
+.ui-lbl { display: inline-flex; align-items: center; gap: 0.4em; min-width: 0; max-width: 100%; vertical-align: middle; }
+.ui-icon { width: 1.1em; height: 1.1em; flex: none; pointer-events: none; }
+.ui-lbl__text { min-width: 0; }
+.metric dt .ui-lbl { align-items: flex-start; }
+.metric dt .ui-icon { margin-top: 0.1em; }
+summary .ui-lbl { vertical-align: top; }
+.lang-select { position: relative; display: inline-flex; align-items: center; }
+.lang-select > .ui-icon { position: absolute; inset-inline-start: var(--space-sm); width: 1rem; height: 1rem; color: var(--color-muted); }
+.lang-select > select { padding-inline-start: calc(var(--space-sm) + 1.5rem); }
 .btn:hover:not(:disabled), .icon-btn:hover:not(:disabled), .overlay-toggle:hover, .report-tab:hover, .help-tab:hover, .speed__opt:hover, .city:hover, .storm-row:hover { background: var(--color-paper-4); }
 .btn:active:not(:disabled), .icon-btn:active:not(:disabled), .speed__opt:active, .city:active, .storm-row:active { transform: translateY(1px); }
 .btn:disabled, .icon-btn:disabled { cursor: not-allowed; opacity: 0.55; }
@@ -416,7 +427,7 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
 .report-tab { border-color: transparent; background: transparent; font-size: var(--text-sm); font-weight: 600; color: var(--color-muted); white-space: nowrap; padding: 0 var(--space-xs); }
 .report-tab[aria-selected="true"] { background: var(--color-paper-4); color: var(--color-ink); box-shadow: inset 0 -2px 0 var(--color-accent); }
 .settings-panel { display: grid; min-width: 0; }
-@media (max-width: 24rem) { .report-tab { font-size: var(--text-xs); padding: 0 2px; } }
+@media (max-width: 24rem) { .report-tab { font-size: var(--text-xs); padding: 0; } .report-tab .ui-lbl { gap: 0.15em; } .report-tab .ui-icon { width: 0.8em; height: 0.8em; } }
 .report-panel { display: grid; gap: var(--space-sm); min-width: 0; align-content: start; }
 
 .storm-list, .patch-list, .effect-list { display: grid; gap: 2px; }
@@ -542,7 +553,7 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
 .dialog--help { width: min(44rem, calc(100vw - 1.5rem)); height: min(40rem, calc(100dvh - 1.5rem)); overflow: hidden; }
 .dialog--help[open] { display: flex; flex-direction: column; }
 .help__head { flex: none; display: grid; gap: var(--space-md); padding: var(--space-lg) var(--space-lg) 0; border-bottom: var(--rule-width) solid var(--color-rule); background: var(--color-paper-2); }
-.help-tabs { display: flex; gap: var(--space-xs); overflow-x: auto; scrollbar-width: none; margin-inline: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); }
+.help-tabs { display: flex; flex-wrap: wrap; gap: 2px var(--space-xs); margin-inline: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); }
 .help-tabs::-webkit-scrollbar { display: none; }
 .help-tab {
   flex: none; padding: 0 var(--space-md); border-color: transparent; border-bottom: 0; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
@@ -1112,3 +1123,4 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
 .onmap-graphs--compact .onmap-card__main { padding-inline-end: 5px; }
 .onmap-graphs--compact .onmap-card:not(:focus-within) .onmap-card__info { display: none; }
 .onmap-graphs--compact .onmap-card:focus-within .onmap-card__main { padding-inline-end: 22px; }
+@media (max-width: 36rem) { .help-tab { padding: 0 var(--space-sm); } }

@@ -6,7 +6,7 @@ import type { GameState } from '../types';
 import type { ClimateKey, MapOverlays, ToolType } from '../types';
 import { SEASONS } from './calendar';
 import { MEASURE_ITEMS, type MeasureId } from './measure';
-import { RANKING_METRICS } from './rankings';
+import { RANKING_METRICS, type RankingMetric } from './rankings';
 
 /** The cyclone glyph shared by the brand mark and the active-storm rows. */
 export const CYCLONE_PATH = 'M8.84 5.23C14.60 2.55 19.27 5.24 23.00 7.33Q19.64 6.61 16.28 5.88A7.47 7.47 0 0 1 15.16 18.77C9.40 21.45 4.73 18.76 1.00 16.67Q4.36 17.39 7.72 18.12A7.47 7.47 0 0 1 8.84 5.23ZM15.06 12.00a3.06 3.06 0 1 0 -6.12 0a3.06 3.06 0 1 0 6.12 0Z';
@@ -135,6 +135,66 @@ const MAP_ICON = {
 const mapIconSvg = (id: keyof typeof MAP_ICON) =>
   `<svg class="map-overlay-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${MAP_ICON[id]}</svg>`;
 
+/** Icons for sidebar labels and buttons (same 24x24 stroke style as the map icons); the rest are borrowed from the tool, measure and map-mode sets. */
+const UI_ICON = {
+  cyclone: `<path d="${CYCLONE_PATH}" fill="currentColor" fill-rule="evenodd" stroke="none"/>`,
+  layers: '<path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  calendarDays: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/>',
+  warming: '<path d="M8 14V5a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0ZM10 9v8M17 10V3M14 6l3-3 3 3"/>',
+  enso: '<path d="M2 19c2-2 3.5 2 5.5 0s3.5 2 5.5 0 3.5 2 5.5 0 2.5 1 3.5 0"/><circle cx="12" cy="10" r="3.5"/><path d="M12 3v1.5M5 10H3.5M20.5 10H19M7 5l1 1M17 5l-1 1"/>',
+  sliders: '<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>',
+  news: '<path d="M4 5h13v13a2 2 0 0 0 2 2H6a2 2 0 0 1-2-2Z"/><path d="M17 9h3v9a2 2 0 0 1-2 2M7 9h7M7 13h7M7 16h4"/>',
+  trophy: '<path d="M8 4h8v6a4 4 0 0 1-8 0ZM8 6H4v1a3 3 0 0 0 4 3M16 6h4v1a3 3 0 0 1-4 3M12 14v4M8 21h8M10 18h4"/>',
+  play: '<circle cx="12" cy="12" r="9"/><path d="m10 8.5 5 3.5-5 3.5Z"/>',
+  report: '<path d="M9 4h6v3H9ZM8 5.5H6a1 1 0 0 0-1 1V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6.5a1 1 0 0 0-1-1h-2"/><path d="M8.5 17v-3M12 17v-6M15.5 17v-4"/>',
+  archive: '<path d="M3 5h18v4H3ZM5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/>',
+  bars: '<path d="M4 20V11M10 20V4M16 20v-6M2 20h20"/>',
+  stages: '<path d="M3 20h5v-5h5v-5h5V5h3"/>',
+  eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+  alert: '<path d="M12 3 2 20h20Z"/><path d="M12 10v4M12 17.5v.01"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  infinity: '<path d="M6 8a4 4 0 1 0 0 8c4 0 8-8 12-8a4 4 0 1 1 0 8c-4 0-8-8-12-8Z"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  save: '<path d="M5 3h11l4 4v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path d="M8 3v5h7V3M8 21v-7h8v7"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
+  reset: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+  locate: '<circle cx="12" cy="12" r="6"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  download: '<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>',
+  upload: '<path d="M12 15V3M7 8l5-5 5 5M4 21h16"/>',
+  paste: '<path d="M9 4h6v3H9ZM8 5.5H6a1 1 0 0 0-1 1V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6.5a1 1 0 0 0-1-1h-2M9 13h6M9 17h4"/>',
+  code: '<path d="m8 8-5 4 5 4M16 8l5 4-5 4M14 5l-4 14"/>',
+  coin: '<circle cx="12" cy="12" r="9"/><path d="M14.5 9.2c-.6-.8-1.5-1.2-2.5-1.2-1.4 0-2.5.8-2.5 2s1 1.6 2.5 2 2.5.8 2.5 2-1.1 2-2.5 2c-1 0-1.9-.4-2.5-1.2M12 6v2M12 16v2"/>',
+  skull: '<path d="M12 3a8 8 0 0 0-8 8c0 2.5 1 4 3 5.2V20h10v-3.8c2-1.2 3-2.7 3-5.2a8 8 0 0 0-8-8Z"/><path d="M9 11h.01M15 11h.01M10 20v-2M14 20v-2"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7M12 17v.01"/>',
+  home: '<path d="M3 11 12 3l9 8M5 9.5V20h14V9.5M10 20v-6h4v6"/>',
+  hourglass: '<path d="M6 3h12M6 21h12M7 3v3.5L12 12l-5 5.5V21M17 3v3.5L12 12l5 5.5V21"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/>',
+  move: '<path d="M4 12h14M13 6l6 6-6 6"/>',
+  radius: '<circle cx="12" cy="12" r="9"/><path d="M12 12h9"/><circle cx="12" cy="12" r="1"/>',
+  trendUp: '<path d="m3 17 6-6 4 4 8-8M15 7h6v6"/>',
+  bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7Z"/>',
+  check: '<path d="m4 12.5 5 5L20 6.5"/>',
+  keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
+  merge: '<path d="M6 3v6a6 6 0 0 0 6 6M18 3v6a6 6 0 0 1-6 6M12 15v6"/>',
+  file: '<path d="M6 3h8l4 4v14H6ZM14 3v4h4M9 12h6M9 16h6"/>',
+  heart: '<path d="M12 20s-8-5-8-11a4.5 4.5 0 0 1 8-2.500A4.5 4.5 0 0 1 20 9c0 6-8 11-8 11Z"/>',
+  target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".5"/>',
+} as const;
+export type UiIconId = keyof typeof UI_ICON | keyof typeof MAP_ICON | ToolType | MeasureId;
+
+/** One 1.1em decorative icon; colour comes from the text. */
+export const uiIconSvg = (id: UiIconId) => {
+  const body = id in UI_ICON ? UI_ICON[id as keyof typeof UI_ICON] : id in MAP_ICON ? MAP_ICON[id as keyof typeof MAP_ICON] : id in TOOL_ICON ? TOOL_ICON[id as ToolType] : MEASURE_ICON[id as MeasureId];
+  return `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+};
+/** Section heading inside the help dialog. */
+export const helpSub = (id: UiIconId, text: string) => `<h3 class="dialog__sub">${withIcon(id, text)}</h3>`;
+/** The one way to build an icon plus label: `attrs` land on the text span, so `data-ref` / `data-testid` stay on the text that app.ts rewrites. */
+export const withIcon = (id: UiIconId, text: string, attrs = '') =>
+  `<span class="ui-lbl">${uiIconSvg(id)}<span class="ui-lbl__text"${attrs ? ` ${attrs}` : ''}>${text}</span></span>`;
+
 const TERRAIN_ICON = {
   sea: '<path d="M2 9c2-2 3.5 2 5.5 0s3.5 2 5.5 0 3.5 2 5.5 0 2.5 1 3.5 0"/><path d="M2 16c2-2 3.5 2 5.5 0s3.5 2 5.5 0 3.5 2 5.5 0 2.5 1 3.5 0"/>',
   land: '<path d="M2 20 9 7l4 7 2.5-4L22 20Z"/>',
@@ -148,12 +208,14 @@ export const terrainIconSvg = (id: Terrain) =>
 /** Keyboard shortcut per paired condition button. Repeating a key switches its two conditions. */
 export const TOOL_KEYS = ['q', 'w', 'e', 'r', 't', 'y', 'u'] as const;
 
+const CLIMATE_ICON: Record<ClimateKey, UiIconId> = { warming: 'warming', enso: 'enso', polar: 'winter' };
 export const CLIMATE_ROWS: { key: ClimateKey; ref: string; label: string; ticks: number[] }[] = [
   { key: 'warming', ref: 'climateWarming', label: 'Warming', ticks: [-2, -1, 0, 1, 2, 3, 4] },
   { key: 'enso', ref: 'climateEnso', label: 'La Niña / El Niño', ticks: [-2, -1, 0, 1, 2] },
   { key: 'polar', ref: 'climatePolar', label: 'Polar temperature', ticks: [-10, -5, 0, 5, 10] },
 ];
 
+const TAB_ICON: Record<string, UiIconId> = { settings: 'sliders', storms: 'cyclone', environment: 'globe', measure: 'graphs', news: 'news', rank: 'trophy', replay: 'play' };
 export const TABS = [
   { id: 'settings', label: 'Settings' },
   { id: 'storms', label: 'Disasters' },
@@ -164,6 +226,7 @@ export const TABS = [
   { id: 'replay', label: 'Replay' },
 ] as const;
 
+const HELP_TAB_ICON: Record<string, UiIconId> = { basics: 'help', conditions: 'warm', formation: 'genesis', measure: 'graphs', disasters: 'alert', climate: 'enso', historic: 'cyclone', data: 'archive' };
 export const HELP_TABS = [
   { id: 'basics', label: 'Basics' },
   { id: 'conditions', label: 'Conditions' },
@@ -175,8 +238,18 @@ export const HELP_TABS = [
   { id: 'data', label: 'Data' },
 ] as const;
 
+const RANK_ICON: Record<RankingMetric, UiIconId> = { lossUsd: 'coin', displaced: 'population', deaths: 'skull', floodedHomes: 'home', grade: 'bars', lifetimeHours: 'hourglass' };
+const METRIC_ICON: Record<string, UiIconId> = {
+  damageDissipated: 'archive', damageTime: 'hourglass', damageDisplaced: 'population', damageMissing: 'help', damageDeaths: 'skull', damageFlooded: 'home', damageLoss: 'coin',
+  stage: 'stages', wind: 'wind', movementSpeed: 'move', pressure: 'pressure', outcome: 'info', position: 'cities', rmw: 'radius', gale: 'radius', age: 'clock',
+  peak: 'trendUp', loss: 'coin', windDelta: 'sliders', trackOffset: 'recordedPaths',
+  disasterKind: 'alert', disasterStatus: 'info', disasterIntensity: 'bolt', disasterPosition: 'cities', disasterRadius: 'radius', disasterAge: 'clock',
+  disasterMovement: 'move', disasterPressure: 'pressure', disasterWind: 'wind', disasterPeak: 'trendUp', disasterTemperature: 'temperature', disasterHumidity: 'humidity',
+  disasterRain: 'rain', disasterSnow: 'winter', disasterLoss: 'coin', disasterHomes: 'home',
+  score: 'target', exposed: 'population',
+};
 const metric = (name: string, label: string) =>
-  `<div class="metric"><dt>${label}</dt><dd data-metric="${name}">—</dd></div>`;
+  `<div class="metric"><dt>${withIcon(METRIC_ICON[name], label)}</dt><dd data-metric="${name}">—</dd></div>`;
 
 /**
  * Static markup for the whole screen. The map stage fills a wrapper beside the sidebar (the full viewport
@@ -232,7 +305,7 @@ export function shellHtml(): string {
     const id = `climate-${r.key}`;
     const ticks = r.ticks.map(value => `<span style="left:${(value - min) / (max - min) * 100}%" data-edge="${value === min ? 'start' : value === max ? 'end' : 'mid'}">${value < 0 ? '−' : value > 0 ? '+' : ''}${Math.abs(value)}</span>`).join('');
     return `<div class="setting setting--range">
-      <div class="setting__range-head"><label class="setting__label" for="${id}" id="${id}-label">${r.label}</label><output class="setting__value" for="${id}" data-ref="${r.ref}Value" data-testid="${id}-value">0</output></div>
+      <div class="setting__range-head"><label class="setting__label" for="${id}" id="${id}-label">${withIcon(CLIMATE_ICON[r.key], r.label)}</label><output class="setting__value" for="${id}" data-ref="${r.ref}Value" data-testid="${id}-value">0</output></div>
       <div class="setting__range-control"><input id="${id}" aria-labelledby="${id}-label" type="range" min="${min}" max="${max}" step="0.1" value="0" data-ref="${r.ref}" data-testid="${id}"><span class="legend__ticks setting__ticks" aria-hidden="true">${ticks}</span></div>
     </div>`;
   }).join('');
@@ -247,11 +320,11 @@ export function shellHtml(): string {
     </button>`;
   const tabs = TABS.map(t => `
     <button type="button" role="tab" class="report-tab" id="tab-${t.id}" data-tab="${t.id}" data-testid="tab-${t.id}"
-      aria-selected="${t.id === 'storms'}" aria-controls="panel-${t.id}" tabindex="${t.id === 'storms' ? 0 : -1}">${t.label}</button>`).join('');
+      aria-selected="${t.id === 'storms'}" aria-controls="panel-${t.id}" tabindex="${t.id === 'storms' ? 0 : -1}">${withIcon(TAB_ICON[t.id], t.label)}</button>`).join('');
 
   const helpTabs = HELP_TABS.map((t, i) => `
     <button type="button" role="tab" class="help-tab" id="help-tab-${t.id}" data-help-tab="${t.id}" data-testid="help-tab-${t.id}"
-      aria-selected="${i === 0}" aria-controls="help-panel-${t.id}" tabindex="${i === 0 ? 0 : -1}">${t.label}</button>`).join('');
+      aria-selected="${i === 0}" aria-controls="help-panel-${t.id}" tabindex="${i === 0 ? 0 : -1}">${withIcon(HELP_TAB_ICON[t.id], t.label)}</button>`).join('');
   const helpPanels = HELP_TABS.map((t, i) => `
     <div class="help-panel" role="tabpanel" id="help-panel-${t.id}" aria-labelledby="help-tab-${t.id}" data-help-panel="${t.id}" data-testid="help-panel-${t.id}" tabindex="0"${i === 0 ? '' : ' hidden'}></div>`).join('');
 
@@ -331,15 +404,15 @@ export function shellHtml(): string {
     </div>
 
     <aside class="sidebar" id="sidebar" data-ref="sidebar" data-testid="sidebar" aria-label="Disasters and world" hidden>
-      <div class="sidebar__head"><select data-ref="language" data-testid="language-select" aria-label="Language">${LOCALES.map(l => `<option value="${l.code}" lang="${l.htmlLang}">${l.label}</option>`).join('')}</select></div>
+      <div class="sidebar__head"><span class="lang-select">${uiIconSvg('globe')}<select data-ref="language" data-testid="language-select" aria-label="Language">${LOCALES.map(l => `<option value="${l.code}" lang="${l.htmlLang}">${l.label}</option>`).join('')}</select></span></div>
       <div class="report-tabs" role="tablist" aria-label="Panel sections" data-ref="reportTabs">${tabs}</div>
 
       <div class="settings-panel" role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" data-panel="settings" tabindex="0" hidden>
       <div class="settings" role="group" aria-label="World settings">
-        <div class="setting setting--overlays"><span class="setting__label">Map mode</span><div class="map-overlays" role="group" aria-label="Map mode" data-ref="mapOverlays">${overlays}</div></div>
+        <div class="setting setting--overlays"><span class="setting__label">${withIcon('layers', 'Map mode')}</span><div class="map-overlays" role="group" aria-label="Map mode" data-ref="mapOverlays">${overlays}</div></div>
         <div class="settings__group" role="group" aria-label="World climate">
           <div class="settings__season">
-            <div class="setting"><span class="setting__label">Season</span><div class="season-row" role="radiogroup" aria-label="Season" data-ref="seasonRow">${seasonButtons}</div></div>
+            <div class="setting"><span class="setting__label">${withIcon('calendar', 'Season')}</span><div class="season-row" role="radiogroup" aria-label="Season" data-ref="seasonRow">${seasonButtons}</div></div>
             <p class="fine">Changing the season shifts the calendar; the world keeps running.</p>
           </div>
           ${climateRows}
@@ -349,7 +422,7 @@ export function shellHtml(): string {
 
       <div class="report-panel" role="tabpanel" id="panel-storms" aria-labelledby="tab-storms" data-panel="storms" tabindex="0">
         <section data-ref="damagePanel" data-testid="damage-panel">
-          <h2 class="panel-title">Damage report</h2>
+          <h2 class="panel-title">${withIcon('report', 'Damage report')}</h2>
           <p class="fine">City losses are cumulative estimates.</p>
           <dl class="metrics">
             ${metric('damageDissipated', 'Ended disasters')}${metric('damageTime', 'Average lifetime')}
@@ -359,14 +432,14 @@ export function shellHtml(): string {
           </dl>
         </section>
         <section class="storm-section storm-section--active" aria-labelledby="storms-active-title">
-          <h2 class="panel-title storm-section__title" id="storms-active-title"><span class="live-dot" aria-hidden="true"></span><span data-ref="stormActiveTitle" data-testid="storm-active-title">Active disasters</span></h2>
-          <button type="button" class="btn btn--small" data-ref="disastersReset" data-testid="disasters-reset" data-tip-title="Reset" data-tip="No disaster is active." disabled>Reset</button>
+          <h2 class="panel-title storm-section__title" id="storms-active-title"><span class="live-dot" aria-hidden="true"></span>${withIcon('cyclone', 'Active disasters', 'data-ref="stormActiveTitle" data-testid="storm-active-title"')}</h2>
+          <button type="button" class="btn btn--small" data-ref="disastersReset" data-testid="disasters-reset" data-tip-title="Reset" data-tip="No disaster is active." disabled>${withIcon('reset', 'Reset')}</button>
           <p class="fine" data-ref="stormSummary">No storms yet.</p>
           <p class="fine" data-testid="storm-wind-note">Movement speed measures travel, not wind. Gale radius estimates the area with winds of at least 17.2 m/s.</p>
           <ul class="storm-list storm-list--active" data-ref="stormList" data-testid="storm-list"></ul>
         </section>
         <div class="storm-detail" data-ref="stormDetail" data-testid="storm-detail" hidden>
-          <h2 class="panel-title" data-ref="stormTitle">Storm</h2>
+          <h2 class="panel-title">${withIcon('cyclone', 'Storm', 'data-ref="stormTitle"')}</h2>
           <dl class="metrics" data-testid="telemetry">
             ${metric('stage', 'Stage')}
             ${metric('wind', 'Max wind')}
@@ -382,16 +455,16 @@ export function shellHtml(): string {
             ${metric('windDelta', 'Player effect')}
             ${metric('trackOffset', 'Off recorded path')}
           </dl>
-          <h3 class="panel-title">Development stages</h3>
+          <h3 class="panel-title">${withIcon('stages', 'Development stages')}</h3>
           <ol class="storm-stages" data-ref="stormStages" data-testid="storm-stages"></ol>
           <figure class="spark">
             <svg viewBox="0 0 240 56" preserveAspectRatio="none" role="img" aria-label="Maximum wind over time" data-ref="spark"><path class="spark__line" d=""/><path class="spark__area" d=""/></svg>
             <figcaption data-ref="sparkCaption">Wind history appears as time passes.</figcaption>
           </figure>
-          <button type="button" class="btn" data-ref="stormCenter" data-testid="storm-center">Centre map on storm</button>
+          <button type="button" class="btn" data-ref="stormCenter" data-testid="storm-center">${withIcon('locate', 'Centre map on storm')}</button>
         </div>
         <div class="storm-detail" data-ref="disasterDetail" data-testid="disaster-detail" hidden>
-          <h2 class="panel-title" data-ref="disasterTitle">Disaster</h2>
+          <h2 class="panel-title">${withIcon('alert', 'Disaster', 'data-ref="disasterTitle"')}</h2>
           <dl class="metrics">
             ${metric('disasterKind', 'Disaster type')}${metric('disasterStatus', 'Status')}
             ${metric('disasterIntensity', 'Strength')}${metric('disasterPosition', 'Position')}
@@ -402,35 +475,35 @@ export function shellHtml(): string {
             ${metric('disasterRain', 'Rainfall')}${metric('disasterSnow', 'Snow depth')}
             ${metric('disasterLoss', 'Estimated loss')}${metric('disasterHomes', 'Damaged homes')}
           </dl>
-          <h3 class="panel-title">Observations</h3>
+          <h3 class="panel-title">${withIcon('eye', 'Observations')}</h3>
           <ol class="storm-stages" data-ref="disasterHistory" data-testid="disaster-history"></ol>
-          <button type="button" class="btn" data-ref="disasterCenter" data-testid="disaster-center">Centre map on disaster</button>
+          <button type="button" class="btn" data-ref="disasterCenter" data-testid="disaster-center">${withIcon('locate', 'Centre map on disaster')}</button>
         </div>
         <section class="storm-section storm-section--ended" aria-labelledby="storms-ended-title">
-          <h2 class="panel-title storm-section__title" id="storms-ended-title"><span data-ref="stormEndedTitle" data-testid="storm-ended-title">Ended disasters</span></h2>
+          <h2 class="panel-title storm-section__title" id="storms-ended-title">${withIcon('archive', 'Ended disasters', 'data-ref="stormEndedTitle" data-testid="storm-ended-title"')}</h2>
           <p class="fine">Select a disaster to view its final conditions and damage. Export a replay to keep this world's history before resetting.</p>
           <ul class="storm-list storm-list--ended" data-ref="stormArchive" data-testid="storm-history"></ul>
           <p class="empty" data-ref="stormArchiveEmpty">No ended disasters yet.</p>
-          <button type="button" class="link-btn" data-ref="stormArchiveMore" data-testid="storm-history-more" hidden>Show all (0)</button>
+          <button type="button" class="link-btn" data-ref="stormArchiveMore" data-testid="storm-history-more" hidden>${withIcon('chevronDown', 'Show all (0)')}</button>
         </section>
-        <h2 class="panel-title">Forming patches</h2>
+        <h2 class="panel-title">${withIcon('genesis', 'Forming patches')}</h2>
         <ul class="patch-list" data-ref="patchList" data-testid="patch-list"></ul>
         <p class="empty" data-ref="patchEmpty">None. Overlapping Warm water, Moisture and Low pressure over warm ocean start one.</p>
       </div>
 
       <div class="report-panel" role="tabpanel" id="panel-environment" data-ref="panel-environment" aria-labelledby="tab-environment" data-panel="environment" tabindex="0" hidden>
-        <h2 class="panel-title">Active conditions</h2>
-        <button type="button" class="btn btn--small" data-ref="conditionsReset" data-testid="reset-conditions" data-tip-title="Reset" data-tip="No condition is active." disabled>Reset</button>
+        <h2 class="panel-title">${withIcon('wind', 'Active conditions')}</h2>
+        <button type="button" class="btn btn--small" data-ref="conditionsReset" data-testid="reset-conditions" data-tip-title="Reset" data-tip="No condition is active." disabled>${withIcon('reset', 'Reset')}</button>
         <ul class="effect-list" data-ref="effectList" data-testid="effect-list"></ul>
         <p class="empty" data-ref="effectEmpty">Nothing placed. Conditions fade after a while.</p>
-        <h2 class="panel-title">World totals</h2>
+        <h2 class="panel-title">${withIcon('bars', 'World totals')}</h2>
         <dl class="metrics metrics--impact" data-testid="impact">
           ${metric('score', 'Impact score')}
           ${metric('exposed', 'People exposed to disasters')}
           ${metric('peak', 'Peak wind')}
         </dl>
         <p class="fine">Impact measures wind over populated areas.</p>
-        <h2 class="panel-title">Cities</h2>
+        <h2 class="panel-title">${withIcon('cities', 'Cities')}</h2>
         <div class="city-detail" data-ref="cityDetail" data-testid="city-detail"></div>
         <p class="fine" data-ref="cityCount" data-testid="city-count"></p>
         <ul class="city-list" data-ref="cityList" data-testid="city-list"></ul>
@@ -440,7 +513,7 @@ export function shellHtml(): string {
       <div class="report-panel measure" role="tabpanel" id="panel-measure" aria-labelledby="tab-measure" data-panel="measure" data-testid="measure-panel" tabindex="0" hidden>
         <div class="measure__head">
           <p class="fine" data-ref="measureHint">Nothing measured yet. Open the Measure tab of the palette and drop an icon on the map to graph that point over time.</p>
-          <button type="button" class="btn btn--small" data-ref="measureClear" data-testid="measure-clear" hidden>Delete all</button>
+          <button type="button" class="btn btn--small" data-ref="measureClear" data-testid="measure-clear" hidden>${withIcon('trash', 'Delete all')}</button>
         </div>
         <div class="measure__cards" data-ref="measureCards" data-testid="measure-cards"></div>
       </div>
@@ -452,34 +525,34 @@ export function shellHtml(): string {
       </div>
 
       <div class="report-panel" role="tabpanel" id="panel-rank" aria-labelledby="tab-rank" data-panel="rank" tabindex="0" hidden>
-        <h2 class="panel-title">World leaderboard</h2>
+        <h2 class="panel-title">${withIcon('trophy', 'World leaderboard')}</h2>
         <div class="rank-metrics" role="radiogroup" aria-label="Leaderboard period" data-ref="lbWindows">
-          <button type="button" role="radio" class="rank-metric" data-lb-window="live" data-testid="lb-window-live" aria-checked="true" tabindex="0">Live 24 h</button>
-          <button type="button" role="radio" class="rank-metric" data-lb-window="7d" data-testid="lb-window-7d" aria-checked="false" tabindex="-1">7 days</button>
-          <button type="button" role="radio" class="rank-metric" data-lb-window="30d" data-testid="lb-window-30d" aria-checked="false" tabindex="-1">1 month</button>
-          <button type="button" role="radio" class="rank-metric" data-lb-window="all" data-testid="lb-window-all" aria-checked="false" tabindex="-1">All time</button>
+          <button type="button" role="radio" class="rank-metric" data-lb-window="live" data-testid="lb-window-live" aria-checked="true" tabindex="0">${withIcon('clock', 'Live 24 h')}</button>
+          <button type="button" role="radio" class="rank-metric" data-lb-window="7d" data-testid="lb-window-7d" aria-checked="false" tabindex="-1">${withIcon('calendar', '7 days')}</button>
+          <button type="button" role="radio" class="rank-metric" data-lb-window="30d" data-testid="lb-window-30d" aria-checked="false" tabindex="-1">${withIcon('calendarDays', '1 month')}</button>
+          <button type="button" role="radio" class="rank-metric" data-lb-window="all" data-testid="lb-window-all" aria-checked="false" tabindex="-1">${withIcon('infinity', 'All time')}</button>
         </div>
         <form class="lb-nickname" data-ref="lbNicknameForm">
-          <label class="lb-nickname__label" for="lb-nickname">Nickname</label>
+          <label class="lb-nickname__label" for="lb-nickname">${withIcon('user', 'Nickname')}</label>
           <input id="lb-nickname" class="lb-nickname__input" type="text" maxlength="20" autocomplete="off" spellcheck="false" data-ref="lbNickname" data-testid="lb-nickname">
-          <button type="submit" class="btn" data-testid="lb-nickname-save">Save</button>
+          <button type="submit" class="btn" data-testid="lb-nickname-save">${withIcon('save', 'Save')}</button>
         </form>
         <p class="fine" data-ref="lbNicknameNote">Your nickname is public. Only a random anonymous ID, this nickname and your disaster results are sent; nicknames are not filtered.</p>
         <p class="fine lb-me" data-ref="lbMe" data-testid="lb-me"></p>
-        <button type="button" class="btn btn--danger lb-delete" data-ref="lbDelete" data-testid="lb-delete">Delete my records</button>
+        <button type="button" class="btn btn--danger lb-delete" data-ref="lbDelete" data-testid="lb-delete">${withIcon('trash', 'Delete my records')}</button>
         <p class="empty" data-ref="lbStatus" data-testid="lb-status" role="status"></p>
         <table class="lb-table" data-ref="lbTable" data-testid="lb-table" hidden>
           <thead><tr><th scope="col">Rank</th><th scope="col">Nickname</th><th scope="col">Disasters</th><th scope="col">Max grade</th><th scope="col">Loss</th></tr></thead>
           <tbody data-ref="lbBody"></tbody>
         </table>
-        <h2 class="panel-title">This world</h2>
+        <h2 class="panel-title">${withIcon('globe', 'This world')}</h2>
         <p class="fine">Disasters from every world on this device. Active disasters update until they end.</p>
         <div class="rank-metrics" role="radiogroup" aria-label="Ranking metric" data-ref="rankMetrics">${RANKING_METRICS.map((m, i) => `
-          <button type="button" role="radio" class="rank-metric" data-rank-metric="${m.id}" data-testid="rank-metric-${m.id}" aria-checked="${i === 0}" tabindex="${i === 0 ? 0 : -1}">${m.label}</button>`).join('')}
+          <button type="button" role="radio" class="rank-metric" data-rank-metric="${m.id}" data-testid="rank-metric-${m.id}" aria-checked="${i === 0}" tabindex="${i === 0 ? 0 : -1}">${withIcon(RANK_ICON[m.id], m.label)}</button>`).join('')}
         </div>
         <ol class="storm-rank" data-ref="stormRank" data-testid="storm-rank"></ol>
         <p class="empty" data-ref="stormRankEmpty">No ranked disasters yet.</p>
-        <button type="button" class="btn rank-clear" data-ref="rankClear" data-testid="rank-clear">Clear ranking</button>
+        <button type="button" class="btn rank-clear" data-ref="rankClear" data-testid="rank-clear">${withIcon('trash', 'Clear ranking')}</button>
         <p class="fine">Map grades: 0 Depression, 1 Tropical Storm, 2 Severe Tropical Storm, 3 Typhoon / Hurricane / Cyclone, 4 Very Strong, 5 Violent, then one more grade every 10 m/s above that.</p>
       </div>
 
@@ -487,14 +560,14 @@ export function shellHtml(): string {
         <p class="fine">A replay is the seed plus every condition you placed, up to a tick. Importing re-runs the world to that moment, paused, so the result is recomputed rather than trusted.</p>
         <p class="replay__count" data-ref="replayCount">0 conditions placed.</p>
         <div class="replay__actions">
-          <button type="button" class="btn" data-ref="replayExport" data-testid="export-replay">Export replay</button>
-          <button type="button" class="btn" data-ref="replayImport" data-testid="import-replay">Import replay file</button>
+          <button type="button" class="btn" data-ref="replayExport" data-testid="export-replay">${withIcon('download', 'Export replay')}</button>
+          <button type="button" class="btn" data-ref="replayImport" data-testid="import-replay">${withIcon('upload', 'Import replay file')}</button>
           <input type="file" accept="application/json,.json" class="sr-only" tabindex="-1" aria-label="Replay file" data-ref="replayFile" data-testid="import-replay-input">
         </div>
         <details class="replay__paste">
-          <summary>Paste replay JSON</summary>
+          <summary>${withIcon('code', 'Paste replay JSON')}</summary>
           <label class="field field--wide"><span>Replay JSON</span><textarea rows="5" spellcheck="false" data-ref="replayText" data-testid="import-replay-text"></textarea></label>
-          <button type="button" class="btn" data-ref="replayPaste" data-testid="import-replay-paste">Import pasted JSON</button>
+          <button type="button" class="btn" data-ref="replayPaste" data-testid="import-replay-paste">${withIcon('paste', 'Import pasted JSON')}</button>
         </details>
         <p class="replay__message" role="status" data-ref="replayMessage" data-testid="replay-message" data-kind="info"></p>
       </div>
@@ -507,7 +580,7 @@ export function shellHtml(): string {
         <div class="help-tabs" role="tablist" aria-label="Help sections" data-ref="helpTabs">${helpTabs}</div>
       </header>
       <div class="help__scroll" data-ref="helpScroll">${helpPanels}</div>
-      <footer class="help__foot"><button type="button" class="btn" data-act="start-tutorial" data-testid="help-tutorial">Tutorial</button><button type="button" class="btn btn--primary" data-act="close-help" data-testid="help-close">Got it</button></footer>
+      <footer class="help__foot"><button type="button" class="btn" data-act="start-tutorial" data-testid="help-tutorial">${withIcon('play', 'Tutorial')}</button><button type="button" class="btn btn--primary" data-act="close-help" data-testid="help-close">${withIcon('check', 'Got it')}</button></footer>
     </dialog>
 
     <dialog class="dialog dialog--privacy" data-ref="privacyDialog" data-testid="privacy-dialog" aria-labelledby="privacy-title">
