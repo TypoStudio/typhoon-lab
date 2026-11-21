@@ -142,7 +142,7 @@ summary .ui-lbl { vertical-align: top; }
 .setting--overlays { flex-wrap: wrap; }
 .overlay-toggle { position: relative; display: grid; place-items: center; flex: 0 0 28px; width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 0; }
 /* Feature names stay inside the two buttons; color and switch semantics convey their state. */
-.overlay-toggle--labeled { grid-column: span 4; display: flex; align-items: center; gap: var(--space-2xs); width: auto; height: auto; min-height: 44px; margin-top: var(--space-2xs); padding: var(--space-xs); font-size: var(--text-xs); line-height: 1.25; text-align: start; white-space: normal; }
+.overlay-toggle--labeled { grid-column: span 4; display: flex; align-items: center; gap: var(--space-2xs); width: auto; margin-top: var(--space-2xs); padding-inline: var(--space-xs); font-size: var(--text-xs); line-height: 1.1; text-align: start; white-space: normal; }
 .overlay-toggle--labeled .map-overlay-icon { flex: none; }
 .overlay-toggle--labeled span { min-width: 0; overflow-wrap: anywhere; }
 .overlay-toggle--labeled.overlay-toggle--world::after { content: none; }
