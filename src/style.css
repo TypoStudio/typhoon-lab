@@ -1032,6 +1032,7 @@ html[lang="ko"] .toast[data-kind="error"]::before { content: "오류: "; }
 }
 
 .news--place { cursor: pointer; }
+@media (any-hover: hover) { .news--place:hover { background-color: var(--color-paper-3); } }
 .news--place:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
 
 /* ---- Focus mode while an icon is dragged onto the map ------------------------------------------ */

@@ -1243,7 +1243,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   }
 
   function newsRow(n: NewsItem): HTMLElement {
-    const row = el('li', { class: `news news--${n.kind}${n.lon !== undefined ? ' news--place' : ''}` }, [
+    const row = el('li', { class: `news news--${n.kind}` }, [
       el('div', { class: 'news__art' }, [newsArt(n)]),
       el('div', { class: 'news__body' }, [
         el('p', { class: 'news__meta', text: `${n.serial !== undefined ? fmtSerialDate(n.serial, getLanguage()) : fmtClock(n.hour + clockOffset(ui.latest!))} · ${kindLabel(n.kind)}` }),
@@ -1271,6 +1271,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     const target = n.lon !== undefined && n.lat !== undefined ? { lon: n.lon, lat: n.lat } : city; // the event's own point, else the damaged city
     if (target) { // a click shows the damaged place
       const { lon, lat } = target;
+      row.classList.add('news--place');
       row.tabIndex = 0;
       row.title = t('Show the place on the map');
       row.addEventListener('click', () => renderer?.view.centerOn(lon, lat));
