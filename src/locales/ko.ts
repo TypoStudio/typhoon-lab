@@ -373,6 +373,11 @@ export const ko: Record<string, string> = {
   'Tints the ocean by sea-surface temperature.': '해수면 온도에 따라 바다에 옅은 색을 입힙니다.',
   'Shows how many people live in each area.': '지역마다 사는 사람의 수를 보여 줍니다.',
   'Recorded paths': '기록 경로', 'Draws the full dashed track of every loaded past typhoon.': '불러온 모든 과거 태풍의 전체 경로를 점선으로 그립니다.',
+  'Real-time events': '실시간 사건', 'Starts a new world with today\'s real storms, floods and droughts from GDACS. Takes effect on the next reset or load.': '새 세계를 GDACS가 알려 주는 오늘의 실제 태풍, 홍수, 가뭄으로 시작합니다. 다음 초기화 또는 불러오기부터 적용됩니다.',
+  'Real-time events: GDACS (gdacs.org)': '실시간 사건: GDACS (gdacs.org)',
+  'Real event reported by GDACS (green alert). It starts this world; the simulation then runs freely.': 'GDACS가 알린 실제 사건입니다(녹색 경보). 이 세계의 시작 조건이며, 이후 시뮬레이션은 자유롭게 진행됩니다.',
+  'Real event reported by GDACS (orange alert). It starts this world; the simulation then runs freely.': 'GDACS가 알린 실제 사건입니다(주황색 경보). 이 세계의 시작 조건이며, 이후 시뮬레이션은 자유롭게 진행됩니다.',
+  'Real event reported by GDACS (red alert). It starts this world; the simulation then runs freely.': 'GDACS가 알린 실제 사건입니다(적색 경보). 이 세계의 시작 조건이며, 이후 시뮬레이션은 자유롭게 진행됩니다.',
   'City names': '도시 이름', 'Shows the names of cities and places. Their dots always stay.': '도시와 지명의 이름을 표시합니다. 점은 항상 남아 있습니다.',
   'Isobar values': '등압선 수치', 'Shows the pressure number on each isobar.': '각 등압선에 기압 수치를 표시합니다.',
   'Sea names': '바다 이름', 'Shows sea, lake and river names.': '바다, 호수, 강의 이름을 표시합니다.',
@@ -599,6 +604,7 @@ export const ko: Record<string, string> = {
 
 /** Templates translate display messages without changing the deterministic worker or replay format. */
 export const koTemplates: Record<string, string> = {
+  'Live: {0}': '실시간: {0}',
   "Use the speed arrows to select {0} (or press {1}), then press Play if time is paused. A depression forms after the conditions overlap for a while.": "속도 화살표로 {0}을 선택하거나 숫자 키 {1}을 누르십시오. 시간이 멈춰 있다면 재생을 누르십시오. 조건이 한동안 겹치면 열대저기압이 발생합니다.",
   'Blizzard cells nearby: {0} / {1}': '주변 블리자드 격자: {0} / {1}',
   'Tornado potential: {0} / {1}': '토네이도 가능 지수: {0} / {1}',

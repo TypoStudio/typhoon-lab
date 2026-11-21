@@ -16,7 +16,7 @@ test('Korean controls, help, errors and live language changes preserve the world
     await expect(page.locator('#tip .tip__title')).toHaveText(label);
   }
   await expect(page.getByTestId('tool-warm')).toHaveAttribute('aria-label', /따뜻한 바다/);
-  await expect(page.getByTestId('genesis-toggle')).toHaveText('꺼짐');
+  await expect(page.getByTestId('genesis-toggle')).toHaveText('태풍 자연 발생');
   await expect(page.getByTestId('recorded-path-toggle')).toHaveText('켜짐');
   await expect(page.getByTestId('palette-tab-typhoons')).toHaveText('태풍체험');
   await expect(page.getByTestId('palette-tab-climate')).toHaveText('기후체험');

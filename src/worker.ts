@@ -4,9 +4,10 @@ import { SCENARIO } from './data/world';
 import { typhoonById } from './data/typhoons';
 import { loadEnvironment } from './data/environment';
 import { loadLiveWeather } from './data/live-weather';
+import { loadLiveEvents } from './data/live-events';
 import { focusTraffic } from './simulation/traffic';
 import {
-  DEFAULT_START_DOY, REPLAY_MAX_TICKS, STEP_HOURS, CLIMATE_MAX_DAYS, advanceClimateTime, createGame, fastDaysLeft, isValidDayOfYear, isValidSeed, loadHistoric, placeFormation, placeTool, refreshClimateView, replayGame, setClimate, setClimateMode,
+  DEFAULT_START_DOY, REPLAY_MAX_TICKS, STEP_HOURS, CLIMATE_MAX_DAYS, advanceClimateTime, createGame, fastDaysLeft, isValidDayOfYear, isValidSeed, loadHistoric, placeFormation, seedLiveEvents, placeTool, refreshClimateView, replayGame, setClimate, setClimateMode,
   loadClimateScenario, endClimateScenarioNow, resetClimateNow, resetDisastersNow, resetConditionsNow, setGenesis, setHistoricEnvironment, setSeason, skipAhead, stepGame, validateActions,
 } from './simulation/engine';
 import { DEFAULT_TIME_SPEED, MAX_WEATHER_SPEED, TIME_SPEEDS, isFastClimateSpeed, isTimeSpeed, takeSteps } from './time';
@@ -138,9 +139,11 @@ async function handle(msg: WorkerRequest): Promise<void> {
       if (!isValidDayOfYear(start)) return fail('Start day of the year must be between 0 and 366.');
       playing = false;
       syncTimer();
-      const weather = msg.weather === 'live' ? await loadLiveWeather() : undefined;
+      const [weather, events] = msg.weather === 'live'
+        ? await Promise.all([loadLiveWeather(), msg.liveEvents === false ? [] : loadLiveEvents()]) : [undefined, []];
       state = createGame(seed, start, weather?.snapshot);
       if (weather) state.weatherSource = weather.source;
+      if (events.length) seedLiveEvents(state, events);
       speed = DEFAULT_TIME_SPEED;
       carry = 0;
       fastCarry = 0;

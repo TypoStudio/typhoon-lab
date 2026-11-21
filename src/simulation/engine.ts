@@ -23,7 +23,7 @@
  */
 import type {
   ActionRecord, City, ClimateKey, ClimateScenarioInfo, ClimateState, EnvironmentCell, Effect, FormationKind, GameState, GenesisCandidate, GeoPoint, HistoricEnvironment, HistoricPoint, HistoricTyphoon, NewsItem,
-  LiveWeatherSnapshot, PlacementResult, Storm, StormRecord, Thunderstorm, ToolDefinition, ToolType, WeatherField,
+  LiveEvent, LiveWeatherSnapshot, PlacementResult, Storm, StormRecord, Thunderstorm, ToolDefinition, ToolType, WeatherField,
 } from '../types';
 import { CITY_DAMAGE_LEVELS, cityDamageBulletin, estimateCityDamage } from './damage-news';
 import { isWeatherHazardKind, WEATHER_HAZARDS } from '../data/weather-hazards';
@@ -1665,6 +1665,47 @@ export function loadHistoric(state: GameState, typhoonId: string): PlacementResu
   return { ok: true };
 }
 
+/**
+ * Seeds current real-world events (GDACS) as starting conditions: cyclones become free-running storms (pressure estimated from wind),
+ * floods and droughts become downpour and drought hazards. Nothing is recorded; the world runs freely from here. Returns the number seeded.
+ */
+export function seedLiveEvents(state: GameState, events: readonly LiveEvent[]): number {
+  let seeded = 0;
+  events.forEach((e, i) => {
+    if (!inBounds(e.lon, e.lat)) return;
+    const scale = { green: 0.6, orange: 0.8, red: 1 }[e.alert];
+    const source = `Real event reported by GDACS (${e.alert} alert). It starts this world; the simulation then runs freely.`;
+    if (e.kind === 'cyclone') {
+      if (isLand(e.lon, e.lat)) return;
+      const storm = newStorm(state.nextStormId++, wrapLon(e.lon), e.lat, REFERENCE_PRESSURE);
+      storm.name = e.name;
+      storm.wind = storm.peakWind = clamp((e.windKmh ?? 90) / 3.6, 18, 80);
+      storm.pressure = REFERENCE_PRESSURE - pressureDeficit(storm.wind);
+      storm.radiusKm = rmwKm(storm.wind, storm.lat);
+      storm.galeRadiusKm = galeRadius(storm);
+      storm.stage = stageFor(storm.wind, storm.lon, storm.lat);
+      state.storms.push(storm);
+      state.peakWind = Math.max(state.peakWind, storm.wind);
+      state.phase = 'active';
+      addNews(state, { id: `live-storm-${storm.id}`, kind: 'info', title: `Live: ${e.name}`, text: source, lon: storm.lon, lat: storm.lat });
+    } else {
+      const kind = e.kind === 'flood' ? 'downpour' : 'drought', def = WEATHER_HAZARDS[kind];
+      if (def.landOnly && !isLand(e.lon, e.lat)) return;
+      state.weatherHazards.push({ id: 900_000_000 + i, kind, lon: wrapLon(e.lon), lat: e.lat, radiusKm: def.radiusKm * scale,
+        ageHours: 0, durationHours: def.durationHours * (kind === 'drought' ? 2 : 3) * scale, intensity: scale, directionRad: 0 });
+      addNews(state, { id: `live-event-${i}`, kind: 'weather', phenomenon: kind, title: `Live: ${e.name}`, text: source, lon: e.lon, lat: e.lat });
+    }
+    seeded++;
+  });
+  if (seeded) {
+    state.news = state.news.filter(n => n.id !== 'welcome');
+    state.liveEventsSource = seeded;
+    refreshGrid(state);
+    refreshForecasts(state);
+  }
+  return seeded;
+}
+
 /** storm.pressure = totalPressure() at its centre (environment, effects and every storm). */
 function syncStormPressures(state: GameState): void {
   const values = state.storms.map(s => totalPressure(state, s.lon, s.lat));
@@ -2044,7 +2085,7 @@ function applyDamage(state: GameState): void {
   }
   for (const i of blizzardNow) state.cities[i].blizzardHours += STEP_HOURS;
   if (state.blizzardCells === 0 && blizzardCells > 0) {
-    addNews(state, { id: `blizzard-start-${state.tick}`, kind: 'blizzard', title: 'Blizzard conditions develop',
+    addNews(state, { id: `blizzard-start-${state.tick}`, kind: 'blizzard', lon: bLon / blizzardCells, lat: bLat / blizzardCells, title: 'Blizzard conditions develop',
       text: `Heavy snow and gale-force winds near ${fmt(bLon / blizzardCells, bLat / blizzardCells)}.` });
   }
   state.blizzardCells = blizzardCells;
@@ -2110,7 +2151,7 @@ function reportTornado(state: GameState, t: Thunderstorm): void {
   t.tornadoReported = true;
   const city = nearestCity(t.lon, t.lat);
   const near = city && distanceKm(city.lon, city.lat, t.lon, t.lat) < 250 ? city : null;
-  addNews(state, { id: `tornado-${t.id}`, kind: 'tornado', cityId: near?.id,
+  addNews(state, { id: `tornado-${t.id}`, kind: 'tornado', cityId: near?.id, lon: t.lon, lat: t.lat,
     title: near ? `Tornado touches down near ${near.name}` : 'Tornado touches down',
     text: `A rotating thunderstorm produced a tornado near ${fmt(t.lon, t.lat)}. Strong wind shear, moist rising air and atmospheric instability combined.` });
 }
@@ -2158,7 +2199,7 @@ function updateThunderstorms(state: GameState, dt: number): void {
       t.tornadoLongReported = true;
       const city = nearestCity(t.lon, t.lat);
       const near = city && distanceKm(city.lon, city.lat, t.lon, t.lat) < 250 ? city : null;
-      addNews(state, { id: `tornado-long-${t.id}`, kind: 'tornado', cityId: near?.id,
+      addNews(state, { id: `tornado-long-${t.id}`, kind: 'tornado', cityId: near?.id, lon: t.lon, lat: t.lat,
         title: near ? `Long-track tornado near ${near.name}` : 'Long-track tornado',
         text: `The tornado has traveled ${Math.round(t.tornadoDistanceKm!)} km while its rotating thunderstorm remains in warm, moist, unstable air with strong wind shear.` });
     }
@@ -2195,7 +2236,7 @@ function updateThunderstorms(state: GameState, dt: number): void {
     if (nearest < THUNDERSTORM_NEWS_KM) continue; // one bulletin per outbreak
     const city = nearestCity(lon, lat);
     const near = city && distanceKm(city.lon, city.lat, lon, lat) < 300 ? city : null;
-    addNews(state, { id: `thunderstorm-${t.id}`, kind: 'info', cityId: near?.id,
+    addNews(state, { id: `thunderstorm-${t.id}`, kind: 'info', cityId: near?.id, lon, lat,
       title: near ? `Thunderstorms erupt near ${near.name}` : 'Thunderstorms erupt',
       text: `Warm, moist, rising air set off thunderstorms at ${fmt(lon, lat)}. Damaging gusts and downpours are possible for a few hours.` });
   }
@@ -2400,7 +2441,7 @@ function updateCandidates(state: GameState, systems: PressureSystem[], dt: numbe
     if (e.formation === 'typhoon') storm.formation = true;
     state.storms.push(storm);
     state.peakWind = Math.max(state.peakWind, storm.wind);
-    addNews(state, { id: `formation-${storm.id}`, kind: 'formation', title: `Tropical Depression #${storm.id} forms`,
+    addNews(state, { id: `formation-${storm.id}`, kind: 'formation', lon: e.lon, lat: e.lat, title: `Tropical Depression #${storm.id} forms`,
       text: `Sustained warm, moist, low-shear conditions organised a depression near ${fmt(e.lon, e.lat)}.` });
   }
   // Consume only lows that actually completed genesis, exactly once per placement.
@@ -2473,7 +2514,7 @@ function stepStorm(state: GameState, storm: Storm, systems: PressureSystem[], mo
   const recorded = scripted && storm.record ? trackAt(scripted, state.hours - storm.record.startHour) : null;
   if (scripted && !recorded) {
     const last = scripted.points[scripted.points.length - 1];
-    addNews(state, { id: `ended-${storm.id}`, kind: 'ended', title: `${label} ends`,
+    addNews(state, { id: `ended-${storm.id}`, kind: 'ended', lon: wrapLon(last.lon), lat: last.lat, title: `${label} ends`,
       text: `The recorded track ends at ${fmt(wrapLon(last.lon), last.lat)} after ${storm.ageHours.toFixed(0)} hours. Peak ${storm.peakWind.toFixed(0)} m/s.` });
     archiveStorm(state, storm, last.grade === 'L' ? 'extratropical' : 'dissipated');
     leaveRemnant(state, storm);
@@ -2516,19 +2557,19 @@ function stepStorm(state: GameState, storm: Storm, systems: PressureSystem[], mo
   state.peakWind = Math.max(state.peakWind, storm.wind);
   const rank = stageRank(storm.peakWind);
   if (rank > prevRank) {
-    addNews(state, { id: `stage-${storm.id}-${rank}`, kind: 'intensity', title: `${label} upgraded to ${storm.stage}`,
+    addNews(state, { id: `stage-${storm.id}-${rank}`, kind: 'intensity', lon: storm.lon, lat: storm.lat, title: `${label} upgraded to ${storm.stage}`,
       text: `Maximum sustained wind ${storm.wind.toFixed(0)} m/s, central pressure ${storm.pressure.toFixed(0)} hPa.` });
   }
   if (!wasLand && isLand(storm.lon, storm.lat)) {
     const city = nearestCity(storm.lon, storm.lat);
     const near = city && distanceKm(city.lon, city.lat, storm.lon, storm.lat) < 400 ? city : null;
-    addNews(state, { id: `landfall-${storm.id}-${state.tick}`, kind: 'landfall', cityId: near?.id,
+    addNews(state, { id: `landfall-${storm.id}-${state.tick}`, kind: 'landfall', cityId: near?.id, lon: storm.lon, lat: storm.lat,
       title: `${label} ${storm.stage} makes landfall${near ? ` near ${near.name}` : ''}`,
       text: `Centre crossed the coast at ${fmt(storm.lon, storm.lat)} with ${storm.wind.toFixed(0)} m/s winds. Land friction and lost ocean heat weaken it.` });
   }
   const gone = recorded ? '' : storm.wind < 10 ? 'weakened into a remnant low' : !storm.formation && Math.abs(storm.lat) > 65 ? 'became a cold-core storm at high latitude' : '';
   if (gone) {
-    addNews(state, { id: `ended-${storm.id}`, kind: 'ended', title: `#${storm.id} dissipates`,
+    addNews(state, { id: `ended-${storm.id}`, kind: 'ended', lon: storm.lon, lat: storm.lat, title: `#${storm.id} dissipates`,
       text: `The storm ${gone} at ${fmt(storm.lon, storm.lat)} after ${storm.ageHours.toFixed(0)} hours. Peak ${storm.peakWind.toFixed(0)} m/s.` });
     archiveStorm(state, storm, storm.wind < 10 ? 'dissipated' : 'extratropical');
     leaveRemnant(state, storm);
@@ -2575,7 +2616,7 @@ function mergeStorms(state: GameState, archive = true): Set<number> {
     keep.galeRadiusKm = galeRadius(keep);
     keep.stage = stageFor(keep.wind, keep.lon, keep.lat);
     absorbed.add(other.id); survivors.add(keep.id);
-    addNews(state, { id: `merger-${keep.id}-${other.id}-${state.tick}`, kind: 'merger',
+    addNews(state, { id: `merger-${keep.id}-${other.id}-${state.tick}`, kind: 'merger', lon: keep.lon, lat: keep.lat,
       absorbedId: other.id, mergedIntoId: keep.id,
       title: `Storm #${other.id} merges into #${keep.id}`,
       text: `Two developed storms joined near ${fmt(keep.lon, keep.lat)}. Storm #${keep.id} continues with maximum wind ${keep.wind.toFixed(0)} m/s. Nearby forming lows keep their own progress.` });

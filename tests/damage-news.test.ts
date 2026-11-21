@@ -82,3 +82,13 @@ describe('city news is limited to large cities', () => {
     expect(damaged.filter(c => !originals.has(c.id)).length).toBeGreaterThanOrEqual(5);
   }, 60_000);
 });
+
+describe('news positions for click-to-locate', () => {
+  it('gives every storm bulletin a map point', () => {
+    const state = createGame(1);
+    loadHistoric(state, 'haiyan');
+    for (let i = 0; i < 200; i++) stepGame(state);
+    const storm = state.news.filter(n => ['formation', 'intensity', 'landfall', 'ended', 'merger'].includes(n.kind));
+    for (const n of storm) expect(Number.isFinite(n.lon) && Number.isFinite(n.lat)).toBe(true);
+  });
+});

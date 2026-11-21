@@ -100,15 +100,19 @@ export const MAP_OVERLAY_OPTIONS: { id: keyof MapOverlays; label: string; tip: s
 ];
 
 /** Label layers (stored in the renderer) and the simulation switch that share the overlay icon row. */
-export type RowToggleId = 'recordedPaths' | 'cities' | 'isobars' | 'seas' | 'graphs' | 'genesis';
+export type RowToggleId = 'recordedPaths' | 'liveEvents' | 'cities' | 'isobars' | 'seas' | 'graphs' | 'genesis';
 export const ROW_TOGGLES: { id: RowToggleId; label: string; tip: string; testid: string; ref?: string; stateRef?: string; world?: boolean; on: boolean }[] = [
   { id: 'recordedPaths', label: 'Recorded paths', tip: 'Draws the full dashed track of every loaded past typhoon.', testid: 'recorded-path-toggle', ref: 'pathToggle', stateRef: 'pathState', on: true },
+  { id: 'liveEvents', label: 'Real-time events', tip: 'Starts a new world with today\'s real storms, floods and droughts from GDACS. Takes effect on the next reset or load.', testid: 'live-events-toggle', ref: 'liveEventsToggle', on: true },
   { id: 'cities', label: 'City names', tip: 'Shows the names of cities and places. Their dots always stay.', testid: 'label-cities-toggle', on: true },
   { id: 'isobars', label: 'Isobar values', tip: 'Shows the pressure number on each isobar.', testid: 'label-isobars-toggle', on: true },
   { id: 'seas', label: 'Sea names', tip: 'Shows sea, lake and river names.', testid: 'label-seas-toggle', on: true },
   { id: 'graphs', label: 'Graphs on map', tip: 'Shows a small graph beside each measured pin on the map.', testid: 'label-graphs-toggle', on: true },
-  { id: 'genesis', label: 'Natural typhoon formation', tip: 'Changes the world, not just the view. When on, nature starts new storms every two to three days. Saved in your replay.', testid: 'genesis-toggle', ref: 'genesisToggle', stateRef: 'genesisState', world: true, on: false },
+  { id: 'genesis', label: 'Natural typhoon formation', tip: 'Changes the world, not just the view. When on, nature starts new storms every two to three days. Saved in your replay.', testid: 'genesis-toggle', ref: 'genesisToggle', world: true, on: false },
 ];
+
+/** Options that change what the world does, not the view: shown side by side at the bottom with visible labels. */
+const WORLD_ROWS: RowToggleId[] = ['liveEvents', 'genesis'];
 
 const MAP_ICON = {
   wind: '<path d="M3 8h11a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h5a3 3 0 1 1-3 3"/>',
@@ -121,6 +125,7 @@ const MAP_ICON = {
   ships: '<path d="M4 12 12 9l8 3-2 7H6ZM7 10V5h10v5M10 5V2h4v3M2 21c2-2 3 2 5 0s3 2 5 0 3 2 5 0 3 2 5 0M12 9v9"/>',
   planes: '<path d="m12 2 2 8 8 5v2l-8-2v5l3 2H7l3-2v-5l-8 2v-2l8-5Z"/>',
   recordedPaths: '<path d="M3 19c3-9 7 1 10-6s5-3 7-8" stroke-dasharray="2.4 3.2"/><circle cx="20.5" cy="4.5" r="1.6"/>',
+  liveEvents: '<circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"/>',
   cities: '<path d="M12 21.5s-6.5-5.8-6.5-11.2a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11.2-6.5 11.2Z"/><circle cx="12" cy="10.3" r="2.4"/>',
   isobars: '<path d="M2 6.5c4-3 7 2.5 11 0s6-1 9-1"/><path d="M2 19c4-3 7 2.5 11 0s6-1 9-1"/><text x="12" y="15" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" font-weight="700" fill="currentColor" stroke="none">1008</text>',
   seas: '<path d="M2 20c2-2 3.5 2 5.5 0s3.5 2 5.5 0 3.5 2 5.5 0 2.5 1 3.5 0"/><path d="M7.5 15 12 3.5 16.5 15M9.2 11h5.6"/>',
@@ -290,13 +295,16 @@ export function shellHtml(): string {
   const overlays = globeButton + MAP_OVERLAY_OPTIONS.map(l => `
     <button type="button" class="overlay-toggle" data-overlay="${l.id}" data-testid="layer-${l.id}"
       aria-pressed="true" aria-label="${l.label}" data-tip-title="${l.label}" data-tip="${l.tip}">${mapIconSvg(l.id)}</button>`).join('')
-    + ROW_TOGGLES.map(l => {
-      const common = `class="overlay-toggle${l.world ? ' overlay-toggle--world' : ''}" data-testid="${l.testid}" aria-label="${l.label}" data-tip-title="${l.label}" data-tip="${l.tip}"`;
+    + ROW_TOGGLES.filter(l => !WORLD_ROWS.includes(l.id)).map(l => {
+      const common = `class="overlay-toggle" data-testid="${l.testid}" aria-label="${l.label}" data-tip-title="${l.label}" data-tip="${l.tip}"`;
       if (!l.stateRef) return `
     <button type="button" ${common} data-label="${l.id}" aria-pressed="${l.on}">${mapIconSvg(l.id)}</button>`;
       return `
     <button type="button" ${common} role="switch" aria-checked="${l.on}" data-ref="${l.ref}">${mapIconSvg(l.id)}<span class="sr-only" data-ref="${l.stateRef}">${l.on ? 'On' : 'Off'}</span></button>`;
-    }).join('');
+    }).join('')
+    + WORLD_ROWS.map(id => ROW_TOGGLES.find(l => l.id === id)!).map(l => `
+    <button type="button" class="overlay-toggle overlay-toggle--labeled${l.world ? ' overlay-toggle--world' : ''}" id="${l.testid}" data-testid="${l.testid}" role="switch" aria-checked="${l.on}" data-ref="${l.ref}"
+      aria-label="${l.label}" data-tip-title="${l.label}" data-tip="${l.tip}">${mapIconSvg(l.id)}<span>${l.label}</span></button>`).join('');
   const seasonButtons = SEASONS.map(l => `
     <button type="button" role="radio" class="overlay-toggle season-toggle" data-season="${l.id}" data-testid="season-${l.id}"
       aria-checked="false" aria-label="${l.label}" title="${l.label}">${mapIconSvg(l.id)}</button>`).join('');

@@ -373,6 +373,11 @@ export const zhCN: Record<string, string> = {
   'Tints the ocean by sea-surface temperature.': '按海表温度为海面着淡色。',
   'Shows how many people live in each area.': '显示各地区的居住人口数。',
   'Recorded paths': '记录路径', 'Draws the full dashed track of every loaded past typhoon.': '以虚线绘出所有已载入历史台风的完整路径。',
+  'Real-time events': '实时事件', 'Starts a new world with today\'s real storms, floods and droughts from GDACS. Takes effect on the next reset or load.': '以 GDACS 通报的今日真实台风、洪水和干旱开始新世界。下次重置或载入时生效。',
+  'Real-time events: GDACS (gdacs.org)': '实时事件：GDACS (gdacs.org)',
+  'Real event reported by GDACS (green alert). It starts this world; the simulation then runs freely.': 'GDACS 通报的真实事件（绿色警报）。它是本世界的起始条件，此后模拟自由运行。',
+  'Real event reported by GDACS (orange alert). It starts this world; the simulation then runs freely.': 'GDACS 通报的真实事件（橙色警报）。它是本世界的起始条件，此后模拟自由运行。',
+  'Real event reported by GDACS (red alert). It starts this world; the simulation then runs freely.': 'GDACS 通报的真实事件（红色警报）。它是本世界的起始条件，此后模拟自由运行。',
   'City names': '城市名称', 'Shows the names of cities and places. Their dots always stay.': '显示城市和地名。圆点始终保留。',
   'Isobar values': '等压线数值', 'Shows the pressure number on each isobar.': '在每条等压线上标出气压数值。',
   'Sea names': '海洋名称', 'Shows sea, lake and river names.': '显示海、湖和河流的名称。',
@@ -599,6 +604,7 @@ export const zhCN: Record<string, string> = {
 
 /** Templates translate display messages without changing the deterministic worker or replay format. */
 export const zhCNTemplates: Record<string, string> = {
+  'Live: {0}': '实时：{0}',
   'Temperature': '温度',
   'Surface air temperature': '近地面气温',
   'Colours the ocean by water temperature and land by air temperature.': '海面按水温、陆地按气温着色。',

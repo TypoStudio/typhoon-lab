@@ -12,7 +12,7 @@ test('natural formation toggle starts waves, shows the wave line and stops when 
   const toggle = page.getByTestId('genesis-toggle');
   await expect(toggle).toHaveRole('switch');
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
-  await expect(toggle).toHaveText('Off');
+  await expect(toggle).toHaveText('Natural typhoon formation');
   await expect(page.getByTestId('genesis-wave')).toBeHidden();
   await expect(page.locator('[data-mode], [data-testid^="mode-"]')).toHaveCount(0);
   const stateOf = () => page.evaluate(() => {
@@ -23,7 +23,7 @@ test('natural formation toggle starts waves, shows the wave line and stops when 
 
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-checked', 'true');
-  await expect(toggle).toHaveText('On');
+  await expect(toggle).toHaveText('Natural typhoon formation');
   await expect.poll(async () => (await stateOf()).genesis.waves).toBe(1);
   expect(await stateOf()).toMatchObject({ effects: 5, actions: [{ type: 'genesis', on: true }] });
   await expect(page.getByTestId('genesis-wave')).toContainText(/^Natural formation · wave 1 · next conditions in \d+ h$/);
@@ -37,7 +37,7 @@ test('natural formation toggle starts waves, shows the wave line and stops when 
 
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
-  await expect(toggle).toHaveText('Off');
+  await expect(toggle).toHaveText('Natural typhoon formation');
   await expect(page.getByTestId('genesis-wave')).toBeHidden();
   const off = await stateOf();
   expect(off.genesis.enabled).toBe(false);
@@ -92,7 +92,7 @@ test('world controls fit narrow and desktop viewports without captures', async (
   await expect(page.getByTestId('app')).toHaveAttribute('data-ready', 'true');
   if (!(await page.getByTestId('sidebar').isVisible())) await page.getByTestId('sidebar-toggle').click();
   await page.getByTestId('genesis-toggle').click();
-  await expect(page.getByTestId('genesis-toggle')).toHaveText('켜짐');
+  await expect(page.getByTestId('genesis-toggle')).toHaveText('태풍 자연 발생');
   await expect(page.getByTestId('genesis-wave')).toContainText('태풍 자연 발생');
   for (const width of [320, 375, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 });

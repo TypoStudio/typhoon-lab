@@ -373,6 +373,11 @@ export const zhTW: Record<string, string> = {
   'Tints the ocean by sea-surface temperature.': '依海表溫度為海面淡淡上色。',
   'Shows how many people live in each area.': '顯示各地區的居住人口。',
   'Recorded paths': '紀錄路徑', 'Draws the full dashed track of every loaded past typhoon.': '以虛線畫出每個已載入歷史颱風的完整路徑。',
+  'Real-time events': '即時事件', 'Starts a new world with today\'s real storms, floods and droughts from GDACS. Takes effect on the next reset or load.': '以 GDACS 通報的今日真實颱風、洪水與乾旱開始新世界。下次重設或載入時生效。',
+  'Real-time events: GDACS (gdacs.org)': '即時事件：GDACS (gdacs.org)',
+  'Real event reported by GDACS (green alert). It starts this world; the simulation then runs freely.': 'GDACS 通報的真實事件（綠色警報）。它是本世界的起始條件，此後模擬自由運行。',
+  'Real event reported by GDACS (orange alert). It starts this world; the simulation then runs freely.': 'GDACS 通報的真實事件（橙色警報）。它是本世界的起始條件，此後模擬自由運行。',
+  'Real event reported by GDACS (red alert). It starts this world; the simulation then runs freely.': 'GDACS 通報的真實事件（紅色警報）。它是本世界的起始條件，此後模擬自由運行。',
   'City names': '城市名稱', 'Shows the names of cities and places. Their dots always stay.': '顯示城市與地名，圓點則一律保留。',
   'Isobar values': '等壓線數值', 'Shows the pressure number on each isobar.': '在每條等壓線上顯示氣壓數值。',
   'Sea names': '海洋名稱', 'Shows sea, lake and river names.': '顯示海、湖與河流的名稱。',
@@ -611,6 +616,7 @@ export const zhTW: Record<string, string> = {
 
 /** Templates translate display messages without changing the deterministic worker or replay format. */
 export const zhTWTemplates: Record<string, string> = {
+  'Live: {0}': '即時：{0}',
   "Use the speed arrows to select {0} (or press {1}), then press Play if time is paused. A depression forms after the conditions overlap for a while.": "用速度箭頭選擇{0}，或按數字鍵{1}。若時間已暫停，請按播放。條件重疊一段時間後會形成熱帶性低氣壓。",
   'Blizzard cells nearby: {0} / {1}': '附近暴風雪網格：{0} / {1}',
   'Tornado potential: {0} / {1}': '龍捲風潛勢：{0} / {1}',

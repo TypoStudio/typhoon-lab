@@ -76,6 +76,10 @@ const PATHS_KEY = 'typhoon-lab-recorded-paths';
 function storedShowPaths(): boolean {
   try { return localStorage.getItem(PATHS_KEY) !== 'off'; } catch { return true; }
 }
+const LIVE_EVENTS_KEY = 'typhoon-lab-live-events';
+function storedLiveEvents(): boolean {
+  try { return localStorage.getItem(LIVE_EVENTS_KEY) !== 'off'; } catch { return true; }
+}
 
 /** Label layers (city names, isobar values, sea names): UI-only, on by default, remembered per layer. */
 const LABEL_IDS = ['cities', 'isobars', 'seas'] as const;
@@ -168,6 +172,8 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     drag: null as { tool: ArmedTool; point: GeoPoint | null } | null,
     overlays: { ...DEFAULT_MAP_OVERLAYS },
     showRecordedPaths: storedShowPaths(),
+    /** Seed real-world GDACS events into the next new world; read when the world starts. */
+    liveEvents: storedLiveEvents(),
     /** The "Graphs on map" switch (Measure charts drawn beside their pins). */
     graphsOnMap: storedLabel('graphs'),
     speed: DEFAULT_TIME_SPEED as TimeSpeed,
@@ -1192,6 +1198,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     } else if (state.weatherSource === 'base') {
       lines.push(el('p', { text: t('Live weather unavailable · using base climate') }));
     } else lines.push(el('p', { text: 'base climate' }));
+    if (state.liveEventsSource) lines.push(el('p', { text: t('Real-time events: GDACS (gdacs.org)') }));
     for (const load of state.historic) {
       const typhoon = typhoonById(load.typhoonId);
       if (!typhoon) continue;
@@ -1206,7 +1213,6 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     renderExperienceActive(state);
     const on = state.genesis.enabled;
     ref('genesisToggle').setAttribute('aria-checked', String(on));
-    setText(ref('genesisState'), on ? 'On' : 'Off');
     const wave = ref('genesisWave');
     wave.hidden = !on;
     if (on) setText(wave, `Natural formation · wave ${state.genesis.waves} · next conditions in ${Math.max(0, (state.genesis.nextSpawnTick - state.tick) / TICKS_PER_HOUR).toFixed(0)} h`);
@@ -1261,8 +1267,10 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
         n.damage ? el('p', { class: 'news__meta', text: 'Cumulative city estimate; replaces earlier figures.' }) : null,
       ]),
     ]);
-    if (n.lon !== undefined && n.lat !== undefined) { // a climate-driven event or a recorded real event: a click shows the place
-      const { lon, lat } = n;
+    const city = n.cityId ? CITIES.find(c => c.id === n.cityId) : undefined;
+    const target = n.lon !== undefined && n.lat !== undefined ? { lon: n.lon, lat: n.lat } : city; // the event's own point, else the damaged city
+    if (target) { // a click shows the damaged place
+      const { lon, lat } = target;
       row.tabIndex = 0;
       row.title = t('Show the place on the map');
       row.addEventListener('click', () => renderer?.view.centerOn(lon, lat));
@@ -2267,6 +2275,16 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
     refreshOverlay();
   });
   renderPathToggle();
+  const liveEventsToggle = ref('liveEventsToggle');
+  function renderLiveEventsToggle(): void {
+    liveEventsToggle.setAttribute('aria-checked', String(ui.liveEvents));
+  }
+  liveEventsToggle.addEventListener('click', () => {
+    ui.liveEvents = !ui.liveEvents;
+    try { localStorage.setItem(LIVE_EVENTS_KEY, ui.liveEvents ? 'on' : 'off'); } catch { /* storage is optional */ }
+    renderLiveEventsToggle();
+  });
+  renderLiveEventsToggle();
   for (const button of root.querySelectorAll<HTMLButtonElement>('[data-label]')) {
     const id = button.dataset.label as LabelId | 'graphs';
     button.setAttribute('aria-pressed', String(storedLabel(id)));
@@ -2723,7 +2741,7 @@ export function createApp(root: HTMLElement, worker: Worker): AppHandle {
   veil.hidden = false;
   ui.expectSeed = urlSeed ?? randomSeed();
   if (useLiveWeather) setText(ref('veilText'), 'Loading global weather…');
-  post({ type: 'init', seed: ui.expectSeed, startDayOfYear: newStartDay(), weather: useLiveWeather ? 'live' : 'base' });
+  post({ type: 'init', seed: ui.expectSeed, startDayOfYear: newStartDay(), weather: useLiveWeather ? 'live' : 'base', liveEvents: ui.liveEvents });
 
   let raf = 0;
   const loop = (now: number) => {

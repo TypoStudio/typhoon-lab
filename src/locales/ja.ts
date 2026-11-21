@@ -373,6 +373,11 @@ export const ja: Record<string, string> = {
   'Tints the ocean by sea-surface temperature.': '海面水温に応じて、海に淡い色を付けます。',
   'Shows how many people live in each area.': '各地域の人口を表示します。',
   'Recorded paths': '記録された経路', 'Draws the full dashed track of every loaded past typhoon.': '読み込んだすべての過去の台風の全経路を、点線で描きます。',
+  'Real-time events': 'リアルタイムの事象', 'Starts a new world with today\'s real storms, floods and droughts from GDACS. Takes effect on the next reset or load.': '新しい世界を、GDACSが伝える今日の実際の台風・洪水・干ばつで始めます。次のリセットまたは読み込みから反映されます。',
+  'Real-time events: GDACS (gdacs.org)': 'リアルタイムの事象: GDACS (gdacs.org)',
+  'Real event reported by GDACS (green alert). It starts this world; the simulation then runs freely.': 'GDACSが報告した実際の事象です（緑警報）。この世界の開始条件で、以後のシミュレーションは自由に進みます。',
+  'Real event reported by GDACS (orange alert). It starts this world; the simulation then runs freely.': 'GDACSが報告した実際の事象です（オレンジ警報）。この世界の開始条件で、以後のシミュレーションは自由に進みます。',
+  'Real event reported by GDACS (red alert). It starts this world; the simulation then runs freely.': 'GDACSが報告した実際の事象です（赤警報）。この世界の開始条件で、以後のシミュレーションは自由に進みます。',
   'City names': '都市名', 'Shows the names of cities and places. Their dots always stay.': '都市と地名の名前を表示します。点は常に表示されます。',
   'Isobar values': '等圧線の数値', 'Shows the pressure number on each isobar.': '各等圧線に気圧の数値を表示します。',
   'Sea names': '海の名前', 'Shows sea, lake and river names.': '海・湖・川の名前を表示します。',
@@ -612,6 +617,7 @@ export const ja: Record<string, string> = {
 
 /** Templates translate display messages without changing the deterministic worker or replay format. */
 export const jaTemplates: Record<string, string> = {
+  'Live: {0}': 'リアルタイム: {0}',
   "Use the speed arrows to select {0} (or press {1}), then press Play if time is paused. A depression forms after the conditions overlap for a while.": "速度の矢印で{0}を選ぶか、数字キー{1}を押してください。時間が止まっている場合は再生を押してください。条件がしばらく重なると熱帯低気圧が発生します。",
   'Blizzard cells nearby: {0} / {1}': '周辺の猛吹雪セル: {0} / {1}',
   'Tornado potential: {0} / {1}': '竜巻の発生指数: {0} / {1}',

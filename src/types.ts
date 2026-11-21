@@ -202,6 +202,11 @@ export interface HistoricTyphoonData {
   sources: HistoricSource[];
   typhoons: HistoricTyphoon[];
 }
+/** A current real-world extreme event (GDACS) used as a starting condition. */
+export interface LiveEvent {
+  kind: 'cyclone' | 'flood' | 'drought'; name: string; lon: number; lat: number; alert: 'green' | 'orange' | 'red';
+  windKmh?: number; url?: string; country?: string;
+}
 /** Frozen starting analysis, on the game's south-to-north 2° cell-centred global grid. */
 export interface LiveWeatherSnapshot {
   source: 'NOAA GFS'; modelRun: string;
@@ -216,6 +221,8 @@ export interface GameState {
   initialWeather?: LiveWeatherSnapshot;
   weather?: WeatherField;
   weatherSource?: 'live' | 'cached' | 'base';
+  /** Number of real-world GDACS events seeded into this world at its start (not part of the replay). */
+  liveEventsSource?: number;
   /** The fast climate path dropped the live analysis (it went out of date); the world goes on with the base climate and the ENSO layer. */
   liveEnded?: true;
   traffic: TrafficSimulation;
@@ -246,7 +253,7 @@ export interface GameState {
 }
 export interface PlacementResult { ok: boolean; reason?: string }
 export type WorkerRequest =
-  | { type: 'init'; seed?: number; startDayOfYear?: number; weather?: 'live' | 'base' }
+  | { type: 'init'; seed?: number; startDayOfYear?: number; weather?: 'live' | 'base'; liveEvents?: boolean }
   | { type: 'play'; playing: boolean }
   | { type: 'interaction'; active: boolean }
   | { type: 'speed'; speed: number }
@@ -255,7 +262,7 @@ export type WorkerRequest =
   | { type: 'traffic-view'; tick: number; departures: string[]; visibleVehicles: string[] }
   | { type: 'place'; tool: ToolType; lon: number; lat: number }
   | { type: 'formation'; kind: FormationKind; lon: number; lat: number }
-  | { type: 'reset'; seed?: number; startDayOfYear?: number; weather?: 'live' | 'base' }
+  | { type: 'reset'; seed?: number; startDayOfYear?: number; weather?: 'live' | 'base'; liveEvents?: boolean }
   | { type: 'genesis'; on: boolean }
   | { type: 'historic'; typhoonId: string }
   | { type: 'climate'; key: ClimateKey; value: number }
